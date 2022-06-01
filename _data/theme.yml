@@ -52,4 +52,4 @@ navigation_pages:
   - about.md
   - resume.md
   - tags.md
-  - photos.md
+  - _photos.md
