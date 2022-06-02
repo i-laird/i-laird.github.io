@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Terminal Quality of Life Improvements"
+title:  "Quality of Life Improvements for Unix CLI"
 date:   2022-05-31
 categories: 
   - productivity
