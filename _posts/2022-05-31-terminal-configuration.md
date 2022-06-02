@@ -2,7 +2,12 @@
 layout: post
 title:  "Terminal Quality of Life Improvements"
 date:   2022-05-31
-categories: UNIX
+categories: 
+  - productivity
+tags:
+  - mac
+  - linux
+  - productivity
 ---
 
 Here are some of the improvements I use to make my terminal experience better on my macbook. Most of these should also work on Linux.
