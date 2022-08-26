@@ -16,6 +16,8 @@
     <li>{% include icon-linkedin.html username=site.linkedin_username label='LinkedIn' %}</li>
   {% endif %}
 
+  <li>{% include icon-pdf.html username=site.github_username label='Resume' %}</li>
+
   <li>
     {% if site.plugins contains 'jekyll-feed' or site.gems contains 'jekyll-feed' %}
       <a href="{{ site.feed.path | default: 'feed.xml' | relative_url }}" title="Atom Feed">
