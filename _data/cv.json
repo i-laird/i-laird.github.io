@@ -24,11 +24,22 @@
   },
   "work": [
     {
+      "company": "Toast",
+      "position": "Software Development Engineer II",
+      "website": "https://pos.toasttab.com/",
+      "startDate": "June 2022",
+      "endDate": "Current Position",
+      "highlights": [
+        "Implemented an API for generating user metric reports.",
+        "Migrated existing database management code into its own microservice, which simplified automated testing and\nimproved the pipeline resiliency."
+      ]
+    },
+    {
       "company": "Capital One",
-      "position": "Senior Associate Software Engineer  ",
+      "position": "Senior Associate Software Engineer",
       "website": "https://www.capitalone.com",
       "startDate": "July 2021",
-      "endDate": "Current Position",
+      "endDate": "June 2022",
       "summary": "Created AWS Big Data Pipelines managed by Spring microservices",
       "highlights": [
         "Saved Capital One hundreds of thousands per year in operating costs and hundreds of developer hours per year by decommissioning a cloud hosted legacy application.",
