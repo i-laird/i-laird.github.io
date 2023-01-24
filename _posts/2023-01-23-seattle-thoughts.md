@@ -47,3 +47,31 @@ street parking.
 - Homelessness
 - The winter weather here is atrocious. It gets dark really early and its cloudy all the time. I don't like it.
 - The vibe here is weird. People are very unfriendly and passive-aggressive.
+
+Places I have lived comparison by category:
+- Skiing
+  - Bozeman: easily the best. Barely any lines and great powder.
+  - Seattle: Not that good. Powder is thick and the areas are so crowded. I have even been to Whistler which is so
+    crowded I find it hard to recommend. Someone told me Baker is where it's at so I will report back once I go there.
+  - Texas: no skiing to be found
+- Hiking
+  - Seattle: This was a really tough one but I would give Seattle the edge here. There are so many different biomes
+  accessible within a relatively small distance for hiking it's awesome. Ocean, Rainforest, Mountains, and Desert
+  are all close by.
+  - Bozeman: Great hiking, but all the hiking is kind of the same.
+  - Texas: No hiking to be found
+- Weather
+  - Bozeman: I don't mind winter weather so I have to give Bozeman the edge here. Yes it gets really cold but I like it
+  that way. Summer is a delight.
+  - Seattle: Summer weather here is awesome (as good as Bozeman), but I really don't like the winter weather here. Too
+  dreary.
+  - Texas: Summer is way too hot, but the winters are pretty nice if you don't like the snow.
+- Vibe
+  - Texas: Has a really good vibe. People are friendly and kind. THis is easily the thing I miss the most about living
+  there.
+  - Bozeman: People aren't as friendly as Texas but will help pull you if you need help.
+  - Seattle: People aren't friendly or nice.
+- Food
+  - Texas: Tex-mex and barbecue. nuff' said
+  - Seattle: Food here is ok but nothing special
+  - Bozeman: Food is not that great
