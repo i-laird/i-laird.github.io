@@ -1,0 +1,197 @@
+{
+  "basics": {
+    "name": "Ian Laird",
+    "label": "Software Engineer",
+    "picture": "",
+    "email": "ian.c.laird@hotmail.com",
+    "phone": "(406) 599-8946",
+    "website": "ianclaird.com",
+    "summary": "Ian is a driven and skilled full stack software engineer with experience in AWS.",
+    "location": {
+      "address": "5204 Patterson Road",
+      "postalCode": "MT 59718",
+      "city": "Bozeman",
+      "countryCode": "US",
+      "region": "Montana"
+    },
+    "profiles": [
+      {
+        "network": "GitHub",
+        "username": "i-laird",
+        "url": "https://github.com/i-laird"
+      }
+    ]
+  },
+  "work": [
+    {
+      "company": "Toast",
+      "position": "Software Development Engineer II",
+      "website": "https://pos.toasttab.com/",
+      "startDate": "June 2022",
+      "endDate": "Current Position",
+      "highlights": [
+        "Implemented an API for generating user metric reports.",
+        "Migrated existing database management code into its own microservice, which simplified automated testing and\nimproved the pipeline resiliency."
+      ]
+    },
+    {
+      "company": "Capital One",
+      "position": "Senior Associate Software Engineer",
+      "website": "https://www.capitalone.com",
+      "startDate": "July 2021",
+      "endDate": "June 2022",
+      "summary": "Created AWS Big Data Pipelines managed by Spring microservices",
+      "highlights": [
+        "Saved Capital One hundreds of thousands per year in operating costs and hundreds of developer hours per year by decommissioning a cloud hosted legacy application.",
+        "Constructed a Java microservice that transferred tens of thousands of files between systems of record to comply with internal audit requirements.",
+        "Created a data pipeline for the aggregation of big data from secure s3 buckets / snowflake tables. Computations are performed by spark on an EMR cluster that is managed by a containerized Java microservice.",
+        "Increased Cloud Resiliency by creating infrastructure needed for applications to quickly fail over to a backup AWS region.",
+        "Revamped IAM roles and policies to comply with stricter internal requirements."
+      ]
+    },
+    {
+      "position": "Associate Software Engineer  ",
+      "website": "https://www.capitalone.com",
+      "startDate": "August 2020",
+      "endDate": "July 2021",
+      "summary": "Developed Internal Website for tracking Automotive Loan Fraud",
+      "highlights": [
+        "Developed a web application for tracking automotive finance fraud.",
+        "Gathered design requirements for website improvements directly from users.",
+        "Improved automated testing of the application by expanding E2E, unit, and integration tests.",
+        "Participated in multiple AWS regional rollovers."
+      ]
+    },
+    {
+      "company": "Baylor University",
+      "position": "Independent Researcher",
+      "startDate": "Fall 2019",
+      "endDate": "Spring 2020",
+      "highlights": [
+        "Researched improving microservices through the automated analysis of byte code and source code. ",
+        "Developed a cloud based code clone detection service as part of a larger project for generating a centralized perspective on microservice based enterprise applications.",
+        "Developed a tool for generating communication diagrams for java source code.",
+        "Developed a novel method of generating a bounded context for a system."
+      ]
+    },
+    {
+      "company": "ICPC",
+      "position": "Software Development Intern       ",
+      "startDate": "Fall 2018",
+      "endDate": "Spring 2019",
+      "highlights": [
+        "Facilitated the migration to a React / Java EE website from the legacy application.",
+        "Worked directly with users to investigate bugs. ",
+        "This application is currently in use by over 50,000 users across the globe."
+      ]
+    },
+    {
+      "company": "Southwest Montana Properties",
+      "position": "IT Intern",
+      "startDate": "June 2013",
+      "endDate": "March 2017",
+      "highlights": [
+        "Responsible for maintaining all communication devices and computers. This included provisioning and fixing Cisco IP phones, maintaining employee email, and repairing computers as necessary. "
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "Baylor University",
+      "area": "Computer Science",
+      "studyType": "Bachelor",
+      "startDate": "August 2016",
+      "endDate": "May 2020",
+      "gpa": "3.87",
+      "courses": [
+        "Operating Systems",
+        "Data Communications",
+        "Computation Theory",
+        "Data Structures",
+        "Algorithms"
+      ]
+    },
+    {
+      "institution": "Montana State University",
+      "studyType": "Non-Degree",
+      "startDate": "June 2017",
+      "endDate": "August 2017"
+    },
+    {
+      "institution": "Georgia Tech",
+      "area": "Computer Science",
+      "studyType": "Non-Degree",
+      "startDate": "January 2021",
+      "endDate": "May 2021",
+      "courses": [
+        "Information Security"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "name": "Spring",
+      "level": "Good"
+    },
+    {
+      "name": "Role Based Authentication / Authorization",
+      "level": "Good"
+    },
+    {
+      "name": "Lombok",
+      "level": "Good"
+    },
+    {
+      "name": "JPA",
+      "level": "Good"
+    },
+    {
+      "name": "JDBC",
+      "level": "Good"
+    },
+    {
+      "name": "RESTful microservice development",
+      "level": "Good"
+    },
+    {
+      "name": "ECS"
+    },
+    {
+      "name": "EC2"
+    },
+    {
+      "name": "EMR"
+    },
+    {
+      "name": "RDS"
+    }
+  ],
+  "languages": [
+    {
+      "language": "Java",
+      "fluency": "Very Good"
+    },
+    {
+      "language": "C / C++",
+      "fluency": "Good"
+    },
+    {
+      "language": "SQL",
+      "fluency": "Good"
+    },
+    {
+      "language": "Python",
+      "fluency": "Intermediate"
+    },
+    {
+      "language": "JavaScript",
+      "fluency": "Intermediate"
+    }
+  ],
+  "awards": [
+    {
+      "title": "AWS Solutions Architect",
+      "date": "December 2020"
+    }
+  ]
+}
