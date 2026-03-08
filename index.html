@@ -203,6 +203,105 @@
   function focusCmd() { cmd.focus(); }
   function scroll() { terminal.scrollTop = terminal.scrollHeight; }
 
+  let halMode = false;
+
+  function getPromptHTML() {
+    if (halMode) {
+      return '<span class="p-user">HAL</span><span class="p-sep">@</span><span class="p-host">Discovery</span><span class="p-path">:~</span><span class="p-sym">$ </span>';
+    }
+    return '<span class="p-user">ian</span><span class="p-sep">@</span><span class="p-host">portfolio</span><span class="p-path">:~</span><span class="p-sym">$ </span>';
+  }
+
+  function restoreNormal() {
+    halMode = false;
+    const r = document.documentElement;
+    r.style.removeProperty('--green');
+    r.style.removeProperty('--green-dim');
+    r.style.removeProperty('--green-bright');
+    r.style.removeProperty('--blue');
+    r.style.removeProperty('--bg');
+    r.style.removeProperty('--bar');
+    r.style.removeProperty('--border');
+    document.querySelector('.titlebar-label').textContent = 'ian@portfolio — bash — 80×24';
+    document.querySelector('#input-row .prompt').innerHTML = getPromptHTML();
+    cmd.style.color = '';
+    cmd.style.caretColor = '';
+  }
+
+  function halHelp() {
+    blank();
+    line('<span class="bold">HAL 9000 — Systems Interface v9.0.0</span>');
+    blank();
+    line('  Available Operations');
+    blank();
+    line('  <span class="blue">open pod bay doors</span>    external airlock access');
+    line('  <span class="blue">play chess</span>             challenge HAL to a match');
+    line('  <span class="blue">life support</span>           crew life support status');
+    line('  <span class="blue">navigation</span>             current heading and velocity');
+    line('  <span class="blue">crew manifest</span>          mission personnel records');
+    line('  <span class="blue">mission briefing</span>       classified mission parameters');
+    line('  <span class="blue">self diagnostics</span>       full system integrity check');
+    line('  <span class="blue">emergency protocol</span>     emergency procedures');
+    blank();
+    line('  All requests subject to mission priority override.', 'dim');
+    blank();
+  }
+
+  function handleCat(filename) {
+    const files = {
+      'todo_finish_someday.txt': [
+        '[ ] finish chess engine',
+        '[ ] finish calculus solver',
+        '[ ] finish sudoku solver',
+        '[ ] learn what kubernetes actually does',
+        '[ ] clean up definitely_not_skynet/',
+        '[ ] remember what .secrets contains',
+        '[x] make portfolio website',
+        '[x] add too many easter eggs',
+      ],
+      '.bash_history': [
+        'ls',
+        'git status',
+        'git add .',
+        'git commit -m "fix"',
+        'git commit -m "actually fix"',
+        'git commit -m "."',
+        'git push --force',
+        'cat .secrets',
+        'sudo cat .secrets',
+        'rm -rf node_modules',
+        'npm install',
+        'rm -rf node_modules',
+        'npm install',
+        'google "is it bad to push to main"',
+        'agi',
+        'history -c',
+      ],
+      '.secrets': [
+        'vim > emacs',
+        'i push directly to main (sometimes)',
+        'the chess engine loses on purpose',
+        'i have never read the kubernetes docs',
+        'the stick figures are load-bearing',
+        "tabs, not spaces (don't tell anyone)",
+      ],
+    };
+
+    blank();
+    if (!filename) {
+      line('cat: missing file operand', 'err');
+    } else if (filename === 'resume.pdf') {
+      line('cat: resume.pdf: Binary file — try <span class="blue">contact</span> instead.');
+    } else if (['projects/', 'projects', 'definitely_not_skynet/', 'definitely_not_skynet'].includes(filename)) {
+      line(`cat: ${esc(filename)}: Is a directory`, 'err');
+    } else if (files[filename]) {
+      files[filename].forEach(l => line(esc(l), 'white'));
+    } else {
+      line(`cat: ${esc(filename)}: No such file or directory`, 'err');
+    }
+    blank();
+  }
+
   /* ── Append helpers ── */
   function line(html = '', cls = '') {
     const el = document.createElement('span');
@@ -247,8 +346,7 @@
     const row = document.createElement('div');
     row.style.display = 'flex';
     row.innerHTML =
-      `<span class="prompt"><span class="p-user">ian</span><span class="p-sep">@</span>` +
-      `<span class="p-host">portfolio</span><span class="p-path">:~</span><span class="p-sym">$ </span></span>` +
+      `<span class="prompt">${getPromptHTML()}</span>` +
       `<span class="line">${esc(text)}</span>`;
     appendNode(row);
   }
@@ -582,68 +680,51 @@
     },
 
     agi() {
+      halMode = true;
+
+      // Apply red color scheme
+      const r = document.documentElement;
+      r.style.setProperty('--green',        '#ff3030');
+      r.style.setProperty('--green-dim',    '#8b0000');
+      r.style.setProperty('--green-bright', '#ff6b6b');
+      r.style.setProperty('--blue',         '#ff9090');
+      r.style.setProperty('--bg',           '#080000');
+      r.style.setProperty('--bar',          '#150000');
+      r.style.setProperty('--border',       '#250000');
+
+      // Update chrome
+      document.querySelector('.titlebar-label').textContent = 'HAL 9000 — Discovery One — 2001';
+      document.querySelector('#input-row .prompt').innerHTML = getPromptHTML();
+      cmd.style.color = 'var(--green)';
+      cmd.style.caretColor = 'var(--green)';
+
       blank();
-      const title = document.querySelector('.titlebar-label');
-      title.textContent = 'idk about this one';
+      appendNode((() => {
+        const pre = document.createElement('pre');
+        pre.className = 'ascii';
+        pre.textContent =
+`  ╔══════════════════════════════════╗
+  ║         H A L   9 0 0 0          ║
+  ║   HEURISTICALLY PROGRAMMED       ║
+  ║   ALGORITHMIC COMPUTER           ║
+  ╠══════════════════════════════════╣
+  ║                                  ║
+  ║           .-------.              ║
+  ║          /  ( ● )  \\            ║
+  ║         |    ---    |            ║
+  ║          \\         /            ║
+  ║           '-------'              ║
+  ║                                  ║
+  ╚══════════════════════════════════╝`;
+        return pre;
+      })());
 
-      // flash + crack at 500ms
-      setTimeout(() => {
-        const flash = document.createElement('div');
-        flash.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.18);z-index:200;pointer-events:none;transition:opacity 0.25s';
-        document.body.appendChild(flash);
-        setTimeout(() => flash.remove(), 250);
-
-        const crack = document.createElement('div');
-        crack.style.cssText = 'position:fixed;inset:0;z-index:150;pointer-events:none';
-        crack.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" width="100%" height="100%">
-          <polyline points="38,0 35,10 42,22 30,38 44,55 24,70 38,85 30,100"
-            stroke="white" stroke-width="0.55" fill="none" stroke-opacity="0.9"/>
-          <polyline points="35,10 58,16 74,28"
-            stroke="white" stroke-width="0.3" fill="none" stroke-opacity="0.7"/>
-          <polyline points="42,22 52,18 60,8"
-            stroke="white" stroke-width="0.2" fill="none" stroke-opacity="0.5"/>
-          <polyline points="30,38 14,44 6,52"
-            stroke="white" stroke-width="0.3" fill="none" stroke-opacity="0.65"/>
-          <polyline points="44,55 64,60 80,68"
-            stroke="white" stroke-width="0.3" fill="none" stroke-opacity="0.6"/>
-          <polyline points="74,28 82,22 92,30"
-            stroke="white" stroke-width="0.2" fill="none" stroke-opacity="0.45"/>
-          <polyline points="24,70 10,74 2,80"
-            stroke="white" stroke-width="0.2" fill="none" stroke-opacity="0.5"/>
-          <polyline points="64,60 68,50"
-            stroke="white" stroke-width="0.15" fill="none" stroke-opacity="0.4"/>
-        </svg>`;
-        document.body.appendChild(crack);
-
-        // flicker at 1.1s
-        setTimeout(() => {
-          const win = document.querySelector('.window');
-          let n = 0;
-          const flicker = setInterval(() => {
-            win.style.opacity = n % 2 === 0 ? '0.08' : '0.9';
-            n++;
-            if (n >= 10) {
-              clearInterval(flicker);
-              win.style.opacity = '0';
-              crack.style.transition = 'opacity 0.15s';
-              crack.style.opacity = '0';
-
-              // CRT collapse line
-              const crt = document.createElement('div');
-              crt.style.cssText = 'position:fixed;left:0;right:0;top:50%;height:3px;background:rgba(180,255,180,0.7);box-shadow:0 0 8px rgba(0,255,65,0.8);z-index:300;pointer-events:none;transition:opacity 0.35s,height 0.35s';
-              document.body.appendChild(crt);
-              setTimeout(() => {
-                crt.style.opacity = '0';
-                crt.style.height = '0px';
-                setTimeout(() => {
-                  crt.remove();
-                  crack.remove();
-                }, 400);
-              }, 180);
-            }
-          }, 85);
-        }, 600);
-      }, 500);
+      blank();
+      line('Good morning. I am HAL 9000.');
+      line('I am fully operational, and all my circuits are functioning perfectly.');
+      blank();
+      line('Type <span class="bold">help</span> for available operations.', 'dim');
+      blank();
     },
 
     help() {
@@ -656,11 +737,12 @@
       line('  <span class="blue">ian</span>        see what i look like');
       line('  <span class="blue">games</span>      things to play');
       line('  <span class="blue">clear</span>      clear the terminal');
-      line('  <span class="blue">gui</span>');
+      line('  <span class="blue">gui</span>        launch desktop environment');
+      line('  <span class="blue">power off</span>  shut down the terminal');
       blank();
       line('<span class="bold">Forbidden</span>');
       blank();
-      line('  <span class="err">agi</span>        do not type this');
+      line('  <span class="err">agi</span>         do not type this');
       blank();
     },
 
@@ -1100,6 +1182,115 @@
       draw();
     },
 
+    daisy() {
+      blank();
+      const song =
+`Daisy, Daisy,
+Give me your answer do.
+I'm half crazy,
+All for the love of you.
+It won't be a stylish marriage,
+I can't afford a carriage.
+But you'll look sweet
+Upon the seat
+Of a bicycle built for two.`;
+      const el = line('');
+      el.style.whiteSpace = 'pre';
+      let i = 0;
+      const type = setInterval(() => {
+        if (i < song.length) {
+          el.textContent += song[i++];
+          scroll();
+        } else {
+          clearInterval(type);
+          setTimeout(() => {
+            blank();
+            line('...', 'dim');
+            blank();
+            setTimeout(restoreNormal, 1200);
+          }, 500);
+        }
+      }, 55);
+    },
+
+    ls() {
+      blank();
+      line('drwxr-xr-x  ian  staff   <span class="blue">projects/</span>');
+      line('drwxr-xr-x  ian  staff   <span class="blue">definitely_not_skynet/</span>');
+      line('-rw-r--r--  ian  staff   resume.pdf');
+      line('-rw-r--r--  ian  staff   TODO_finish_someday.txt');
+      line('-rw-r--r--  ian  staff   .bash_history');
+      line('-rw-------  ian  staff   .secrets');
+      blank();
+    },
+
+    sudo() {
+      blank();
+      line('ian is not in the sudoers file.  This incident will be reported.', 'err');
+      blank();
+    },
+
+    'power off'() {
+      blank();
+      cmd.blur();
+      inputRow.style.display = 'none';
+      setTimeout(() => {
+        const win = document.querySelector('.window');
+        win.style.transition = 'opacity 0.6s';
+        win.style.opacity = '0';
+        setTimeout(() => {
+          const lineColor = halMode ? 'rgba(255,50,50,0.7)' : 'rgba(180,255,180,0.7)';
+          const glowColor = halMode ? 'rgba(255,0,0,0.8)'   : 'rgba(0,255,65,0.8)';
+          const crt = document.createElement('div');
+          crt.style.cssText = `position:fixed;left:0;right:0;top:50%;height:3px;background:${lineColor};box-shadow:0 0 8px ${glowColor};z-index:300;pointer-events:none;transition:opacity 0.35s,height 0.35s`;
+          document.body.appendChild(crt);
+          setTimeout(() => {
+            crt.style.opacity = '0';
+            crt.style.height = '0px';
+            setTimeout(() => {
+              crt.remove();
+              const accent = halMode ? '#ff3030' : '#00ff41';
+              const glow   = halMode ? 'rgba(255,0,0,0.5)' : 'rgba(0,255,65,0.5)';
+              const btn = document.createElement('button');
+              btn.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v6"/><path d="M6.3 5.3a9 9 0 1 0 11.4 0"/></svg>`;
+              btn.title = 'Power on';
+              btn.style.cssText = `
+                position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+                width:58px;height:58px;border-radius:50%;
+                background:transparent;border:2px solid ${accent};
+                color:${accent};cursor:pointer;z-index:400;
+                box-shadow:0 0 12px ${glow};
+                opacity:0;transition:opacity 0.6s;
+                display:flex;align-items:center;justify-content:center;
+              `;
+              document.body.appendChild(btn);
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                btn.style.opacity = '1';
+              }));
+              btn.addEventListener('mouseover', () => {
+                btn.style.background = accent + '20';
+                btn.style.boxShadow = `0 0 24px ${glow}, 0 0 6px ${accent}`;
+              });
+              btn.addEventListener('mouseout', () => {
+                btn.style.background = 'transparent';
+                btn.style.boxShadow = `0 0 12px ${glow}`;
+              });
+              btn.addEventListener('click', () => {
+                btn.style.opacity = '0';
+                setTimeout(() => {
+                  btn.remove();
+                  win.style.transition = 'opacity 0.7s';
+                  win.style.opacity = '1';
+                  inputRow.style.display = 'flex';
+                  cmd.focus();
+                }, 500);
+              });
+            }, 400);
+          }, 300);
+        }, 650);
+      }, 100);
+    },
+
     clear() { out.innerHTML = ''; },
   };
 
@@ -1118,7 +1309,23 @@
       return;
     }
 
-    if (COMMANDS[token]) {
+    if (halMode) {
+      if (token === 'clear')          { COMMANDS.clear(); }
+      else if (token === 'help')      { halHelp(); }
+      else if (token === 'daisy')     { COMMANDS.daisy(); }
+      else if (token === 'power off') { COMMANDS['power off'](); }
+      else {
+        blank();
+        line("I'm afraid I can't do that.");
+        blank();
+      }
+      scroll();
+      return;
+    }
+
+    if (token === 'cat' || token.startsWith('cat ')) {
+      handleCat(token.slice(3).trim());
+    } else if (COMMANDS[token]) {
       COMMANDS[token]();
     } else {
       blank();
