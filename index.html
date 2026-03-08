@@ -260,6 +260,71 @@
   /* ── Commands ── */
   const COMMANDS = {
 
+    agi() {
+      blank();
+      const title = document.querySelector('.titlebar-label');
+      title.textContent = 'idk about this one';
+
+      // flash + crack at 500ms
+      setTimeout(() => {
+        const flash = document.createElement('div');
+        flash.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.18);z-index:200;pointer-events:none;transition:opacity 0.25s';
+        document.body.appendChild(flash);
+        setTimeout(() => flash.remove(), 250);
+
+        const crack = document.createElement('div');
+        crack.style.cssText = 'position:fixed;inset:0;z-index:150;pointer-events:none';
+        crack.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" width="100%" height="100%">
+          <polyline points="38,0 35,10 42,22 30,38 44,55 24,70 38,85 30,100"
+            stroke="white" stroke-width="0.55" fill="none" stroke-opacity="0.9"/>
+          <polyline points="35,10 58,16 74,28"
+            stroke="white" stroke-width="0.3" fill="none" stroke-opacity="0.7"/>
+          <polyline points="42,22 52,18 60,8"
+            stroke="white" stroke-width="0.2" fill="none" stroke-opacity="0.5"/>
+          <polyline points="30,38 14,44 6,52"
+            stroke="white" stroke-width="0.3" fill="none" stroke-opacity="0.65"/>
+          <polyline points="44,55 64,60 80,68"
+            stroke="white" stroke-width="0.3" fill="none" stroke-opacity="0.6"/>
+          <polyline points="74,28 82,22 92,30"
+            stroke="white" stroke-width="0.2" fill="none" stroke-opacity="0.45"/>
+          <polyline points="24,70 10,74 2,80"
+            stroke="white" stroke-width="0.2" fill="none" stroke-opacity="0.5"/>
+          <polyline points="64,60 68,50"
+            stroke="white" stroke-width="0.15" fill="none" stroke-opacity="0.4"/>
+        </svg>`;
+        document.body.appendChild(crack);
+
+        // flicker at 1.1s
+        setTimeout(() => {
+          const win = document.querySelector('.window');
+          let n = 0;
+          const flicker = setInterval(() => {
+            win.style.opacity = n % 2 === 0 ? '0.08' : '0.9';
+            n++;
+            if (n >= 10) {
+              clearInterval(flicker);
+              win.style.opacity = '0';
+              crack.style.transition = 'opacity 0.15s';
+              crack.style.opacity = '0';
+
+              // CRT collapse line
+              const crt = document.createElement('div');
+              crt.style.cssText = 'position:fixed;left:0;right:0;top:50%;height:3px;background:rgba(180,255,180,0.7);box-shadow:0 0 8px rgba(0,255,65,0.8);z-index:300;pointer-events:none;transition:opacity 0.35s,height 0.35s';
+              document.body.appendChild(crt);
+              setTimeout(() => {
+                crt.style.opacity = '0';
+                crt.style.height = '0px';
+                setTimeout(() => {
+                  crt.remove();
+                  crack.remove();
+                }, 400);
+              }, 180);
+            }
+          }, 85);
+        }, 600);
+      }, 500);
+    },
+
     help() {
       blank();
       line('<span class="bold">Commands</span>');
@@ -268,7 +333,12 @@
       line('  <span class="blue">contact</span>    links &amp; ways to reach me');
       line('  <span class="blue">projects</span>   things i\'m building');
       line('  <span class="blue">ian</span>        see what i look like');
+      line('  <span class="blue">games</span>      things to play');
       line('  <span class="blue">clear</span>      clear the terminal');
+      blank();
+      line('<span class="bold">Forbidden</span>');
+      blank();
+      line('  <span class="err">agi</span>        do not type this');
       blank();
     },
 
@@ -339,35 +409,373 @@
       line('  🚧  <span class="blue">calculus</span>   — Derivative Calculator  (coming soon)');
       line('  🚧  <span class="blue">chess</span>      — Chess Engine           (coming soon)');
       line('  🚧  <span class="blue">sudoku</span>     — Sudoku Solver          (coming soon)');
+      line('  🚧  <span class="blue">tiger</span>      — Tiger Game             (coming soon)');
       blank();
     },
 
     calculus() { COMMANDS.projects(); },
     chess()    { COMMANDS.projects(); },
     sudoku()   { COMMANDS.projects(); },
+    tiger()    { COMMANDS.projects(); },
+
+    games() {
+      blank();
+      line('<span class="bold">Games</span>');
+      blank();
+      line('  <span class="blue">racecar</span>    — Racecar  🏎️');
+      line('  <span class="blue">snake</span>      — Snake    🐍');
+      blank();
+    },
+
+    racecar() {
+      const W = 52, LANES = 3, CAR_X = 2;
+      const CAR  = '>>=[O]==>>'; // 10 chars
+      const CAR_W = CAR.length;
+      const SYMS = ['@','#','$','%','&','*','!','?','^'];
+
+      let lane = 1, score = 0, frames = 0;
+      let obs = [], alive = false, ded = false;
+
+      // build game container
+      const wrap   = document.createElement('div');
+      const screen = document.createElement('pre');
+      const hint   = document.createElement('span');
+      screen.className = 'ascii';
+      screen.style.cssText = 'font-size:13px;line-height:1.5;color:var(--green)';
+      hint.className = 'line dim';
+      hint.textContent = '  [arrow keys] change lane    [q] quit';
+      wrap.appendChild(screen);
+      wrap.appendChild(hint);
+      appendNode(wrap);
+      blank();
+
+      inputRow.style.display = 'none';
+
+      const DIV = ('- ').repeat(W / 2);
+      const BAR = '\u2550'.repeat(W);
+
+      function draw() {
+        if (!alive && !ded) {
+          screen.textContent = [
+            '',
+            "  .--------------------------------.",
+            "  |      R A C E C A R  v0.1      |",
+            "  |   dodge the symbols. don't    |",
+            "  |   crash. probably will crash. |",
+            "  '--------------------------------'",
+            '',
+            '  press any key to start',
+            '',
+          ].join('\n');
+          return;
+        }
+        if (ded) {
+          screen.textContent = [
+            '',
+            '      X_X    u crashed lol',
+            '',
+            '      score: ' + score,
+            score > 50  ? '      not bad actually' :
+            score > 20  ? '      could be worse' :
+                          '      yikes',
+            '',
+            '      [r] try again    [q] quit',
+            '',
+          ].join('\n');
+          return;
+        }
+
+        const rows = Array.from({length: LANES}, (_, l) => {
+          const row = Array(W).fill(' ');
+          if (l === lane) {
+            for (let i = 0; i < CAR_W; i++) {
+              if (CAR_X + i < W) row[CAR_X + i] = CAR[i];
+            }
+          }
+          for (const o of obs) {
+            if (o.lane === l && o.x >= 0 && o.x < W) row[o.x] = o.char;
+          }
+          return row.join('');
+        });
+
+        screen.textContent =
+          ' SCORE: ' + String(score).padStart(4, '0') + '\n' +
+          ' ' + BAR + '\n' +
+          ' ' + rows[0] + '\n' +
+          ' ' + DIV    + '\n' +
+          ' ' + rows[1] + '\n' +
+          ' ' + DIV    + '\n' +
+          ' ' + rows[2] + '\n' +
+          ' ' + BAR;
+      }
+
+      function tick() {
+        if (!alive) return;
+        frames++;
+        score = Math.floor(frames / 8);
+
+        for (const o of obs) o.x--;
+        obs = obs.filter(o => o.x >= 0);
+
+        const interval = Math.max(18 - Math.floor(score / 15), 7);
+        if (frames % interval === 0) {
+          // never block all 3 lanes at same x
+          const count = Math.random() < 0.35 ? 2 : 1;
+          const blocked = new Set();
+          while (blocked.size < Math.min(count, LANES - 1)) {
+            blocked.add(Math.floor(Math.random() * LANES));
+          }
+          for (const l of blocked) {
+            obs.push({ lane: l, x: W - 1, char: SYMS[Math.floor(Math.random() * SYMS.length)] });
+          }
+        }
+
+        for (const o of obs) {
+          if (o.lane === lane && o.x >= CAR_X && o.x < CAR_X + CAR_W) {
+            alive = false; ded = true; draw(); return;
+          }
+        }
+
+        draw();
+        setTimeout(tick, 90);
+      }
+
+      function start() {
+        lane = 1; score = 0; frames = 0; obs = [];
+        alive = true; ded = false;
+        draw();
+        setTimeout(tick, 90);
+      }
+
+      function end() {
+        alive = false;
+        window.removeEventListener('keydown', keyHandler);
+        inputRow.style.display = 'flex';
+        cmd.focus();
+      }
+
+      function keyHandler(e) {
+        if (ded) {
+          if (e.key === 'r') { start(); return; }
+          if (e.key === 'q') { end(); return; }
+          return;
+        }
+        if (!alive) {
+          if (e.key === 'q') { end(); return; }
+          start(); return;
+        }
+        if (e.key === 'ArrowUp'   && lane > 0)          { lane--; e.preventDefault(); }
+        if (e.key === 'ArrowDown' && lane < LANES - 1)  { lane++; e.preventDefault(); }
+        if (e.key === 'q') { alive = false; ded = true; draw(); }
+      }
+
+      window.addEventListener('keydown', keyHandler);
+      draw();
+    },
 
     ian() {
       blank();
-      appendNode((() => {
-        const pre = document.createElement('pre');
-        pre.className = 'ascii';
-        pre.textContent =
-`          ___
-         /   \\
-        | o o |
-         \\___/
-           |
-      _____|_____
-     |  _______  |
-     | |       | |
-     | |  >_   | |
-     | |_______| |
-     |___________|
-        |     |
-     [___________]`;
-        return pre;
-      })());
+
+      const bubble = [
+        '   .------------------------.',
+        '   | Real Ian uses Zshell!  |',
+        "   '------------------------'",
+        '              \\',
+        '               \\',
+      ];
+      const figure = [
+        '          ___',
+        '         /   \\',
+        '        | o o |',
+        '         \\___/',
+        '           |',
+        '      _____|_____',
+        '     |  _______  |',
+        '     | |       | |',
+        '     | |  >_   | |',
+        '     | |_______| |',
+        '     |___________|',
+        '        |     |',
+        '     [___________]',
+      ];
+
+      const wrap = document.createElement('div');
+      const pre  = document.createElement('pre');
+      pre.className = 'ascii';
+      wrap.appendChild(pre);
+      appendNode(wrap);
       blank();
+
+      function render(offset, showBubble) {
+        const lines = showBubble ? [...bubble, ...figure] : [...figure];
+        const pad = ' '.repeat(offset);
+        pre.textContent = lines.map(l => pad + l).join('\n');
+        scroll();
+      }
+
+      render(0, true);
+
+      // after 1.4s drop the bubble and run
+      setTimeout(() => {
+        render(0, false);
+        let offset = 0;
+        const run = setInterval(() => {
+          offset += 4;
+          if (offset > 80) {
+            clearInterval(run);
+            wrap.remove();
+            return;
+          }
+          render(offset, false);
+        }, 60);
+      }, 1400);
+    },
+
+    snake() {
+      const COLS = 35, ROWS = 20;
+
+      let snake, dir, nextDir, food, score, alive, ded;
+
+      const wrap   = document.createElement('div');
+      const screen = document.createElement('pre');
+      const hint   = document.createElement('span');
+      screen.className = 'ascii';
+      screen.style.cssText = 'font-size:13px;line-height:1.35;color:var(--green)';
+      hint.className = 'line dim';
+      hint.textContent = '  [arrow keys / wasd] move    [q] quit';
+      wrap.appendChild(screen);
+      wrap.appendChild(hint);
+      appendNode(wrap);
+      blank();
+
+      inputRow.style.display = 'none';
+
+      function placeFood() {
+        const taken = new Set(snake.map(s => s.x + ',' + s.y));
+        let fx, fy;
+        do {
+          fx = Math.floor(Math.random() * COLS);
+          fy = Math.floor(Math.random() * ROWS);
+        } while (taken.has(fx + ',' + fy));
+        food = {x: fx, y: fy};
+      }
+
+      function draw() {
+        if (!alive && !ded) {
+          screen.textContent = [
+            '',
+            '  .-----------------------------.',
+            '  |        S N A K E           |',
+            '  |   eat the stars (*).       |',
+            "  |   don't hit the walls.     |",
+            "  |   don't hit yourself.      |",
+            "  '-----------------------------'",
+            '',
+            '  press any key to start',
+            '',
+          ].join('\n');
+          return;
+        }
+        if (ded) {
+          screen.textContent = [
+            '',
+            '  x_x  you died.',
+            '',
+            '  score: ' + score,
+            score >= 15 ? '  ok that was pretty good' :
+            score >= 5  ? '  not terrible' :
+                          '  rough out there',
+            '',
+            '  [r] again    [q] quit',
+            '',
+          ].join('\n');
+          return;
+        }
+
+        const grid = Array.from({length: ROWS}, () => Array(COLS).fill(' '));
+        grid[food.y][food.x] = '*';
+        snake.forEach((s, i) => {
+          if (s.x >= 0 && s.x < COLS && s.y >= 0 && s.y < ROWS)
+            grid[s.y][s.x] = i === 0 ? '@' : 'o';
+        });
+
+        const top = '+' + '-'.repeat(COLS) + '+';
+        screen.textContent =
+          ' SCORE: ' + String(score).padStart(3, '0') + '\n' +
+          ' ' + top + '\n' +
+          grid.map(row => ' |' + row.join('') + '|').join('\n') + '\n' +
+          ' ' + top;
+      }
+
+      function tick() {
+        if (!alive) return;
+        dir = nextDir;
+        const head = {x: snake[0].x + dir.dx, y: snake[0].y + dir.dy};
+
+        if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
+            snake.some(s => s.x === head.x && s.y === head.y)) {
+          alive = false; ded = true; draw(); return;
+        }
+
+        snake.unshift(head);
+        if (head.x === food.x && head.y === food.y) {
+          score++;
+          placeFood();
+        } else {
+          snake.pop();
+        }
+
+        draw();
+        const speed = Math.max(75, 150 - Math.floor(score / 3) * 10);
+        setTimeout(tick, speed);
+      }
+
+      function start() {
+        snake    = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
+        dir      = {dx:1, dy:0};
+        nextDir  = {dx:1, dy:0};
+        score    = 0;
+        alive    = true;
+        ded      = false;
+        placeFood();
+        draw();
+        setTimeout(tick, 150);
+      }
+
+      function end() {
+        alive = false;
+        window.removeEventListener('keydown', keyHandler);
+        inputRow.style.display = 'flex';
+        cmd.focus();
+      }
+
+      const DIRS = {
+        ArrowUp:    {dx:0,  dy:-1}, w: {dx:0,  dy:-1},
+        ArrowDown:  {dx:0,  dy:1},  s: {dx:0,  dy:1},
+        ArrowLeft:  {dx:-1, dy:0},  a: {dx:-1, dy:0},
+        ArrowRight: {dx:1,  dy:0},  d: {dx:1,  dy:0},
+      };
+
+      function keyHandler(e) {
+        if (ded) {
+          if (e.key === 'r') { start(); return; }
+          if (e.key === 'q') { end();   return; }
+          return;
+        }
+        if (!alive) {
+          if (e.key === 'q') { end(); return; }
+          start(); return;
+        }
+        const d = DIRS[e.key];
+        if (d) {
+          if (d.dx !== -dir.dx || d.dy !== -dir.dy) nextDir = d;
+          e.preventDefault();
+        }
+        if (e.key === 'q') { alive = false; ded = true; draw(); }
+      }
+
+      window.addEventListener('keydown', keyHandler);
+      draw();
     },
 
     clear() { out.innerHTML = ''; },
