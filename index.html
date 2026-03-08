@@ -295,6 +295,7 @@
           { emoji:'💼', label:'LinkedIn',    url:'https://linkedin.com/in/ianclaird',       newTab:true  },
           { emoji:'📧', label:'Email Ian',   url:'mailto:career@ilaird.com',                newTab:false },
           { emoji:'🗑️', label:'Recycle Bin', url:null },
+          { emoji:'🥊', label:'Stick Fighter\n2000.exe', action: openStickFighter },
         ];
 
         iconData.forEach((data, idx) => {
@@ -318,9 +319,12 @@
             icon.style.background = 'rgba(49,106,197,0.5)';
             icon.style.borderColor = 'rgba(200,220,255,0.7)';
             const now = Date.now();
-            if (now - lastClick < 380 && data.url) {
-              if (data.newTab) window.open(data.url, '_blank');
-              else window.location.href = data.url;
+            if (now - lastClick < 380) {
+              if (data.action) data.action();
+              else if (data.url) {
+                if (data.newTab) window.open(data.url, '_blank');
+                else window.location.href = data.url;
+              }
             }
             lastClick = now;
           });
@@ -427,7 +431,140 @@
         startBtn.addEventListener('click', e => { e.stopPropagation(); toggleMenu(); });
         xp.addEventListener('click', () => toggleMenu(false));
 
+        // ── Stick Fighter 2000 ──────────────────────────────────────
+        let sfCleanup = null;
+
+        function openStickFighter() {
+          if (document.getElementById('sf-canvas')) { sfCleanup && sfCleanup(); return; }
+
+          const GW = xp.offsetWidth;
+          const GH = xp.offsetHeight - 40;
+
+          // transparent canvas over the whole desktop
+          const canvas = document.createElement('canvas');
+          canvas.id = 'sf-canvas';
+          canvas.width = GW; canvas.height = GH;
+          canvas.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);pointer-events:none;z-index:5;';
+          xp.appendChild(canvas);
+
+          // small HUD pinned to top-right
+          const hud = document.createElement('div');
+          hud.style.cssText = `
+            position:absolute;top:8px;right:8px;z-index:6;pointer-events:none;
+            background:rgba(0,0,0,0.45);color:white;font-size:12px;
+            padding:5px 10px;border-radius:4px;text-shadow:1px 1px 2px #000;
+            font-family:Tahoma,Arial,sans-serif;line-height:1.6;
+          `;
+          hud.innerHTML = 'WASD / arrows to move<br>double-click icon to stop';
+          xp.appendChild(hud);
+
+          const ctx = canvas.getContext('2d');
+          let player, enemies, score, alive, frameCount, keys, rafId, scoreTimer;
+
+          function stickFigure(x, y, phase, color) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            const s = Math.sin(phase);
+            ctx.beginPath(); ctx.arc(0,-34,8,0,Math.PI*2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0,-26); ctx.lineTo(0,-6); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0,-20); ctx.lineTo(-14,-20+s*8); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0,-20); ctx.lineTo( 14,-20-s*8); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0,-6);  ctx.lineTo(-10,-6+18+s*10); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0,-6);  ctx.lineTo( 10,-6+18-s*10); ctx.stroke();
+            ctx.restore();
+          }
+
+          function init() {
+            player = {x:GW/2, y:GH/2, phase:0};
+            enemies = []; score = 0; alive = true; frameCount = 0; keys = {};
+            if (scoreTimer) clearInterval(scoreTimer);
+            scoreTimer = setInterval(() => { if (alive) score++; }, 1000);
+          }
+
+          function spawnEnemy() {
+            const side = Math.floor(Math.random()*4);
+            let x, y;
+            if      (side===0){ x=Math.random()*GW; y=-40;    }
+            else if (side===1){ x=GW+40;             y=Math.random()*GH; }
+            else if (side===2){ x=Math.random()*GW; y=GH+40;  }
+            else               { x=-40;               y=Math.random()*GH; }
+            enemies.push({x, y, phase:Math.random()*Math.PI*2});
+          }
+
+          function loop() {
+            if (!alive) return;
+            frameCount++;
+
+            let dx=0, dy=0;
+            if (keys['ArrowLeft'] ||keys['a']||keys['A']) dx=-1;
+            if (keys['ArrowRight']||keys['d']||keys['D']) dx= 1;
+            if (keys['ArrowUp']   ||keys['w']||keys['W']) dy=-1;
+            if (keys['ArrowDown'] ||keys['s']||keys['S']) dy= 1;
+            if (dx&&dy){ dx*=0.707; dy*=0.707; }
+            player.x = Math.max(12, Math.min(GW-12, player.x + dx*3));
+            player.y = Math.max(12, Math.min(GH-12, player.y + dy*3));
+            if (dx||dy) player.phase += 0.25;
+
+            const spawnEvery = Math.max(45, 110 - Math.floor(score/8)*8);
+            if (frameCount % spawnEvery === 0) spawnEnemy();
+
+            const espd = 1.3 + score * 0.012;
+            for (const e of enemies) {
+              const ex=player.x-e.x, ey=player.y-e.y, d=Math.sqrt(ex*ex+ey*ey);
+              if (d>0){ e.x+=ex/d*espd; e.y+=ey/d*espd; }
+              e.phase += 0.2;
+              if (d<20){ alive=false; clearInterval(scoreTimer); drawDead(); return; }
+            }
+
+            ctx.clearRect(0, 0, GW, GH);
+            hud.innerHTML = 'SCORE: ' + score + '<br>ENEMIES: ' + enemies.length;
+            for (const e of enemies) stickFigure(e.x, e.y, e.phase, '#1a0000');
+            stickFigure(player.x, player.y, player.phase, 'white');
+
+            rafId = requestAnimationFrame(loop);
+          }
+
+          function drawDead() {
+            ctx.clearRect(0, 0, GW, GH);
+            ctx.fillStyle = 'rgba(0,0,0,0.45)';
+            ctx.fillRect(0, 0, GW, GH);
+            ctx.fillStyle = 'white'; ctx.textAlign = 'center';
+            ctx.shadowColor='rgba(0,0,0,0.9)'; ctx.shadowBlur=8;
+            ctx.font='bold 36px Tahoma,Arial'; ctx.fillText('YOU DIED', GW/2, GH/2-20);
+            ctx.font='18px Tahoma,Arial';      ctx.fillText('Score: '+score, GW/2, GH/2+14);
+            ctx.font='13px Tahoma,Arial';      ctx.fillText('press R to play again', GW/2, GH/2+44);
+            ctx.shadowBlur=0; ctx.textAlign='left';
+            hud.innerHTML = 'press R to play again';
+          }
+
+          function stopGame() {
+            alive = false;
+            if (rafId) cancelAnimationFrame(rafId);
+            if (scoreTimer) clearInterval(scoreTimer);
+            document.removeEventListener('keydown', onKey);
+            document.removeEventListener('keyup',   offKey);
+            canvas.remove(); hud.remove(); sfCleanup = null;
+          }
+
+          function onKey(e) {
+            keys[e.key] = true;
+            if (e.key==='r'||e.key==='R') { if (!alive) { init(); loop(); } }
+            if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+          }
+          function offKey(e){ keys[e.key]=false; }
+          document.addEventListener('keydown', onKey);
+          document.addEventListener('keyup',   offKey);
+
+          init(); loop();
+          sfCleanup = stopGame;
+        }
+        // ────────────────────────────────────────────────────────────
+
         function shutdown() {
+          if (sfCleanup) { sfCleanup(); sfCleanup = null; }
           clearInterval(clockId);
           document.removeEventListener('keydown', escHandler);
           xp.style.transition = 'opacity 0.5s';
