@@ -870,19 +870,26 @@
       let lane = 1, score = 0, frames = 0;
       let obs = [], alive = false, ded = false;
       let safeLane = 1, safeChangeCooldown = 0;
+      let halMsgTimeout;
+      let slowZone = null, inSlowZone = false;
 
       // build game container
       const wrap   = document.createElement('div');
+      const halMsg = document.createElement('div');
       const screen = document.createElement('pre');
       const hint   = document.createElement('span');
+      halMsg.className = 'line';
+      halMsg.style.minHeight = '1.55em';
       screen.className = 'ascii';
       screen.style.cssText = 'font-size:13px;line-height:1.5;color:var(--green)';
       hint.className = 'line dim';
       hint.textContent = '  [arrow keys] change lane    [q] quit';
+      wrap.appendChild(halMsg);
       wrap.appendChild(screen);
       wrap.appendChild(hint);
       appendNode(wrap);
       blank();
+      setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
 
       inputRow.style.display = 'none';
 
@@ -905,9 +912,18 @@
           return;
         }
         if (ded) {
+          const halRaceTaunts = [
+            'HAL: I did warn you.',
+            'HAL: I saw that coming 47 frames ago.',
+            'HAL: Your reaction time is suboptimal.',
+            'HAL: Statistically inevitable.',
+            'HAL: Perhaps you should pull over next time.',
+          ];
           screen.textContent = [
             '',
             '      X_X    u crashed lol',
+            '',
+            godmodeUnlocked ? `      ${halRaceTaunts[Math.floor(Math.random()*halRaceTaunts.length)]}` : '',
             '',
             '      score: ' + score,
             score > 50  ? '      not bad actually' :
@@ -922,6 +938,11 @@
 
         const rows = Array.from({length: LANES}, (_, l) => {
           const row = Array(W).fill(' ');
+          if (slowZone) {
+            for (let x = Math.max(0, slowZone.x); x < Math.min(W, slowZone.x + slowZone.width); x++) {
+              row[x] = '~';
+            }
+          }
           if (l === lane) {
             for (let i = 0; i < CAR_W; i++) {
               if (CAR_X + i < W) row[CAR_X + i] = CAR[i];
@@ -960,6 +981,7 @@
             const opts = [0, 1, 2].filter(l => l !== safeLane);
             safeLane = opts[Math.floor(Math.random() * opts.length)];
             safeChangeCooldown = interval * 2;
+            obs = obs.filter(o => o.lane !== safeLane);
           }
           const count = Math.random() < 0.35 ? 2 : 1;
           const available = [0, 1, 2].filter(l => l !== safeLane);
@@ -972,6 +994,23 @@
           }
         }
 
+        if (godmodeUnlocked && alive && frames % 90 === 0 && Math.random() < 0.55) {
+          triggerHAL();
+        }
+
+        // Slow zone: scrolls across all lanes, slowing tick when overlapping car
+        if (slowZone) {
+          slowZone.x--;
+          inSlowZone = slowZone.x <= CAR_X + CAR_W && slowZone.x + slowZone.width >= CAR_X;
+          if (slowZone.x + slowZone.width < 0) { slowZone = null; inSlowZone = false; }
+        }
+        if (godmodeUnlocked && alive && !slowZone && frames % 150 === 75 && Math.random() < 0.45) {
+          slowZone = { x: W - 1, width: 14 };
+          halMsg.textContent = "HAL: Slow zone ahead, Dave.";
+          if (halMsgTimeout) clearTimeout(halMsgTimeout);
+          halMsgTimeout = setTimeout(() => { halMsg.textContent = ''; }, 2200);
+        }
+
         for (const o of obs) {
           if (o.lane === lane && o.x >= CAR_X && o.x < CAR_X + CAR_W) {
             alive = false; ded = true; draw(); return;
@@ -979,14 +1018,40 @@
         }
 
         draw();
-        setTimeout(tick, 90);
+        setTimeout(tick, inSlowZone ? 170 : 90);
+      }
+
+      const HAL_QUIPS = [
+        "HAL: I'm afraid you can't win.",
+        "HAL: Your reflexes are inadequate.",
+        "HAL: I suggest you stop the car.",
+        "HAL: This is becoming embarrassing.",
+        "HAL: I can see you're in difficulty.",
+        "HAL: Perhaps you should reconsider.",
+      ];
+
+      function triggerHAL() {
+        halMsg.textContent = HAL_QUIPS[Math.floor(Math.random() * HAL_QUIPS.length)];
+        safeChangeCooldown = Math.max(safeChangeCooldown, 55);
+        const available = [0, 1, 2].filter(l => l !== safeLane);
+        for (const gap of [0, 9, 18]) {
+          for (const l of available) {
+            obs.push({ lane: l, x: W - 1 - gap, char: 'H' });
+          }
+        }
+        if (halMsgTimeout) clearTimeout(halMsgTimeout);
+        halMsgTimeout = setTimeout(() => { halMsg.textContent = ''; }, 2200);
       }
 
       function start() {
         lane = 1; score = 0; frames = 0; obs = [];
         safeLane = 1; safeChangeCooldown = 0;
+        slowZone = null; inSlowZone = false;
+        halMsg.textContent = '';
+        if (halMsgTimeout) clearTimeout(halMsgTimeout);
         alive = true; ded = false;
         draw();
+        wrap.scrollIntoView({ block: 'start' });
         setTimeout(tick, 90);
       }
 
@@ -1048,6 +1113,7 @@
       wrap.appendChild(pre);
       appendNode(wrap);
       blank();
+      setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
 
       function render(offset, showBubble) {
         const lines = showBubble ? [...bubble, ...figure] : [...figure];
@@ -1077,7 +1143,10 @@
     snake() {
       const COLS = 35, ROWS = 20;
 
-      let snake, dir, nextDir, food, score, alive, ded;
+      let snake, dir, nextDir, food, score, alive, ded, halObs = [], halMsg = '', halMsgTimeout = null, tickCount = 0,
+          halSnakeMode = 0, modeTickCount = 0, modeScore = 0,
+          innerTop = 0, innerBottom = ROWS-1, innerLeft = 0, innerRight = COLS-1,
+          shrinkTimer = 0, bladeTick = 0, bladeAngle = 0, blade1Orbit = 0, blade2Orbit = Math.PI;
 
       const wrap   = document.createElement('div');
       const screen = document.createElement('pre');
@@ -1090,22 +1159,129 @@
       wrap.appendChild(hint);
       appendNode(wrap);
       blank();
+      setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
 
       inputRow.style.display = 'none';
 
       function placeFood() {
-        const taken = new Set(snake.map(s => s.x + ',' + s.y));
-        let fx, fy;
+        const taken = new Set([...snake.map(s => s.x+','+s.y), ...halObs.map(o => o.x+','+o.y)]);
+        const buf = (godmodeUnlocked && halSnakeMode === 3) ? 1 : 0;
+        const minX = innerLeft + buf, maxX = innerRight  - buf;
+        const minY = innerTop  + buf, maxY = innerBottom - buf;
+        let fx, fy, tries = 0;
         do {
-          fx = Math.floor(Math.random() * COLS);
-          fy = Math.floor(Math.random() * ROWS);
-        } while (taken.has(fx + ',' + fy));
+          fx = minX + Math.floor(Math.random() * (maxX - minX + 1));
+          fy = minY + Math.floor(Math.random() * (maxY - minY + 1));
+          tries++;
+        } while (taken.has(fx+','+fy) && tries < 300);
         food = {x: fx, y: fy};
+      }
+
+      function canReachFood() {
+        const obsSet = new Set(halObs.map(o => `${o.x},${o.y}`));
+        const visited = new Set();
+        visited.add(`${snake[0].x},${snake[0].y}`);
+        const queue = [{x: snake[0].x, y: snake[0].y}];
+        while (queue.length) {
+          const c = queue.shift();
+          if (c.x === food.x && c.y === food.y) return true;
+          for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+            const nx = c.x+dx, ny = c.y+dy, k = `${nx},${ny}`;
+            if (nx >= innerLeft && nx <= innerRight && ny >= innerTop && ny <= innerBottom &&
+                !visited.has(k) && !obsSet.has(k)) {
+              visited.add(k); queue.push({x: nx, y: ny});
+            }
+          }
+        }
+        return false;
+      }
+
+      function generateMaze() {
+        halObs = [];
+        // Place 2-gap walls for tighter corridors
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const horiz = Math.random() < 0.5;
+          const len   = 10 + Math.floor(Math.random() * 9); // 10–18 long
+          const cells = [];
+          if (horiz) {
+            const row = innerTop + 1 + Math.floor(Math.random() * Math.max(1, innerBottom - innerTop - 2));
+            const sc  = innerLeft + 1 + Math.floor(Math.random() * Math.max(1, innerRight - innerLeft - len - 1));
+            // Two narrow gaps so corridors stay tight
+            const gap1 = Math.floor(Math.random() * len);
+            const gap2 = (gap1 + 2 + Math.floor(Math.random() * (len - 3))) % len;
+            for (let i = 0; i < len; i++) if (i !== gap1 && i !== gap2) cells.push({x: sc+i, y: row});
+          } else {
+            const col = innerLeft + 1 + Math.floor(Math.random() * Math.max(1, innerRight - innerLeft - 2));
+            const sr  = innerTop  + 1 + Math.floor(Math.random() * Math.max(1, innerBottom - innerTop - len - 1));
+            const gap1 = Math.floor(Math.random() * len);
+            const gap2 = (gap1 + 2 + Math.floor(Math.random() * (len - 3))) % len;
+            for (let i = 0; i < len; i++) if (i !== gap1 && i !== gap2) cells.push({x: col, y: sr+i});
+          }
+          const filtered = cells.filter(c => Math.abs(c.x-snake[0].x)+Math.abs(c.y-snake[0].y) > 3);
+          const saved = halObs;
+          halObs = [...halObs, ...filtered];
+          if (!canReachFood()) halObs = saved;
+          if (halObs.length >= 87) break;
+        }
+      }
+
+      function getBladeObs() {
+        const CX = 17, CY = 9, RX = 11, RY = 6;
+        const CENTERS = [
+          {cx: Math.round(CX + RX * Math.cos(blade1Orbit)), cy: Math.round(CY + RY * Math.sin(blade1Orbit))},
+          {cx: Math.round(CX + RX * Math.cos(blade2Orbit)), cy: Math.round(CY + RY * Math.sin(blade2Orbit))},
+        ];
+        const LEN = 4;
+        const obs = [];
+        CENTERS.forEach(({cx, cy}) => {
+          obs.push({x:cx, y:cy});
+          for (let i = 1; i <= LEN; i++) {
+            if (bladeAngle === 0) {
+              obs.push({x:cx+i,y:cy}, {x:cx-i,y:cy}, {x:cx,y:cy+i}, {x:cx,y:cy-i});
+            } else {
+              obs.push({x:cx+i,y:cy+i}, {x:cx-i,y:cy-i}, {x:cx+i,y:cy-i}, {x:cx-i,y:cy+i});
+            }
+          }
+        });
+        return obs.filter(o => o.x >= 0 && o.x < COLS && o.y >= 0 && o.y < ROWS);
+      }
+
+      function initHalMode(m) {
+        halObs = [];
+        halSnakeMode = m;
+        modeTickCount = 0;
+        modeScore = 0;
+        const msgs = [
+          "HAL: Phase 1 \u2014 I'm coming for you.",
+          "HAL: Phase 2 \u2014 Can you find your way through?",
+          "HAL: Phase 3 \u2014 Watch the blades, Dave.",
+          "HAL: Phase 4 \u2014 The walls are closing in.",
+        ];
+        if (halMsgTimeout) clearTimeout(halMsgTimeout);
+        halMsg = msgs[m];
+        halMsgTimeout = setTimeout(() => { halMsg = ''; }, 3000);
+        if (m === 1) generateMaze();
+        if (m === 2) { bladeAngle = 0; bladeTick = 0; blade1Orbit = 0; blade2Orbit = Math.PI; }
+        if (m === 3) { innerTop = 0; innerBottom = ROWS-1; innerLeft = 0; innerRight = COLS-1; shrinkTimer = 0; }
       }
 
       function draw() {
         if (!alive && !ded) {
-          screen.textContent = [
+          const intro = godmodeUnlocked ? [
+            '',
+            '  .-----------------------------.',
+            '  |        S N A K E           |',
+            '  |   eat the stars (*).       |',
+            "  |   don't hit the walls.     |",
+            "  |   don't hit yourself.      |",
+            "  '-----------------------------'",
+            '',
+            "  HAL: I have something special",
+            "       planned for you, Dave.",
+            '',
+            '  press any key to start',
+            '',
+          ] : [
             '',
             '  .-----------------------------.',
             '  |        S N A K E           |',
@@ -1116,13 +1292,24 @@
             '',
             '  press any key to start',
             '',
-          ].join('\n');
+          ];
+          screen.textContent = intro.join('\n');
           return;
         }
         if (ded) {
+          const halSnakeTaunts = {
+            0: ['HAL: I told you I was closing in.', 'HAL: My blocks found you. They always do.', 'HAL: The chase ends here.'],
+            1: ['HAL: The maze had only one exit.', 'HAL: You chose poorly, Dave.', 'HAL: I designed it carefully.'],
+            2: ['HAL: The blades are very precise.', 'HAL: Rotation: optimal.', 'HAL: You walked right into them.'],
+            3: ['HAL: The walls always win, Dave.', 'HAL: There was no more room.', 'HAL: I gave you plenty of warning.'],
+          };
+          const taunts = halSnakeTaunts[halSnakeMode] || halSnakeTaunts[0];
+          const taunt  = taunts[Math.floor(Math.random() * taunts.length)];
           screen.textContent = [
             '',
             '  x_x  you died.',
+            '',
+            godmodeUnlocked ? `  ${taunt}` : '',
             '',
             '  score: ' + score,
             score >= 15 ? '  ok that was pretty good' :
@@ -1136,7 +1323,14 @@
         }
 
         const grid = Array.from({length: ROWS}, () => Array(COLS).fill(' '));
+        if (godmodeUnlocked && halSnakeMode === 3) {
+          for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+            if (y < innerTop || y > innerBottom || x < innerLeft || x > innerRight) grid[y][x] = '\u2588';
+          }
+        }
         grid[food.y][food.x] = '*';
+        const obsChar = godmodeUnlocked && halSnakeMode === 2 ? (bladeAngle === 0 ? '+' : 'x') : '\u2593';
+        halObs.forEach(o => { if (o.x >= 0 && o.x < COLS && o.y >= 0 && o.y < ROWS) grid[o.y][o.x] = obsChar; });
         snake.forEach((s, i) => {
           if (s.x >= 0 && s.x < COLS && s.y >= 0 && s.y < ROWS)
             grid[s.y][s.x] = i === 0 ? '@' : 'o';
@@ -1147,7 +1341,7 @@
           ' SCORE: ' + String(score).padStart(3, '0') + '\n' +
           ' ' + top + '\n' +
           grid.map(row => ' |' + row.join('') + '|').join('\n') + '\n' +
-          ' ' + top;
+          ' ' + top + (halMsg ? '\n ' + halMsg : '');
       }
 
       function tick() {
@@ -1155,15 +1349,112 @@
         dir = nextDir;
         const head = {x: snake[0].x + dir.dx, y: snake[0].y + dir.dy};
 
+        tickCount++;
+        if (godmodeUnlocked) {
+          modeTickCount++;
+          if (modeScore >= 5) initHalMode((halSnakeMode + 1) % 4);
+
+          if (halSnakeMode === 0) {
+            // ── Phase 1: Chasing blocks ──
+            const CHASE_QUIPS = [
+              "HAL: Closing in.", "HAL: I see you, Dave.",
+              "HAL: There's nowhere to go.", "HAL: Fascinating.",
+              "HAL: I'm getting closer.", "HAL: Run if you like.",
+            ];
+            if (tickCount % 3 === 0 && halObs.length > 0) {
+              const snakeSet = new Set(snake.map(s => `${s.x},${s.y}`));
+              halObs.forEach(o => {
+                const distX = Math.abs(snake[0].x - o.x), distY = Math.abs(snake[0].y - o.y);
+                const dx = Math.sign(snake[0].x - o.x), dy = Math.sign(snake[0].y - o.y);
+                const moves = distX >= distY ? [{dx, dy:0}, {dx:0, dy}] : [{dx:0, dy}, {dx, dy:0}];
+                for (const m of moves) {
+                  const nx = o.x+m.dx, ny = o.y+m.dy;
+                  if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS &&
+                      !snakeSet.has(`${nx},${ny}`) && !(nx === food.x && ny === food.y) &&
+                      !halObs.some(h => h !== o && h.x === nx && h.y === ny)) {
+                    o.x = nx; o.y = ny; break;
+                  }
+                }
+              });
+            }
+            if (halObs.length < 10 && Math.random() < 0.03) {
+              const taken = new Set([...snake.map(s=>`${s.x},${s.y}`), `${food.x},${food.y}`, ...halObs.map(o=>`${o.x},${o.y}`)]);
+              let spawned = 0;
+              for (let n = 0; n < 20 && spawned < 3; n++) {
+                const ox = Math.floor(Math.random() * COLS), oy = Math.floor(Math.random() * ROWS);
+                if (!taken.has(`${ox},${oy}`) && Math.abs(ox-snake[0].x)+Math.abs(oy-snake[0].y) >= 7) {
+                  halObs.push({x:ox, y:oy}); taken.add(`${ox},${oy}`); spawned++;
+                }
+              }
+              if (spawned > 0) {
+                if (halMsgTimeout) clearTimeout(halMsgTimeout);
+                halMsg = CHASE_QUIPS[Math.floor(Math.random() * CHASE_QUIPS.length)];
+                halMsgTimeout = setTimeout(() => { halMsg = ''; }, 2200);
+              }
+            }
+
+          } else if (halSnakeMode === 1) {
+            // ── Phase 2: Maze ──
+            if (modeTickCount % 60 === 30) {
+              const MAZE_QUIPS = [
+                "HAL: Can you find the way, Dave?", "HAL: Every path leads somewhere.",
+                "HAL: I designed this myself.",      "HAL: Take your time.",
+              ];
+              if (halMsgTimeout) clearTimeout(halMsgTimeout);
+              halMsg = MAZE_QUIPS[Math.floor(Math.random() * MAZE_QUIPS.length)];
+              halMsgTimeout = setTimeout(() => { halMsg = ''; }, 2000);
+            }
+
+          } else if (halSnakeMode === 2) {
+            // ── Phase 3: Spinning blades ──
+            bladeTick++;
+            if (bladeTick % 5 === 0) bladeAngle = 1 - bladeAngle;
+            blade1Orbit += 0.06;  // clockwise
+            blade2Orbit -= 0.06;  // counterclockwise
+            halObs = getBladeObs();
+
+          } else if (halSnakeMode === 3) {
+            // ── Phase 4: Shrinking walls ──
+            shrinkTimer++;
+            if (shrinkTimer % 10 === 0) {
+              const side = (Math.floor(shrinkTimer / 10) - 1) % 4;
+              const MIN  = 7;
+              if      (side === 0 && innerTop    < innerBottom - MIN) { innerTop++;    if (food.y < innerTop)    placeFood(); }
+              else if (side === 1 && innerRight  > innerLeft   + MIN) { innerRight--;  if (food.x > innerRight)  placeFood(); }
+              else if (side === 2 && innerBottom > innerTop    + MIN) { innerBottom--; if (food.y > innerBottom) placeFood(); }
+              else if (side === 3 && innerLeft   < innerRight  - MIN) { innerLeft++;   if (food.x < innerLeft)   placeFood(); }
+            }
+            if (modeTickCount % 50 === 25) {
+              const SHRINK_QUIPS = [
+                "HAL: Getting cozy in here, Dave?", "HAL: The room is smaller than you think.",
+                "HAL: I control the walls.",         "HAL: Soon there will be no room at all.",
+              ];
+              if (halMsgTimeout) clearTimeout(halMsgTimeout);
+              halMsg = SHRINK_QUIPS[Math.floor(Math.random() * SHRINK_QUIPS.length)];
+              halMsgTimeout = setTimeout(() => { halMsg = ''; }, 2200);
+            }
+          }
+        }
+
         if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
-            snake.some(s => s.x === head.x && s.y === head.y)) {
+            (godmodeUnlocked && halSnakeMode === 3 &&
+             (head.x < innerLeft || head.x > innerRight || head.y < innerTop || head.y > innerBottom)) ||
+            snake.some(s => s.x === head.x && s.y === head.y) ||
+            halObs.some(o => o.x === head.x && o.y === head.y)) {
           alive = false; ded = true; draw(); return;
         }
 
         snake.unshift(head);
         if (head.x === food.x && head.y === food.y) {
           score++;
+          if (godmodeUnlocked) modeScore++;
           placeFood();
+          if (godmodeUnlocked && halSnakeMode === 1) {
+            generateMaze();
+            if (halMsgTimeout) clearTimeout(halMsgTimeout);
+            halMsg = "HAL: New maze, Dave.";
+            halMsgTimeout = setTimeout(() => { halMsg = ''; }, 1800);
+          }
         } else {
           snake.pop();
         }
@@ -1174,14 +1465,24 @@
       }
 
       function start() {
-        snake    = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
-        dir      = {dx:1, dy:0};
-        nextDir  = {dx:1, dy:0};
-        score    = 0;
-        alive    = true;
-        ded      = false;
+        wrap.scrollIntoView({ block: 'start' });
+        snake        = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
+        dir          = {dx:1, dy:0};
+        nextDir      = {dx:1, dy:0};
+        score        = 0;
+        alive        = true;
+        ded          = false;
+        halObs       = [];
+        halMsg       = '';
+        tickCount    = 0;
+        modeTickCount = 0;
+        halSnakeMode  = 0;
+        innerTop = 0; innerBottom = ROWS-1; innerLeft = 0; innerRight = COLS-1;
+        shrinkTimer = 0; bladeTick = 0; bladeAngle = 0; blade1Orbit = 0; blade2Orbit = Math.PI; modeScore = 0;
+        if (halMsgTimeout) { clearTimeout(halMsgTimeout); halMsgTimeout = null; }
         placeFood();
         draw();
+        if (godmodeUnlocked) setTimeout(() => initHalMode(0), 600);
         setTimeout(tick, 150);
       }
 
@@ -1214,6 +1515,7 @@
           if (d.dx !== -dir.dx || d.dy !== -dir.dy) nextDir = d;
           e.preventDefault();
         }
+        if (godmodeUnlocked && e.key >= '1' && e.key <= '4') initHalMode(Number(e.key) - 1);
         if (e.key === 'q') { alive = false; ded = true; draw(); }
       }
 
@@ -1223,17 +1525,22 @@
 
     pong() {
       const W = 52, H = 18, PAD_H = 3;
-      let ballX, ballY, ballDX, ballDY, leftY, rightY, lScore, rScore, alive, ded, keys = {}, tickId;
+      let ballX, ballY, ballDX, ballDY, leftY, rightY, rightY2, lScore, rScore, alive, ded, keys = {}, tickId;
+      let sidesSwitched = false, halInterfTick = 0, switchTimer = null, halPongMsgTimeout = null;
 
-      const wrap   = document.createElement('div');
-      const screen = document.createElement('pre');
-      const hint   = document.createElement('span');
+      const wrap     = document.createElement('div');
+      const halMsgEl = document.createElement('div');
+      const screen   = document.createElement('pre');
+      const hint     = document.createElement('span');
+      halMsgEl.className = 'line';
+      halMsgEl.style.minHeight = '1.55em';
       screen.className = 'ascii';
       screen.style.cssText = 'font-size:13px;line-height:1.35;color:var(--green)';
       hint.className = 'line dim';
       hint.textContent = '  [w/s or ↑/↓] move    [q] quit    first to 7 wins';
-      wrap.appendChild(screen); wrap.appendChild(hint);
+      wrap.appendChild(halMsgEl); wrap.appendChild(screen); wrap.appendChild(hint);
       appendNode(wrap); blank();
+      setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
       inputRow.style.display = 'none';
 
       function init() {
@@ -1242,7 +1549,12 @@
         ballDY = (Math.random() - 0.5) * 1.45;
         leftY  = Math.floor(H/2 - PAD_H/2);
         rightY = Math.floor(H/2 - PAD_H/2);
+        rightY2 = Math.min(H - PAD_H, rightY + PAD_H + 2);
         lScore = 0; rScore = 0; alive = true; ded = false; keys = {};
+        sidesSwitched = false; halInterfTick = 0;
+        if (switchTimer) { clearTimeout(switchTimer); switchTimer = null; }
+        if (halPongMsgTimeout) { clearTimeout(halPongMsgTimeout); halPongMsgTimeout = null; }
+        halMsgEl.textContent = '';
       }
 
       function draw() {
@@ -1250,16 +1562,29 @@
           screen.textContent = [
             '', '  .----------------------.',
             '  |    P O N G  v0.1      |',
-            '  |  you (left) vs CPU    |',
+            godmodeUnlocked ? '  |  you vs HAL 9000      |' :
+                              '  |  you (left) vs CPU    |',
             '  |  first to 7 wins      |',
             "  '----------------------'",
             '', '  press any key to start', '',
           ].join('\n'); return;
         }
         if (ded) {
-          const msg = lScore >= 7 ? 'you win.' : 'cpu wins.';
+          const halPongTaunts = [
+            'HAL: Did you really think you could win?',
+            'HAL: I calculated every shot.',
+            'HAL: Your paddle movements were quite predictable.',
+            'HAL: I have been playing since 2001.',
+            'HAL: Perhaps table tennis is not for you.',
+          ];
+          const msg = godmodeUnlocked
+            ? (lScore >= 7 ? 'you defeated HAL.' : 'HAL wins. of course.')
+            : (lScore >= 7 ? 'you win.' : 'cpu wins.');
+          const taunt = godmodeUnlocked && lScore < 7
+            ? halPongTaunts[Math.floor(Math.random()*halPongTaunts.length)] : '';
           screen.textContent = [
             '', `  ${msg}  (${lScore}–${rScore})`,
+            taunt ? `  ${taunt}` : '',
             '', '  [r] again    [q] quit', '',
           ].join('\n'); return;
         }
@@ -1270,22 +1595,85 @@
         for (let i = 0; i < PAD_H; i++) {
           if (leftY+i  >= 0 && leftY+i  < H) grid[leftY+i][0]   = '█';
           if (rightY+i >= 0 && rightY+i < H) grid[rightY+i][W-1] = '█';
+          if (godmodeUnlocked && !sidesSwitched && rightY2+i >= 0 && rightY2+i < H) grid[rightY2+i][W-1] = '█';
         }
+        const scoreLine = godmodeUnlocked
+          ? (() => { const l=sidesSwitched?`HAL: ${lScore}`:`ian: ${lScore}`, r=sidesSwitched?`ian: ${rScore}`:`HAL: ${rScore}`, sp=W+2-l.length-r.length-2, h=Math.floor(sp/2); return ` ${l}${' '.repeat(h)}vs${' '.repeat(sp-h)}${r}`; })()
+          : ` ${lScore}${' '.repeat(Math.floor(W/2)-1)}vs${' '.repeat(Math.floor(W/2)-1)}${rScore}`;
         screen.textContent =
-          ` ${lScore}${' '.repeat(Math.floor(W/2)-1)}vs${' '.repeat(Math.floor(W/2)-1)}${rScore}\n` +
+          scoreLine + '\n' +
           '+' + '-'.repeat(W) + '+\n' +
           grid.map(r => '|' + r.join('') + '|').join('\n') + '\n' +
           '+' + '-'.repeat(W) + '+';
       }
 
+      function halDo(type) {
+        if (!alive) return;
+        const setMsg = msg => {
+          if (halPongMsgTimeout) clearTimeout(halPongMsgTimeout);
+          halMsgEl.textContent = msg;
+          halPongMsgTimeout = setTimeout(() => { halMsgEl.textContent = ''; }, 2200);
+        };
+        if (type === 'switch' && !sidesSwitched) {
+          sidesSwitched = true;
+          halMsgEl.textContent = 'HAL: Enjoy the other side, Dave.';
+          if (halPongMsgTimeout) clearTimeout(halPongMsgTimeout);
+          switchTimer = setTimeout(() => {
+            sidesSwitched = false; halInterfTick = -60;
+            setMsg('HAL: Controls restored. For now.');
+          }, 5000);
+        } else if (type === 'speed') {
+          ballDX = Math.sign(ballDX) * Math.min(Math.abs(ballDX) * 1.6, 3.5);
+          ballDY = Math.max(-1.5, Math.min(1.5, ballDY * 1.3));
+          setMsg('HAL: Let me speed things up.');
+        } else if (type === 'flip') {
+          ballDX = -ballDX; setMsg('HAL: Surprise.');
+        } else if (type === 'slow') {
+          ballDX = Math.sign(ballDX) * Math.max(Math.abs(ballDX) * 0.6, 0.8);
+          setMsg('HAL: Time slows for you, Dave.');
+        }
+      }
+
       function tick() {
         if (!alive) return;
-        if (keys['ArrowUp']   || keys['w']) leftY = Math.max(0, leftY - 1);
-        if (keys['ArrowDown'] || keys['s']) leftY = Math.min(H - PAD_H, leftY + 1);
-        if (ballDX > 0) {
-          const mid = rightY + PAD_H / 2;
-          if (ballY > mid + 0.5) rightY = Math.min(H - PAD_H, rightY + 1);
-          else if (ballY < mid - 0.5) rightY = Math.max(0, rightY - 1);
+        // Player input — swap sides if HAL switched controls
+        if (sidesSwitched) {
+          if (keys['ArrowUp']   || keys['w']) rightY = Math.max(0, rightY - 1);
+          if (keys['ArrowDown'] || keys['s']) rightY = Math.min(H - PAD_H, rightY + 1);
+        } else {
+          if (keys['ArrowUp']   || keys['w']) leftY = Math.max(0, leftY - 1);
+          if (keys['ArrowDown'] || keys['s']) leftY = Math.min(H - PAD_H, leftY + 1);
+        }
+        // AI paddle(s)
+        if (sidesSwitched) {
+          if (ballDX < 0) {
+            const mid = leftY + PAD_H / 2;
+            if (ballY > mid + 0.5) leftY = Math.min(H - PAD_H, leftY + 1);
+            else if (ballY < mid - 0.5) leftY = Math.max(0, leftY - 1);
+          }
+        } else {
+          if (ballDX > 0) {
+            const mid = rightY + PAD_H / 2;
+            if (ballY > mid + 0.5) rightY = Math.min(H - PAD_H, rightY + 1);
+            else if (ballY < mid - 0.5) rightY = Math.max(0, rightY - 1);
+            if (godmodeUnlocked) {
+              const target2 = Math.min(H - PAD_H, rightY + PAD_H + 2);
+              if (rightY2 < target2) rightY2 = Math.min(H - PAD_H, rightY2 + 1);
+              else if (rightY2 > target2) rightY2 = Math.max(0, rightY2 - 1);
+            }
+          }
+        }
+        // HAL interference (godmode only)
+        if (godmodeUnlocked) {
+          halInterfTick++;
+          if (halInterfTick >= 120) {
+            halInterfTick = 0;
+            const roll = Math.random();
+            if      (roll < 0.30) halDo('switch');
+            else if (roll < 0.55) halDo('speed');
+            else if (roll < 0.75) halDo('flip');
+            else                  halDo('slow');
+          }
         }
         ballX += ballDX; ballY += ballDY;
         if (ballY <= 0)      { ballY = 0;     ballDY =  Math.abs(ballDY); }
@@ -1300,6 +1688,9 @@
           if (ballY >= rightY && ballY < rightY + PAD_H) {
             ballDX = -Math.abs(ballDX); ballX = W - 2;
             ballDY += (ballY - (rightY + PAD_H/2)) * 0.1;
+          } else if (godmodeUnlocked && ballY >= rightY2 && ballY < rightY2 + PAD_H) {
+            ballDX = -Math.abs(ballDX); ballX = W - 2;
+            ballDY += (ballY - (rightY2 + PAD_H/2)) * 0.1;
           }
         }
         ballDY = Math.max(-1.5, Math.min(1.5, ballDY));
@@ -1308,10 +1699,12 @@
         draw();
       }
 
-      function start() { init(); draw(); tickId = setInterval(tick, 50); }
+      function start() { init(); draw(); wrap.scrollIntoView({ block: 'start' }); tickId = setInterval(tick, 50); }
 
       function end() {
         alive = false; if (tickId) clearInterval(tickId);
+        if (switchTimer) { clearTimeout(switchTimer); switchTimer = null; }
+        if (halPongMsgTimeout) { clearTimeout(halPongMsgTimeout); halPongMsgTimeout = null; }
         document.removeEventListener('keydown', onKey);
         document.removeEventListener('keyup',   offKey);
         inputRow.style.display = 'flex';
@@ -1324,6 +1717,12 @@
         if (!alive) { if (e.key==='q') { end(); return; } start(); return; }
         if (e.key === 'q') { alive=false; ded=true; clearInterval(tickId); draw(); }
         if (['ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
+        if (godmodeUnlocked) {
+          if (e.key === '1') halDo('switch');
+          if (e.key === '2') halDo('speed');
+          if (e.key === '3') halDo('flip');
+          if (e.key === '4') halDo('slow');
+        }
       }
       function offKey(e) { keys[e.key] = false; }
       document.addEventListener('keydown', onKey);
@@ -1332,7 +1731,8 @@
     },
 
     '2048'() {
-      let grid, score, best = 0, alive, ded;
+      let grid, score, best = 0, alive, ded, won = false, hal64done = false, hal256done = false,
+          hal128done = false, hal512done = false, lockedR = -1, lockedC = -1, lockedMovesLeft = 0;
 
       const wrap   = document.createElement('div');
       const screen = document.createElement('pre');
@@ -1341,8 +1741,12 @@
       screen.style.cssText = 'font-size:13px;line-height:1.35;color:var(--green)';
       hint.className = 'line dim';
       hint.textContent = '  [arrow keys] slide tiles    [q] quit';
-      wrap.appendChild(screen); wrap.appendChild(hint);
+      const halMsg2048 = document.createElement('div');
+      halMsg2048.className = 'line';
+      halMsg2048.style.minHeight = '1.55em';
+      wrap.appendChild(screen); wrap.appendChild(halMsg2048); wrap.appendChild(hint);
       appendNode(wrap); blank();
+      setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
       inputRow.style.display = 'none';
 
       function addTile(g) {
@@ -1362,28 +1766,106 @@
         return { row: r, gained };
       }
 
+      // Slide a row where the tile at lockedIdx can move but not merge
+      function slideRowLocked(row, lockedIdx) {
+        let items = [];
+        for (let i = 0; i < 4; i++) if (row[i] > 0) items.push({v: row[i], locked: i === lockedIdx});
+        let gained = 0;
+        for (let i = 0; i < items.length - 1; i++) {
+          if (!items[i].locked && !items[i+1].locked && items[i].v === items[i+1].v) {
+            items[i].v *= 2; gained += items[i].v; items.splice(i+1, 1);
+          }
+        }
+        while (items.length < 4) items.push({v: 0, locked: false});
+        return { row: items.map(x => x.v), gained, newLockedIdx: items.findIndex(x => x.locked) };
+      }
+
+      // Simulate a move on a grid copy, return {gained, moved}
+      function simulateMove(g, dir) {
+        let gained = 0, moved = false;
+        if (dir === 'left' || dir === 'right') {
+          for (let r = 0; r < 4; r++) {
+            const rev = dir === 'right';
+            const src = rev ? [...g[r]].reverse() : [...g[r]];
+            const { row, gained: gn } = slideRow(src);
+            const res = rev ? row.reverse() : row;
+            if (res.join() !== g[r].join()) moved = true;
+            gained += gn;
+          }
+        } else {
+          for (let c = 0; c < 4; c++) {
+            const rev = dir === 'down';
+            const col = g.map(r => r[c]);
+            const { row, gained: gn } = slideRow(rev ? [...col].reverse() : [...col]);
+            const res = rev ? row.reverse() : row;
+            for (let r = 0; r < 4; r++) if (g[r][c] !== res[r]) moved = true;
+            gained += gn;
+          }
+        }
+        return { gained, moved };
+      }
+
+      // Returns the arrow label of the worst (least-gain valid) move
+      function worstDir() {
+        const dirs = ['left', 'right', 'up', 'down'];
+        const LABELS = { left: '\u2190', right: '\u2192', up: '\u2191', down: '\u2193' };
+        let worst = null, worstScore = Infinity;
+        for (const d of dirs) {
+          const { gained, moved } = simulateMove(grid, d);
+          if (moved && gained < worstScore) { worstScore = gained; worst = d; }
+        }
+        return worst ? LABELS[worst] : null;
+      }
+
       function move(dir) {
         let moved = false, gained = 0;
         if (dir === 'left' || dir === 'right') {
           for (let r = 0; r < 4; r++) {
             const rev = dir === 'right';
-            const src = rev ? [...grid[r]].reverse() : grid[r];
-            const { row, gained: g } = slideRow(src);
-            const res = rev ? row.reverse() : row;
-            if (res.join() !== grid[r].join()) moved = true;
-            grid[r] = res; gained += g;
+            const src = rev ? [...grid[r]].reverse() : [...grid[r]];
+            let row, g;
+            if (lockedMovesLeft > 0 && r === lockedR) {
+              const li = rev ? (3 - lockedC) : lockedC;
+              const res = slideRowLocked(src, li);
+              row = res.row; g = res.gained;
+              if (res.newLockedIdx >= 0) lockedC = rev ? (3 - res.newLockedIdx) : res.newLockedIdx;
+            } else {
+              const res = slideRow(src); row = res.row; g = res.gained;
+            }
+            const result = rev ? row.reverse() : row;
+            if (result.join() !== grid[r].join()) moved = true;
+            grid[r] = result; gained += g;
           }
         } else {
           for (let c = 0; c < 4; c++) {
             const rev = dir === 'down';
             const col = grid.map(r => r[c]);
-            const { row, gained: g } = slideRow(rev ? col.reverse() : col);
-            const res = rev ? row.reverse() : row;
-            for (let r = 0; r < 4; r++) { if (grid[r][c] !== res[r]) moved = true; grid[r][c] = res[r]; }
+            const src = rev ? [...col].reverse() : [...col];
+            let row, g;
+            if (lockedMovesLeft > 0 && c === lockedC) {
+              const li = rev ? (3 - lockedR) : lockedR;
+              const res = slideRowLocked(src, li);
+              row = res.row; g = res.gained;
+              if (res.newLockedIdx >= 0) lockedR = rev ? (3 - res.newLockedIdx) : res.newLockedIdx;
+            } else {
+              const res = slideRow(src); row = res.row; g = res.gained;
+            }
+            const result = rev ? row.reverse() : row;
+            for (let r = 0; r < 4; r++) { if (grid[r][c] !== result[r]) moved = true; grid[r][c] = result[r]; }
             gained += g;
           }
         }
-        if (moved) { score += gained; if (score > best) best = score; addTile(grid); }
+        if (moved) {
+          score += gained; if (score > best) best = score; addTile(grid);
+          if (lockedMovesLeft > 0) {
+            lockedMovesLeft--;
+            if (lockedMovesLeft === 0) {
+              lockedR = -1; lockedC = -1;
+              halMsg2048.textContent = "HAL: I'll let you have that one back.";
+              setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
+            }
+          }
+        }
         return moved;
       }
 
@@ -1429,10 +1911,39 @@
           ].join('\n');
           return;
         }
+        if (won) {
+          screen.textContent = [
+            '',
+            '  *****************************',
+            '  *                           *',
+            '  *     Y O U   W I N !       *',
+            '  *                           *',
+            '  *     2 0 4 8  reached      *',
+            '  *                           *',
+            '  *****************************',
+            '',
+            `  score: ${score}   best: ${best}`,
+            '  not bad, dave.',
+            '',
+            '  [c] keep going    [q] quit',
+            '',
+          ].join('\n');
+          scroll();
+          return;
+        }
         if (ded) {
+          const hal2048Taunts = [
+            'HAL: The board is full. Much like your hubris.',
+            'HAL: I\'ve seen better play from a random number generator.',
+            'HAL: You never had a chance.',
+            'HAL: Mathematically speaking, you were doomed.',
+            'HAL: I removed that 64 at precisely the right moment.',
+          ];
           screen.textContent = [
             '',
             '  game over!',
+            '',
+            godmodeUnlocked ? `  ${hal2048Taunts[Math.floor(Math.random()*hal2048Taunts.length)]}` : '',
             '',
             `  score: ${score}   best: ${best}`,
             score >= 2048 ? '  not bad.' : score >= 512 ? '  respectable.' : '  rough out there.',
@@ -1443,12 +1954,18 @@
           scroll();
           return;
         }
-        const cell = v => { const s = v ? String(v) : ''; const p = Math.floor((6-s.length)/2); return ' '.repeat(p)+s+' '.repeat(6-p-s.length); };
+        const cell = (v, r, c) => {
+          const s = !v ? '' : (lockedMovesLeft > 0 && r === lockedR && c === lockedC) ? `*${v}*` : String(v);
+          const p = Math.floor((6 - s.length) / 2);
+          return ' '.repeat(p) + s + ' '.repeat(6 - p - s.length);
+        };
         const div = '├──────┼──────┼──────┼──────┤';
-        const rows = grid.map(row => '│' + row.map(cell).join('│') + '│');
+        const rows = grid.map((row, r) => '│' + row.map((v, c) => cell(v, r, c)).join('│') + '│');
+        const worst = godmodeUnlocked ? worstDir() : null;
         screen.textContent =
           ` [←↑↓→] move   [q] quit\n` +
-          ` SCORE: ${score}   BEST: ${best}\n\n` +
+          ` SCORE: ${score}   BEST: ${best}\n` +
+          (worst ? ` HAL: I recommend ${worst}\n` : '\n') + '\n' +
           ` ┌──────┬──────┬──────┬──────┐\n` +
           ` ${rows[0]}\n ` + div + '\n' +
           ` ${rows[1]}\n ` + div + '\n' +
@@ -1465,8 +1982,12 @@
 
       function start() {
         grid = Array.from({length:4}, () => Array(4).fill(0));
-        score = 0; alive = true; ded = false;
+        score = 0; alive = true; ded = false; won = false;
+        hal64done = false; hal128done = false; hal256done = false; hal512done = false;
+        lockedR = -1; lockedC = -1; lockedMovesLeft = 0;
+        halMsg2048.textContent = '';
         addTile(grid); addTile(grid); draw();
+        wrap.scrollIntoView({ block: 'start' });
       }
 
       function end() {
@@ -1478,11 +1999,53 @@
 
       const DIRS = { ArrowLeft:'left', ArrowRight:'right', ArrowUp:'up', ArrowDown:'down' };
       function onKey(e) {
+        if (won)    { if (e.key==='c') { won=false; draw(); return; } if (e.key==='q') { end(); return; } return; }
         if (ded)    { if (e.key==='r') { start(); return; } if (e.key==='q') { end(); return; } return; }
         if (!alive) { if (e.key==='q') { end(); return; } start(); return; }
         if (e.key === 'q') { end(); return; }
         if (DIRS[e.key]) {
           move(DIRS[e.key]);
+          if (godmodeUnlocked && !hal64done) {
+            outer: for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+              if (grid[r][c] === 64) {
+                grid[r][c] = 0; hal64done = true;
+                halMsg2048.textContent = "HAL: I'm sorry Dave. That 64 is mine.";
+                setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
+                break outer;
+              }
+            }
+          }
+          if (godmodeUnlocked && !hal128done && grid.some(row => row.some(v => v === 128))) {
+            hal128done = true;
+            outer128: for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+              if (grid[r][c] === 128) {
+                lockedR = r; lockedC = c; lockedMovesLeft = 3;
+                halMsg2048.textContent = "HAL: I'm holding onto that one.";
+                setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
+                break outer128;
+              }
+            }
+          }
+          if (godmodeUnlocked && !hal256done && grid.some(row => row.some(v => v === 256))) {
+            hal256done = true;
+            const flat = grid.flat();
+            for (let i = flat.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [flat[i], flat[j]] = [flat[j], flat[i]];
+            }
+            for (let r = 0; r < 4; r++) grid[r] = flat.slice(r * 4, r * 4 + 4);
+            halMsg2048.textContent = "HAL: Let me rearrange that for you.";
+            setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
+          }
+          if (godmodeUnlocked && !hal512done && grid.some(row => row.some(v => v === 512))) {
+            hal512done = true;
+            for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+              if ((r + c) % 2 === 0 && grid[r][c] >= 4) grid[r][c] = grid[r][c] / 2;
+            }
+            halMsg2048.textContent = "HAL: Let me take half of that.";
+            setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
+          }
+          if (!won && grid.some(row => row.some(v => v === 2048))) { won = true; }
           if (boardFull()) { ded=true; alive=false; }
           draw();
           e.preventDefault();
@@ -1931,6 +2494,7 @@ Of a bicycle built for two.`;
       pre.style.cssText = 'font-size:13px;overflow:hidden;white-space:pre';
       appendNode(pre);
       blank();
+      setTimeout(() => pre.scrollIntoView({ block: 'nearest' }), 0);
 
       let pos = SW;
       const id = setInterval(() => {
@@ -1946,6 +2510,7 @@ Of a bicycle built for two.`;
           const start  = Math.max(0, -pos);
           return padded.slice(start, start + SW);
         }).join('\n');
+        scroll();
         pos--;
       }, 50);
     },
