@@ -745,6 +745,7 @@
       line('<span class="bold">Commands</span>');
       blank();
       line(r('contact',  'links &amp; ways to reach me'));
+      line(r('resume',   'open my resume'));
       line(r('projects', "things i'm building"));
       line(r('clear',    'clear the terminal'));
       blank();
@@ -1827,6 +1828,13 @@ Of a bicycle built for two.`;
     },
 
     clear() { out.innerHTML = ''; },
+
+    resume() {
+      blank();
+      line('opening resume...', 'dim');
+      setTimeout(() => window.open('/assets/documents/ianclaird_resume.pdf', '_blank'), 600);
+      blank();
+    },
 
     override() {
       blank();
