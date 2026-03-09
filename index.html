@@ -202,6 +202,11 @@
 
   function focusCmd() { cmd.focus(); }
   function scroll() { terminal.scrollTop = terminal.scrollHeight; }
+  function openUrl(url) {
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
 
   let halMode = false, godmodeUnlocked = false;
 
@@ -389,13 +394,14 @@
         xp.appendChild(desktop);
 
         // icons
+        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
         const iconData = [
           { emoji:'📄', label:'Resume.pdf',  url:'/assets/documents/ianclaird_resume.pdf', newTab:true  },
           { emoji:'🐙', label:'My GitHub',   url:'https://github.com/i-laird',             newTab:true  },
           { emoji:'💼', label:'LinkedIn',    url:'https://linkedin.com/in/ianclaird',       newTab:true  },
           { emoji:'📧', label:'Email Ian',   url:'mailto:career@ilaird.com',                newTab:false },
           { emoji:'🗑️', label:'Recycle Bin', url:null },
-          { emoji:'🥊', label:'Stick Fighter\n2000.exe', action: openStickFighter },
+          ...( isMobile ? [] : [{ emoji:'🥊', label:'Stick Fighter\n2000.exe', action: openStickFighter }]),
         ];
 
         iconData.forEach((data, idx) => {
@@ -423,7 +429,7 @@
             if (now - lastClick < 380 || alreadySelected) {
               if (data.action) data.action();
               else if (data.url) {
-                if (data.newTab) window.open(data.url, '_blank');
+                if (data.newTab) openUrl(data.url);
                 else window.location.href = data.url;
               }
             }
@@ -516,7 +522,7 @@
           el.addEventListener('click', () => {
             toggleMenu(false);
             if (item.action) { item.action(); return; }
-            if (item.newTab) window.open(item.url, '_blank');
+            if (item.newTab) openUrl(item.url);
             else window.location.href = item.url;
           });
           mList.appendChild(el);
@@ -1833,7 +1839,7 @@ Of a bicycle built for two.`;
     resume() {
       blank();
       line('opening resume...', 'dim');
-      setTimeout(() => window.open('/assets/documents/ianclaird_resume.pdf', '_blank'), 600);
+      setTimeout(() => openUrl('/assets/documents/ianclaird_resume.pdf'), 600);
       blank();
     },
 
@@ -2113,7 +2119,7 @@ Of a bicycle built for two.`;
   }, { capture: true });
 
   if (/Mobi|Android/i.test(navigator.userAgent)) {
-    COMMANDS.gui();
+    boot().then(() => COMMANDS.gui());
   } else {
     boot();
   }
