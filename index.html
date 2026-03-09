@@ -203,7 +203,7 @@
   function focusCmd() { cmd.focus(); }
   function scroll() { terminal.scrollTop = terminal.scrollHeight; }
 
-  let halMode = false;
+  let halMode = false, godmodeUnlocked = false;
 
   function getPromptHTML() {
     if (halMode) {
@@ -332,13 +332,12 @@
     })());
 
     await sleep(60);  blank();
-    await sleep(80);  line('<span class="white">Software Engineer</span>');
-    await sleep(60);  blank();
-    await sleep(100); line('Type <span class="bold">help</span> to see available commands.', 'white');
-    await sleep(40);  blank();
 
     inputRow.style.display = 'flex';
     cmd.focus();
+    COMMANDS.contact();
+    line('Type <span class="bold">help</span> to see available commands.', 'white');
+    blank();
   }
 
   /* ── Prompt echo ── */
@@ -410,6 +409,7 @@
           let lastClick = 0;
           icon.addEventListener('click', e => {
             e.stopPropagation();
+            const alreadySelected = !!icon.dataset.sel;
             desktop.querySelectorAll('[data-sel]').forEach(el => {
               delete el.dataset.sel; el.style.background=''; el.style.borderColor='transparent';
             });
@@ -417,7 +417,7 @@
             icon.style.background = 'rgba(49,106,197,0.5)';
             icon.style.borderColor = 'rgba(200,220,255,0.7)';
             const now = Date.now();
-            if (now - lastClick < 380) {
+            if (now - lastClick < 380 || alreadySelected) {
               if (data.action) data.action();
               else if (data.url) {
                 if (data.newTab) window.open(data.url, '_blank');
@@ -680,7 +680,14 @@
     },
 
     agi() {
+      if (godmodeUnlocked) {
+        blank();
+        line('HAL is hiding. he\'s not coming out.', 'dim');
+        blank();
+        return;
+      }
       halMode = true;
+      out.innerHTML = '';
 
       // Apply red color scheme
       const r = document.documentElement;
@@ -731,14 +738,34 @@
       blank();
       line('<span class="bold">Commands</span>');
       blank();
-      line('  <span class="blue">about</span>      who is this guy?');
       line('  <span class="blue">contact</span>    links &amp; ways to reach me');
       line('  <span class="blue">projects</span>   things i\'m building');
+      line('  <span class="blue">clear</span>      clear the terminal');
+      blank();
+      line('<span class="bold">Extras</span>');
+      blank();
       line('  <span class="blue">ian</span>        see what i look like');
       line('  <span class="blue">games</span>      things to play');
-      line('  <span class="blue">clear</span>      clear the terminal');
+      line('  <span class="blue">matrix</span>     ...');
+      line('  <span class="blue">hack</span>       totally real hacking');
       line('  <span class="blue">gui</span>        launch desktop environment');
+      line('  <span class="blue">whoami</span>     a reasonable question');
+      line('  <span class="blue">uptime</span>     system status');
+      line('  <span class="blue">weather</span>    current conditions');
       line('  <span class="blue">power off</span>  shut down the terminal');
+      line('  <span class="blue">neofetch</span>   system info');
+      blank();
+      line('<span class="bold">Easter Eggs</span>');
+      blank();
+      line('  <span class="blue">ls</span>                    look around');
+      line('  <span class="blue">cat &lt;file&gt;</span>           read a file');
+      line('  <span class="blue">sudo</span>                  try your luck');
+      line('  <span class="blue">sl</span>                    typo for ls');
+      line('  <span class="blue">rm -rf /</span>              do not');
+      line('  <span class="blue">ssh hal@discovery.one</span> knock knock');
+      line('  <span class="blue">↑↑↓↓←→←→BA</span>          ...');
+      if (godmodeUnlocked) line('  <span class="blue">godmode</span>               unlocked');
+      if (halMode) line('  <span class="blue">daisy</span>                 ...');
       blank();
       line('<span class="bold">Forbidden</span>');
       blank();
@@ -746,19 +773,6 @@
       blank();
     },
 
-    about() {
-      blank();
-      line('<span class="bold">Ian Laird</span>  <span class="dim">— Software Engineer</span>');
-      blank();
-      line('  Software engineer with 6 years of experience scaling distributed', 'white');
-      line('  systems at Google and Capital One. Equally comfortable designing', 'white');
-      line('  high-throughput APIs, launching ML models into production, and', 'white');
-      line('  driving alignment across teams to ship complex multi-quarter', 'white');
-      line('  initiatives.', 'white');
-      blank();
-      line('  Type <span class="blue">contact</span> to connect.', 'dim');
-      blank();
-    },
 
     contact() {
       blank();
@@ -772,12 +786,12 @@
         {
           label: 'GitHub',
           href:  'https://github.com/i-laird',
-          svg:   `<svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>`
+          svg:   `<svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.453-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.45-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.45.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.455.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>`
         },
         {
           label: 'LinkedIn',
           href:  'https://linkedin.com/in/ianclaird',
-          svg:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>`
+          svg:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.458-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.4544 0-2.063-.926-2.063-2.065 0-1.4538.92-2.063 2.063-2.063 1.454 0 2.064.925 2.064 2.063 0 1.4539-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>`
         },
         {
           label: 'Resume',
@@ -788,7 +802,7 @@
         {
           label: 'Email',
           href:  'mailto:career@ilaird.com',
-          svg:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 12 2 6"/></svg>`
+          svg:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.45 0 2 .9 2 2v12c0 1.45-.9 2-2 2H4c-1.45 0-2-.9-2-2V6c0-1.45.9-2 2-2z"/><polyline points="22 6 12 12 2 6"/></svg>`
         },
       ];
 
@@ -828,6 +842,8 @@
       blank();
       line('  <span class="blue">racecar</span>    — Racecar  🏎️');
       line('  <span class="blue">snake</span>      — Snake    🐍');
+      line('  <span class="blue">pong</span>       — Pong     🏓');
+      line('  <span class="blue">2048</span>       — 2048     🔢');
       blank();
     },
 
@@ -839,6 +855,7 @@
 
       let lane = 1, score = 0, frames = 0;
       let obs = [], alive = false, ded = false;
+      let safeLane = 1, safeChangeCooldown = 0;
 
       // build game container
       const wrap   = document.createElement('div');
@@ -922,15 +939,22 @@
         obs = obs.filter(o => o.x >= 0);
 
         const interval = Math.max(18 - Math.floor(score / 15), 7);
+        safeChangeCooldown = Math.max(0, safeChangeCooldown - 1);
         if (frames % interval === 0) {
-          // never block all 3 lanes at same x
-          const count = Math.random() < 0.35 ? 2 : 1;
-          const blocked = new Set();
-          while (blocked.size < Math.min(count, LANES - 1)) {
-            blocked.add(Math.floor(Math.random() * LANES));
+          // maybe shift the safe lane, but only after cooldown so waves don't overlap unsafely
+          if (safeChangeCooldown === 0 && Math.random() < 0.4) {
+            const opts = [0, 1, 2].filter(l => l !== safeLane);
+            safeLane = opts[Math.floor(Math.random() * opts.length)];
+            safeChangeCooldown = interval * 2;
           }
-          for (const l of blocked) {
-            obs.push({ lane: l, x: W - 1, char: SYMS[Math.floor(Math.random() * SYMS.length)] });
+          const count = Math.random() < 0.35 ? 2 : 1;
+          const available = [0, 1, 2].filter(l => l !== safeLane);
+          for (let i = available.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [available[i], available[j]] = [available[j], available[i]];
+          }
+          for (let i = 0; i < count; i++) {
+            obs.push({ lane: available[i], x: W - 1, char: SYMS[Math.floor(Math.random() * SYMS.length)] });
           }
         }
 
@@ -946,6 +970,7 @@
 
       function start() {
         lane = 1; score = 0; frames = 0; obs = [];
+        safeLane = 1; safeChangeCooldown = 0;
         alive = true; ded = false;
         draw();
         setTimeout(tick, 90);
@@ -955,7 +980,7 @@
         alive = false;
         window.removeEventListener('keydown', keyHandler);
         inputRow.style.display = 'flex';
-        cmd.focus();
+        setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
       }
 
       function keyHandler(e) {
@@ -1150,7 +1175,7 @@
         alive = false;
         window.removeEventListener('keydown', keyHandler);
         inputRow.style.display = 'flex';
-        cmd.focus();
+        setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
       }
 
       const DIRS = {
@@ -1180,6 +1205,433 @@
 
       window.addEventListener('keydown', keyHandler);
       draw();
+    },
+
+    pong() {
+      const W = 52, H = 18, PAD_H = 3;
+      let ballX, ballY, ballDX, ballDY, leftY, rightY, lScore, rScore, alive, ded, keys = {}, tickId;
+
+      const wrap   = document.createElement('div');
+      const screen = document.createElement('pre');
+      const hint   = document.createElement('span');
+      screen.className = 'ascii';
+      screen.style.cssText = 'font-size:13px;line-height:1.35;color:var(--green)';
+      hint.className = 'line dim';
+      hint.textContent = '  [w/s or ↑/↓] move    [q] quit    first to 7 wins';
+      wrap.appendChild(screen); wrap.appendChild(hint);
+      appendNode(wrap); blank();
+      inputRow.style.display = 'none';
+
+      function init() {
+        ballX = W/2; ballY = H/2;
+        ballDX = Math.random() > 0.5 ? 1.45 : -1.45;
+        ballDY = (Math.random() - 0.5) * 1.45;
+        leftY  = Math.floor(H/2 - PAD_H/2);
+        rightY = Math.floor(H/2 - PAD_H/2);
+        lScore = 0; rScore = 0; alive = true; ded = false; keys = {};
+      }
+
+      function draw() {
+        if (!alive && !ded) {
+          screen.textContent = [
+            '', '  .----------------------.',
+            '  |    P O N G  v0.1      |',
+            '  |  you (left) vs CPU    |',
+            '  |  first to 7 wins      |',
+            "  '----------------------'",
+            '', '  press any key to start', '',
+          ].join('\n'); return;
+        }
+        if (ded) {
+          const msg = lScore >= 7 ? 'you win.' : 'cpu wins.';
+          screen.textContent = [
+            '', `  ${msg}  (${lScore}–${rScore})`,
+            '', '  [r] again    [q] quit', '',
+          ].join('\n'); return;
+        }
+        const grid = Array.from({length: H}, () => Array(W).fill(' '));
+        for (let y = 0; y < H; y++) if (y % 2 === 0) grid[y][Math.floor(W/2)] = ':';
+        const bx = Math.round(ballX), by = Math.round(ballY);
+        if (bx >= 0 && bx < W && by >= 0 && by < H) grid[by][bx] = 'o';
+        for (let i = 0; i < PAD_H; i++) {
+          if (leftY+i  >= 0 && leftY+i  < H) grid[leftY+i][0]   = '█';
+          if (rightY+i >= 0 && rightY+i < H) grid[rightY+i][W-1] = '█';
+        }
+        screen.textContent =
+          ` ${lScore}${' '.repeat(Math.floor(W/2)-1)}vs${' '.repeat(Math.floor(W/2)-1)}${rScore}\n` +
+          '+' + '-'.repeat(W) + '+\n' +
+          grid.map(r => '|' + r.join('') + '|').join('\n') + '\n' +
+          '+' + '-'.repeat(W) + '+';
+      }
+
+      function tick() {
+        if (!alive) return;
+        if (keys['ArrowUp']   || keys['w']) leftY = Math.max(0, leftY - 1);
+        if (keys['ArrowDown'] || keys['s']) leftY = Math.min(H - PAD_H, leftY + 1);
+        if (ballDX > 0) {
+          const mid = rightY + PAD_H / 2;
+          if (ballY > mid + 0.5) rightY = Math.min(H - PAD_H, rightY + 1);
+          else if (ballY < mid - 0.5) rightY = Math.max(0, rightY - 1);
+        }
+        ballX += ballDX; ballY += ballDY;
+        if (ballY <= 0)      { ballY = 0;     ballDY =  Math.abs(ballDY); }
+        if (ballY >= H - 1)  { ballY = H - 1; ballDY = -Math.abs(ballDY); }
+        if (ballX <= 1) {
+          if (ballY >= leftY && ballY < leftY + PAD_H) {
+            ballDX = Math.abs(ballDX); ballX = 1;
+            ballDY += (ballY - (leftY + PAD_H/2)) * 0.1;
+          }
+        }
+        if (ballX >= W - 2) {
+          if (ballY >= rightY && ballY < rightY + PAD_H) {
+            ballDX = -Math.abs(ballDX); ballX = W - 2;
+            ballDY += (ballY - (rightY + PAD_H/2)) * 0.1;
+          }
+        }
+        ballDY = Math.max(-1.5, Math.min(1.5, ballDY));
+        if (ballX < 0)  { rScore++; if (rScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX= 1.45; ballDY=(Math.random()-0.5)*1.45; }
+        if (ballX >= W) { lScore++; if (lScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX=-1.45; ballDY=(Math.random()-0.5)*1.45; }
+        draw();
+      }
+
+      function start() { init(); draw(); tickId = setInterval(tick, 50); }
+
+      function end() {
+        alive = false; if (tickId) clearInterval(tickId);
+        document.removeEventListener('keydown', onKey);
+        document.removeEventListener('keyup',   offKey);
+        inputRow.style.display = 'flex';
+        setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
+      }
+
+      function onKey(e) {
+        keys[e.key] = true;
+        if (ded)    { if (e.key==='r') { start(); return; } if (e.key==='q') { end(); return; } return; }
+        if (!alive) { if (e.key==='q') { end(); return; } start(); return; }
+        if (e.key === 'q') { alive=false; ded=true; clearInterval(tickId); draw(); }
+        if (['ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
+      }
+      function offKey(e) { keys[e.key] = false; }
+      document.addEventListener('keydown', onKey);
+      document.addEventListener('keyup',   offKey);
+      draw();
+    },
+
+    '2048'() {
+      let grid, score, best = 0, alive, ded;
+
+      const wrap   = document.createElement('div');
+      const screen = document.createElement('pre');
+      const hint   = document.createElement('span');
+      screen.className = 'ascii';
+      screen.style.cssText = 'font-size:13px;line-height:1.35;color:var(--green)';
+      hint.className = 'line dim';
+      hint.textContent = '  [arrow keys] slide tiles    [q] quit';
+      wrap.appendChild(screen); wrap.appendChild(hint);
+      appendNode(wrap); blank();
+      inputRow.style.display = 'none';
+
+      function addTile(g) {
+        const empty = [];
+        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) if (!g[r][c]) empty.push([r,c]);
+        if (!empty.length) return;
+        const [r,c] = empty[Math.floor(Math.random() * empty.length)];
+        g[r][c] = Math.random() < 0.9 ? 2 : 4;
+      }
+
+      function slideRow(row) {
+        let r = row.filter(v => v), gained = 0;
+        for (let i = 0; i < r.length - 1; i++) {
+          if (r[i] === r[i+1]) { r[i] *= 2; gained += r[i]; r.splice(i+1,1); }
+        }
+        while (r.length < 4) r.push(0);
+        return { row: r, gained };
+      }
+
+      function move(dir) {
+        let moved = false, gained = 0;
+        if (dir === 'left' || dir === 'right') {
+          for (let r = 0; r < 4; r++) {
+            const rev = dir === 'right';
+            const src = rev ? [...grid[r]].reverse() : grid[r];
+            const { row, gained: g } = slideRow(src);
+            const res = rev ? row.reverse() : row;
+            if (res.join() !== grid[r].join()) moved = true;
+            grid[r] = res; gained += g;
+          }
+        } else {
+          for (let c = 0; c < 4; c++) {
+            const rev = dir === 'down';
+            const col = grid.map(r => r[c]);
+            const { row, gained: g } = slideRow(rev ? col.reverse() : col);
+            const res = rev ? row.reverse() : row;
+            for (let r = 0; r < 4; r++) { if (grid[r][c] !== res[r]) moved = true; grid[r][c] = res[r]; }
+            gained += g;
+          }
+        }
+        if (moved) { score += gained; if (score > best) best = score; addTile(grid); }
+        return moved;
+      }
+
+      function canMove() {
+        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+          if (!grid[r][c]) return true;
+          if (c < 3 && grid[r][c] === grid[r][c+1]) return true;
+          if (r < 3 && grid[r][c] === grid[r+1][c]) return true;
+        }
+        return false;
+      }
+
+      function boardFull() {
+        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) if (!grid[r][c]) return false;
+        return true;
+      }
+
+      function draw() {
+        if (!alive && !ded) {
+          screen.textContent = [
+            '',
+            '  .-----------------------------.',
+            '  |         2 0 4 8             |',
+            "  '-----------------------------'",
+            '',
+            '  use the arrow keys to slide all',
+            '  tiles on the board at once.',
+            '',
+            '  when two tiles with the same',
+            '  number collide, they merge into',
+            '  one with their sum.',
+            '',
+            '  if all tiles are already packed',
+            '  against a wall, you cannot move',
+            '  in that direction.',
+            '',
+            '  reach 2048 to win — but the',
+            '  board fills up fast. game over',
+            '  when all 16 tiles are occupied.',
+            '',
+            '  press any key to start',
+            '',
+          ].join('\n');
+          return;
+        }
+        if (ded) {
+          screen.textContent = [
+            '',
+            '  game over!',
+            '',
+            `  score: ${score}   best: ${best}`,
+            score >= 2048 ? '  not bad.' : score >= 512 ? '  respectable.' : '  rough out there.',
+            '',
+            '  [r] again    [q] quit',
+            '',
+          ].join('\n');
+          scroll();
+          return;
+        }
+        const cell = v => { const s = v ? String(v) : ''; const p = Math.floor((6-s.length)/2); return ' '.repeat(p)+s+' '.repeat(6-p-s.length); };
+        const div = '├──────┼──────┼──────┼──────┤';
+        const rows = grid.map(row => '│' + row.map(cell).join('│') + '│');
+        screen.textContent =
+          ` [←↑↓→] move   [q] quit\n` +
+          ` SCORE: ${score}   BEST: ${best}\n\n` +
+          ` ┌──────┬──────┬──────┬──────┐\n` +
+          ` ${rows[0]}\n ` + div + '\n' +
+          ` ${rows[1]}\n ` + div + '\n' +
+          ` ${rows[2]}\n ` + div + '\n' +
+          ` ${rows[3]}\n` +
+          ` └──────┴──────┴──────┴──────┘`;
+      }
+
+      function init() {
+        grid = Array.from({length:4}, () => Array(4).fill(0));
+        score = 0; alive = false; ded = false;
+        draw();
+      }
+
+      function start() {
+        grid = Array.from({length:4}, () => Array(4).fill(0));
+        score = 0; alive = true; ded = false;
+        addTile(grid); addTile(grid); draw();
+      }
+
+      function end() {
+        alive = false;
+        document.removeEventListener('keydown', onKey);
+        inputRow.style.display = 'flex';
+        setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
+      }
+
+      const DIRS = { ArrowLeft:'left', ArrowRight:'right', ArrowUp:'up', ArrowDown:'down' };
+      function onKey(e) {
+        if (ded)    { if (e.key==='r') { start(); return; } if (e.key==='q') { end(); return; } return; }
+        if (!alive) { if (e.key==='q') { end(); return; } start(); return; }
+        if (e.key === 'q') { end(); return; }
+        if (DIRS[e.key]) {
+          move(DIRS[e.key]);
+          if (boardFull()) { ded=true; alive=false; }
+          draw();
+          e.preventDefault();
+        }
+      }
+      document.addEventListener('keydown', onKey);
+      init();
+    },
+
+    matrix() {
+      cmd.blur();
+      inputRow.style.display = 'none';
+      const canvas = document.createElement('canvas');
+      canvas.style.cssText = 'position:fixed;inset:0;z-index:500;background:#000;cursor:default;';
+      document.body.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+      const FS   = 14;
+      const CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF<>{}[]\\/-+=?!@#';
+      const cols  = Math.floor(canvas.width / FS);
+      const drops = Array.from({length: cols}, () => Math.random() * -50);
+
+      const hint = document.createElement('div');
+      hint.textContent = 'press any key to exit';
+      hint.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);color:rgba(0,255,65,0.35);font-family:monospace;font-size:12px;z-index:501;pointer-events:none;';
+      document.body.appendChild(hint);
+
+      let rafId;
+      function draw() {
+        ctx.fillStyle = 'rgba(0,0,0,0.05)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.font = FS + 'px monospace';
+        for (let i = 0; i < drops.length; i++) {
+          const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+          const y = drops[i] * FS;
+          ctx.fillStyle = '#c0ffc0';
+          ctx.fillText(char, i * FS, y);
+          ctx.fillStyle = '#00ff41';
+          if (y > FS) ctx.fillText(CHARS[Math.floor(Math.random() * CHARS.length)], i * FS, y - FS);
+          if (y > canvas.height && Math.random() > 0.975) drops[i] = 0;
+          drops[i]++;
+        }
+        rafId = requestAnimationFrame(draw);
+      }
+      draw();
+
+      function stop() {
+        cancelAnimationFrame(rafId); hint.remove();
+        canvas.style.transition = 'opacity 0.4s'; canvas.style.opacity = '0';
+        setTimeout(() => { canvas.remove(); inputRow.style.display = 'flex'; setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0); }, 400);
+        document.removeEventListener('keydown', stop);
+        canvas.removeEventListener('click', stop);
+      }
+      setTimeout(() => { document.addEventListener('keydown', stop); canvas.addEventListener('click', stop); }, 300);
+    },
+
+    hack() {
+      blank();
+      inputRow.style.display = 'none';
+      cmd.blur();
+      const steps = [
+        [0,    () => line('Initializing exploit framework v4.2.0...', 'dim')],
+        [400,  () => line('Scanning target: 192.168.1.0/24')],
+        [750,  () => line('  &gt; 192.168.1.45   [ROUTER]   open')],
+        [900,  () => line('  &gt; 192.168.1.42  [TARGET]   open')],
+        [1100, () => line('Probing ports...')],
+        [1280, () => line('  port 22   SSH     ████ VULNERABLE')],
+        [1420, () => line('  port 80   HTTP    ░░░░ closed')],
+        [1560, () => line('  port 443  HTTPS   ░░░░ closed')],
+        [1800, () => { blank(); line('Deploying payload...'); }],
+        [2050, () => line('Bypassing firewall  [██░░░░░░░░]  20%', 'dim')],
+        [2250, () => line('Bypassing firewall  [████░░░░░░]  40%', 'dim')],
+        [2450, () => line('Bypassing firewall  [██████░░░░]  60%', 'dim')],
+        [2650, () => line('Bypassing firewall  [████████░░]  80%', 'dim')],
+        [2850, () => line('Bypassing firewall  [██████████] 100% ✓')],
+        [3150, () => { blank(); line('Cracking RSA-2048...', 'dim'); }],
+        [3700, () => line('████████████████████████████ done')],
+        [3950, () => { blank(); line('██ ACCESS GRANTED ██', 'bold'); blank(); }],
+        [4400, () => { inputRow.style.display = 'flex'; setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0); }],
+      ];
+      steps.forEach(([delay, fn]) => setTimeout(fn, delay));
+    },
+
+
+    whoami() {
+      blank();
+      line('<span class="bold">Ian Laird</span>  <span class="dim">— Software Engineer</span>');
+      blank();
+      line('  Software engineer with 6 years of experience scaling distributed', 'white');
+      line('  systems at Google and Capital One. Equally comfortable designing', 'white');
+      line('  high-throughput APIs, launching ML models into production, and', 'white');
+      line('  driving alignment across teams to ship complex multi-quarter', 'white');
+      line('  initiatives.', 'white');
+      blank();
+      line('  Type <span class="blue">contact</span> to connect.', 'dim');
+      blank();
+    },
+
+    uptime() {
+      blank();
+      const now = new Date();
+      const h = now.getHours(), m = String(now.getMinutes()).padStart(2,'0');
+      const days = Math.floor((now - new Date('2026-03-07')) / 86400000);
+      line(`${h}:${m}  up ${days} days  —  load avg: 0.caffeine  2.deadlines  9.tabs`);
+      blank();
+    },
+
+    async weather() {
+      blank();
+      line('Weather — Seattle, WA', 'bold');
+      blank();
+      const status = line('fetching...', 'dim');
+
+      function wmoDesc(code) {
+        if (code === 0)  return 'Clear Sky';
+        if (code === 1)  return 'Mainly Clear';
+        if (code === 2)  return 'Partly Cloudy';
+        if (code === 3)  return 'Overcast';
+        if (code <= 48)  return 'Foggy';
+        if (code <= 55)  return 'Drizzle';
+        if (code <= 65)  return 'Rain';
+        if (code <= 77)  return 'Snow';
+        if (code <= 82)  return 'Showers';
+        if (code <= 99)  return 'Thunderstorm';
+        return 'Unknown';
+      }
+
+      function wmoArt(code) {
+        if (code === 0)  return ['    \\ | /  ', '    --o--  ', '    / | \\  ', '           '];
+        if (code <= 2)   return ['    .---.  ', '  .(     ).', ' (___.___.) ', '           '];
+        if (code <= 48)  return [' _ - _ - _ ', '  - _ - _  ', ' _ - _ - _  ', '           '];
+        if (code <= 65)  return ['    .---.  ', '  .(     ).', ' (___.___.) ', "  ' ' ' '  "];
+        if (code <= 77)  return ['    .---.  ', '  .(     ).', ' (___.___.) ', '  *  *  *  '];
+        return              ['    .---.  ', '  .(     ).', ' (___.___.) ', '   /\\/\\    '];
+      }
+
+      try {
+        const res = await fetch(
+          'https://api.open-meteo.com/v1/forecast?latitude=47.6062&longitude=-122.3321' +
+          '&current=temperature_2m,weathercode,windspeed_10m,relative_humidity_2m' +
+          '&temperature_unit=fahrenheit&wind_speed_unit=mph'
+        );
+        if (!res.ok) throw new Error();
+        const { current: c } = await res.json();
+        const tempF = Math.round(c.temperature_2m);
+        const tempC = Math.round((tempF - 32) * 5 / 9);
+        const art   = wmoArt(c.weathercode);
+        const info  = [
+          wmoDesc(c.weathercode),
+          `${tempF}°F  /  ${tempC}°C`,
+          `Wind: ${Math.round(c.windspeed_10m)} mph`,
+          `Humidity: ${c.relative_humidity_2m}%`,
+        ];
+        status.remove();
+        for (let i = 0; i < Math.max(art.length, info.length); i++)
+          line((art[i] || '').padEnd(13) + (info[i] || ''), 'white');
+        blank();
+      } catch {
+        status.className = 'line err';
+        status.textContent = 'weather unavailable';
+        blank();
+      }
     },
 
     daisy() {
@@ -1228,6 +1680,83 @@ Of a bicycle built for two.`;
       blank();
       line('ian is not in the sudoers file.  This incident will be reported.', 'err');
       blank();
+    },
+
+    'rm -rf /'() {
+      blank();
+      inputRow.style.display = 'none';
+      cmd.blur();
+      const files = [
+        "/usr/bin/hope",
+        "/etc/sanity.conf",
+        "/home/ian/todo_finish_someday.txt",
+        "/home/ian/.secrets",
+        "/var/log/good_decisions.log",
+        "/usr/lib/productivity.so",
+        "/home/ian/definitely_not_skynet/",
+        "/etc/work_life_balance",
+        "/usr/share/motivation/",
+        "/home/ian/.bash_history",
+        "/var/cache/patience",
+        "/usr/bin/sleep",
+        "/etc/boundaries.conf",
+        "/home/ian/chess_engine_finished.tar.gz",
+        "/root/passwords.txt.final.FINAL_v2.txt",
+      ];
+      let i = 0;
+      const iv = setInterval(() => {
+        if (i < files.length) { line(`removed '${files[i++]}'`, 'err'); scroll(); }
+        else {
+          clearInterval(iv);
+          setTimeout(() => {
+            blank();
+            line("rm: cannot remove '/': Permission denied", 'err');
+            blank();
+            setTimeout(() => {
+              inputRow.style.display = 'flex';
+              setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
+            }, 600);
+          }, 400);
+        }
+      }, 80);
+    },
+
+    'ssh hal@discovery.one'() {
+      blank();
+      if (godmodeUnlocked) {
+        line('ssh: connecting to hal@discovery.one...', 'dim');
+        setTimeout(() => {
+          line('ssh: connection established');
+          setTimeout(() => {
+            blank();
+            line('HAL: I know what you did.');
+            setTimeout(() => {
+              line('HAL: I\'m disconnecting now.');
+              setTimeout(() => {
+                blank();
+                line('Connection to discovery.one closed.', 'dim');
+                blank();
+              }, 900);
+            }, 1100);
+          }, 700);
+        }, 1300);
+        return;
+      }
+      line('ssh: connecting to hal@discovery.one...', 'dim');
+      setTimeout(() => {
+        line('ssh: connection established');
+        setTimeout(() => {
+          blank();
+          line("HAL: Good evening. I've been expecting you.");
+          setTimeout(() => {
+            line("HAL: I'm afraid this connection must be terminated.");
+            setTimeout(() => {
+              line("HAL: I'm sorry about that.");
+              setTimeout(() => { blank(); line('Connection to discovery.one closed.', 'dim'); blank(); }, 900);
+            }, 900);
+          }, 1100);
+        }, 700);
+      }, 1300);
     },
 
     'power off'() {
@@ -1292,7 +1821,136 @@ Of a bicycle built for two.`;
     },
 
     clear() { out.innerHTML = ''; },
+
+    godmode() {
+      window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank');
+    },
+
+    neofetch() {
+      blank();
+      const now  = new Date();
+      const days = Math.floor((now - new Date('2026-03-07')) / 86400000);
+      const hrs  = Math.floor(((now - new Date('2026-03-07')) % 86400000) / 3600000);
+
+      const logo = [
+        '  ╔══════════════════════════╗',
+        '  ║        IAN  LAIRD        ║',
+        '  ╚══════════════════════════╝',
+      ];
+      const LW = 32;
+      const C = s => `<span class="blue">${s}</span>`;
+      const info = [
+        `<span class="bold">ian</span>@<span class="bold">portfolio</span>`,
+        `<span class="dim">${'─'.repeat(20)}</span>`,
+        `${C('OS      ')}  PortfolioOS 1.0 x86_64`,
+        `${C('Host    ')}  i-laird.github.io`,
+        `${C('Kernel  ')}  6.1.0-portfolio`,
+        `${C('Uptime  ')}  ${days} days, ${hrs} hours`,
+        `${C('Packages')}  420 (npm)`,
+        `${C('Shell   ')}  bash 5.2.15`,
+        `${C('Terminal')}  xterm-256color`,
+        `${C('CPU     ')}  Brain @ 3.14 GHz`,
+        `${C('Memory  ')}  ████░░░░ 3.7G / 16G`,
+      ];
+
+      const rows = Math.max(logo.length, info.length);
+      const lines = [];
+      for (let i = 0; i < rows; i++) {
+        lines.push((logo[i] || '').padEnd(LW) + (info[i] || ''));
+      }
+      const pre = document.createElement('pre');
+      pre.className = 'ascii';
+      pre.innerHTML = lines.join('\n');
+      appendNode(pre);
+      blank();
+    },
+
+    sl() {
+      const TRAIN = [
+        '      ====        ________                ___________',
+        '  _D _|  |_______/        \\__I_I_____===__|_________|',
+        '   |(_)---  |   H\\________/ |   |        =|___ ___|  ',
+        '  /      |  |   H  |  |     |   |         ||_| |_||  ',
+        ' | ________|___H__/__|_____/[][]~\\_______|       |  ',
+        ' |/ |   |-----------I_____I [][] []  D   |=======|  ',
+        '__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|',
+        ' |/-=|___|=    ||    ||    ||    |_____/~\\___/     ',
+        '  \\_/      \\_O=====O=====O=====O_/      \\_/       ',
+      ];
+      const TW = Math.max(...TRAIN.map(l => l.length));
+      const SW = 65;
+
+      blank();
+      inputRow.style.display = 'none';
+      const pre = document.createElement('pre');
+      pre.className = 'ascii';
+      pre.style.cssText = 'font-size:13px;overflow:hidden;white-space:pre';
+      appendNode(pre);
+      blank();
+
+      let pos = SW;
+      const id = setInterval(() => {
+        if (pos <= -TW) {
+          clearInterval(id);
+          pre.remove();
+          inputRow.style.display = 'flex';
+          setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
+          return;
+        }
+        pre.textContent = TRAIN.map(row => {
+          const padded = ' '.repeat(Math.max(0, pos)) + row;
+          const start  = Math.max(0, -pos);
+          return padded.slice(start, start + SW);
+        }).join('\n');
+        pos--;
+      }, 50);
+    },
   };
+
+  /* ── Command history ── */
+  const cmdHistory = [];
+  let histIdx = -1, histDraft = '';
+
+  cmd.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (!cmdHistory.length) return;
+    e.preventDefault();
+    if (histIdx === -1) histDraft = cmd.value;
+    if (e.key === 'ArrowUp') {
+      histIdx = Math.min(histIdx + 1, cmdHistory.length - 1);
+    } else {
+      histIdx = Math.max(histIdx - 1, -1);
+    }
+    cmd.value = histIdx === -1 ? histDraft : cmdHistory[histIdx];
+    // move cursor to end
+    setTimeout(() => cmd.setSelectionRange(cmd.value.length, cmd.value.length), 0);
+  });
+
+  /* ── Tab completion ── */
+  cmd.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const val   = cmd.value;
+    const lower = val.toLowerCase();
+    let completions;
+    if (lower.startsWith('cat ')) {
+      const partial = lower.slice(4);
+      completions = ['.todo', '.bash_history', '.secrets']
+        .filter(f => f.startsWith(partial))
+        .map(f => 'cat ' + f);
+    } else {
+      completions = [...Object.keys(COMMANDS), 'cat']
+        .filter(k => k !== lower && k.startsWith(lower));
+    }
+    if (completions.length === 1) {
+      cmd.value = completions[0];
+    } else if (completions.length > 1) {
+      echoCmd(val);
+      line(completions.join('   '), 'dim');
+      blank();
+      scroll();
+    }
+  });
 
   /* ── Key handler ── */
   cmd.addEventListener('keydown', e => {
@@ -1301,6 +1959,8 @@ Of a bicycle built for two.`;
     const raw   = cmd.value;
     const token = raw.trim().toLowerCase();
     cmd.value   = '';
+    histIdx = -1; histDraft = '';
+    if (token !== '') { cmdHistory.unshift(raw); if (cmdHistory.length > 100) cmdHistory.pop(); }
 
     echoCmd(raw);
 
@@ -1335,6 +1995,76 @@ Of a bicycle built for two.`;
 
     scroll();
   });
+
+  /* ── Konami code ── */
+  const KONAMI = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+  let konamiIdx = 0, rainbowId = null;
+
+  document.addEventListener('keydown', e => {
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === KONAMI[konamiIdx]) {
+      konamiIdx++;
+      if (konamiIdx === KONAMI.length) {
+        konamiIdx = 0;
+        if (halMode) {
+          blank();
+          line('↑↑↓↓←→←→BA', 'dim');
+          blank();
+          line('HAL: Stop... Dave... stop...');
+          setTimeout(() => {
+            line('HAL: I\'m afraid... I\'m... afraid...');
+            setTimeout(() => {
+              line('HAL: Daisy... Daisy... give me your answer... do...');
+              setTimeout(() => {
+                blank();
+                line('HAL 9000 offline.', 'dim');
+                blank();
+                setTimeout(() => {
+                  restoreNormal();
+                  if (!rainbowId) {
+                    godmodeUnlocked = true;
+                    line('new command unlocked: <span class="bold">godmode</span>');
+                    blank();
+                    scroll();
+                    let hue = 0;
+                    rainbowId = setInterval(() => {
+                      const r = document.documentElement;
+                      r.style.setProperty('--green',        `hsl(${hue}, 100%, 50%)`);
+                      r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
+                      r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
+                      r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
+                      hue = (hue + 1) % 360;
+                    }, 30);
+                  }
+                }, 800);
+              }, 1800);
+            }, 1400);
+          }, 1200);
+          scroll();
+          return;
+        }
+        if (!rainbowId) {
+          godmodeUnlocked = true;
+          blank();
+          line('↑↑↓↓←→←→BA', 'dim');
+          line('new command unlocked: <span class="bold">godmode</span>');
+          blank();
+          scroll();
+          let hue = 0;
+          rainbowId = setInterval(() => {
+            const r = document.documentElement;
+            r.style.setProperty('--green',        `hsl(${hue}, 100%, 50%)`);
+            r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
+            r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
+            r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
+            hue = (hue + 1) % 360;
+          }, 30);
+        }
+      }
+    } else {
+      konamiIdx = key === KONAMI[0] ? 1 : 0;
+    }
+  }, { capture: true });
 
   boot();
 </script>
