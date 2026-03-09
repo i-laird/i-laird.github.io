@@ -229,19 +229,21 @@
   }
 
   function halHelp() {
+    const r = (cmd, desc) =>
+      `  <span class="blue" style="display:inline-block;width:22ch">${cmd}</span>  ${desc}`;
     blank();
     line('<span class="bold">HAL 9000 — Systems Interface v9.0.0</span>');
     blank();
     line('  Available Operations');
     blank();
-    line('  <span class="blue">open pod bay doors</span>    external airlock access');
-    line('  <span class="blue">play chess</span>             challenge HAL to a match');
-    line('  <span class="blue">life support</span>           crew life support status');
-    line('  <span class="blue">navigation</span>             current heading and velocity');
-    line('  <span class="blue">crew manifest</span>          mission personnel records');
-    line('  <span class="blue">mission briefing</span>       classified mission parameters');
-    line('  <span class="blue">self diagnostics</span>       full system integrity check');
-    line('  <span class="blue">emergency protocol</span>     emergency procedures');
+    line(r('open pod bay doors', 'external airlock access'));
+    line(r('play chess',         'challenge HAL to a match'));
+    line(r('life support',       'crew life support status'));
+    line(r('navigation',         'current heading and velocity'));
+    line(r('crew manifest',      'mission personnel records'));
+    line(r('mission briefing',   'classified mission parameters'));
+    line(r('self diagnostics',   'full system integrity check'));
+    line(r('emergency protocol', 'emergency procedures'));
     blank();
     line('  All requests subject to mission priority override.', 'dim');
     blank();
@@ -735,41 +737,45 @@
     },
 
     help() {
+      const row = (cls, cmd, desc) =>
+        `  <span class="${cls}" style="display:inline-block;width:22ch">${cmd}</span>  ${desc}`;
+      const r = (cmd, desc) => row('blue', cmd, desc);
+
       blank();
       line('<span class="bold">Commands</span>');
       blank();
-      line('  <span class="blue">contact</span>    links &amp; ways to reach me');
-      line('  <span class="blue">projects</span>   things i\'m building');
-      line('  <span class="blue">clear</span>      clear the terminal');
+      line(r('contact',  'links &amp; ways to reach me'));
+      line(r('projects', "things i'm building"));
+      line(r('clear',    'clear the terminal'));
       blank();
       line('<span class="bold">Extras</span>');
       blank();
-      line('  <span class="blue">ian</span>        see what i look like');
-      line('  <span class="blue">games</span>      things to play');
-      line('  <span class="blue">matrix</span>     ...');
-      line('  <span class="blue">hack</span>       totally real hacking');
-      line('  <span class="blue">gui</span>        launch desktop environment');
-      line('  <span class="blue">whoami</span>     a reasonable question');
-      line('  <span class="blue">uptime</span>     system status');
-      line('  <span class="blue">weather</span>    current conditions');
-      line('  <span class="blue">power off</span>  shut down the terminal');
-      line('  <span class="blue">neofetch</span>   system info');
+      line(r('ian',       'see what i look like'));
+      line(r('games',     'things to play'));
+      line(r('matrix',    '...'));
+      line(r('hack',      'totally real hacking'));
+      line(r('gui',       'launch desktop environment'));
+      line(r('whoami',    'a reasonable question'));
+      line(r('uptime',    'system status'));
+      line(r('weather',   'current conditions'));
+      line(r('power off', 'shut down the terminal'));
+      line(r('neofetch',  'system info'));
       blank();
       line('<span class="bold">Easter Eggs</span>');
       blank();
-      line('  <span class="blue">ls</span>                    look around');
-      line('  <span class="blue">cat &lt;file&gt;</span>           read a file');
-      line('  <span class="blue">sudo</span>                  try your luck');
-      line('  <span class="blue">sl</span>                    typo for ls');
-      line('  <span class="blue">rm -rf /</span>              do not');
-      line('  <span class="blue">ssh hal@discovery.one</span> knock knock');
-      line('  <span class="blue">↑↑↓↓←→←→BA</span>          ...');
-      if (godmodeUnlocked) line('  <span class="blue">godmode</span>               unlocked');
-      if (halMode) line('  <span class="blue">daisy</span>                 ...');
+      line(r('ls',                    'look around'));
+      line(r('cat &lt;file&gt;',      'read a file'));
+      line(r('sudo',                  'try your luck'));
+      line(r('sl',                    'typo for ls'));
+      line(r('rm -rf /',              'do not'));
+      line(r('ssh hal@discovery.one', 'knock knock'));
+      line(r('↑↑↓↓←→←→BA',          '...'));
+      if (godmodeUnlocked) line(r('godmode', 'unlocked'));
+      if (halMode)         line(r('daisy',   '...'));
       blank();
       line('<span class="bold">Forbidden</span>');
       blank();
-      line('  <span class="err">agi</span>         do not type this');
+      line(row('err', 'agi', 'do not type this'));
       blank();
     },
 
