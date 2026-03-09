@@ -2396,7 +2396,10 @@ Of a bicycle built for two.`;
         utt.volume = 1;
         if (halVoice) utt.voice = halVoice;
 
-        let speechPos = 0;
+        // Estimate speech duration: ~150wpm * rate, Daisy is ~49 words
+        const ESTIMATED_MS = (49 / (150 * 0.55)) * 60000; // ~35 600ms
+        const startTime = Date.now();
+        let speechPos = 0; // updated by onboundary when available
         let typePos   = 0;
         let ended     = false;
 
@@ -2404,20 +2407,25 @@ Of a bicycle built for two.`;
           if (evt.name !== 'word') return;
           speechPos = evt.charIndex + (evt.charLength || 0);
         };
-        utt.onend = () => { ended = true; };
+        utt.onend = () => { ended = true; speechPos = song.length; };
 
         const typeNext = () => {
-          if (ended && typePos >= speechPos) { finish(); return; }
-          if (typePos < speechPos) {
+          // Time-based floor so typing always progresses even if onboundary never fires
+          const timeFrac = Math.min((Date.now() - startTime) / ESTIMATED_MS, 1);
+          const target = Math.max(speechPos, Math.floor(timeFrac * song.length));
+
+          if (typePos < target) {
             const ch = song[typePos++];
             el.textContent = song.slice(0, typePos);
             scroll();
             setTimeout(typeNext, ch === '\n' ? 350 : 38);
+          } else if (ended && typePos >= song.length) {
+            finish();
           } else {
             setTimeout(typeNext, 38);
           }
         };
-        setTimeout(typeNext, 38);
+        setTimeout(typeNext, 50);
 
         speechSynthesis.speak(utt);
       } else {
