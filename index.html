@@ -2112,7 +2112,11 @@ Of a bicycle built for two.`;
     }
   }, { capture: true });
 
-  boot();
+  if (/Mobi|Android/i.test(navigator.userAgent)) {
+    COMMANDS.gui();
+  } else {
+    boot();
+  }
 </script>
 </body>
 </html>
