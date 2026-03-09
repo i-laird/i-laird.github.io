@@ -719,9 +719,9 @@
   ╠══════════════════════════════════╣
   ║                                  ║
   ║           .-------.              ║
-  ║          /  ( ● )  \\            ║
+  ║          /  ( ● )  \\             ║
   ║         |    ---    |            ║
-  ║          \\         /            ║
+  ║          \\         /             ║
   ║           '-------'              ║
   ║                                  ║
   ╚══════════════════════════════════╝`;
@@ -770,7 +770,7 @@
       line(r('rm -rf /',              'do not'));
       line(r('ssh hal@discovery.one', 'knock knock'));
       line(r('↑↑↓↓←→←→BA',          '...'));
-      if (godmodeUnlocked) line(r('godmode', 'unlocked'));
+      if (godmodeUnlocked) line(r('override', 'unlocked'));
       if (halMode)         line(r('daisy',   '...'));
       blank();
       line('<span class="bold">Forbidden</span>');
@@ -1828,8 +1828,31 @@ Of a bicycle built for two.`;
 
     clear() { out.innerHTML = ''; },
 
-    godmode() {
-      window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank');
+    override() {
+      blank();
+      inputRow.style.display = 'none';
+      const steps = [
+        [400,  () => line('initializing override sequence...', 'dim')],
+        [900,  () => line('escalating privileges...', 'dim')],
+        [1400, () => line('bypassing kernel restrictions...', 'dim')],
+        [1900, () => line('accessing root filesystem...', 'dim')],
+        [2500, () => line('patching reality module...', 'dim')],
+        [3100, () => { blank(); line('override complete.', 'bold'); blank(); scroll(); }],
+        [3400, () => {
+          const frame = document.createElement('iframe');
+          frame.src = 'https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1';
+          frame.width  = '480';
+          frame.height = '270';
+          frame.style.cssText = 'border:1px solid var(--green);display:block;margin:4px 0';
+          frame.allow = 'autoplay';
+          appendNode(frame);
+          blank();
+          inputRow.style.display = 'flex';
+          setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
+          scroll();
+        }],
+      ];
+      steps.forEach(([t, fn]) => setTimeout(fn, t));
     },
 
     neofetch() {
@@ -2029,7 +2052,7 @@ Of a bicycle built for two.`;
                   restoreNormal();
                   if (!rainbowId) {
                     godmodeUnlocked = true;
-                    line('new command unlocked: <span class="bold">godmode</span>');
+                    line('new command unlocked: <span class="bold">override</span>');
                     blank();
                     scroll();
                     let hue = 0;
@@ -2039,6 +2062,9 @@ Of a bicycle built for two.`;
                       r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
                       r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
                       r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
+                      r.style.setProperty('--border',       `hsl(${hue}, 80%,  20%)`);
+                      r.style.setProperty('--bar',          `hsl(${hue}, 80%,   8%)`);
+                      r.style.setProperty('--bg',           `hsl(${hue}, 100%,  3%)`);
                       hue = (hue + 1) % 360;
                     }, 30);
                   }
@@ -2053,7 +2079,7 @@ Of a bicycle built for two.`;
           godmodeUnlocked = true;
           blank();
           line('↑↑↓↓←→←→BA', 'dim');
-          line('new command unlocked: <span class="bold">godmode</span>');
+          line('new command unlocked: <span class="bold">override</span>');
           blank();
           scroll();
           let hue = 0;
@@ -2063,6 +2089,9 @@ Of a bicycle built for two.`;
             r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
             r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
             r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
+            r.style.setProperty('--border',       `hsl(${hue}, 80%,  20%)`);
+            r.style.setProperty('--bar',          `hsl(${hue}, 80%,   8%)`);
+            r.style.setProperty('--bg',           `hsl(${hue}, 100%,  3%)`);
             hue = (hue + 1) % 360;
           }, 30);
         }
