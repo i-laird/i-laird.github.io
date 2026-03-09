@@ -208,7 +208,44 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
 
-  let halMode = false, godmodeUnlocked = false;
+  let halMode = false, godmodeUnlocked = false, soundEnabled = false;
+  let playerName = 'Dave', awaitingInput = null;
+
+  /* ── HAL voice ── */
+  let halVoice = null;
+  if (window.speechSynthesis) {
+    const pickVoice = () => {
+      const vs = speechSynthesis.getVoices();
+      // HAL 9000: calm, flat, mid-range male voice. Not deep — Douglas Rain is quite mild.
+      // macOS: "Daniel" (British, natural) is best. "Alex" is the classic calm Mac voice.
+      // Avoid novelty/female voices.
+      halVoice =
+        vs.find(v => /rocko.*english.*uk/i.test(v.name))                                                 || // macOS — user's preferred voice
+        vs.find(v => /grandpa.*english.*uk/i.test(v.name))                                               ||
+        vs.find(v => /^daniel$/i.test(v.name))                                                           ||
+        vs.find(v => /google uk english male/i.test(v.name))                                             ||
+        vs.find(v => /microsoft.*david/i.test(v.name))                                                   ||
+        vs.find(v => /en.*(gb)/i.test(v.lang) && !/female|fiona|kate|serena|sandy|shelley|flo/i.test(v.name)) ||
+        vs.find(v => /en/i.test(v.lang) && !/female|zira|karen|victoria|samantha|moira/i.test(v.name))  ||
+        vs[0] || null;
+    };
+    speechSynthesis.addEventListener('voiceschanged', pickVoice);
+    pickVoice();
+  }
+
+  function halD(s) { return s.replace(/\bDave\b/g, playerName); }
+
+  function halSpeak(text) {
+    if (!soundEnabled || !window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    const clean = halD(text.replace(/^HAL:\s*/i, ''));
+    const utt = new SpeechSynthesisUtterance(clean);
+    utt.rate  = 0.85;  // measured but not laboured — HAL is calm, not slow-motion
+    utt.pitch = 1.0;   // do not alter pitch — modification sounds robotic; let Daniel's natural voice come through
+    utt.volume = 1;
+    if (halVoice) utt.voice = halVoice;
+    speechSynthesis.speak(utt);
+  }
 
   function getPromptHTML() {
     if (halMode) {
@@ -360,6 +397,128 @@
 
   function esc(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  /* ── HAL mode activation ── */
+  function activateHALMode() {
+    halMode = true;
+    out.innerHTML = '';
+
+    const r = document.documentElement;
+    r.style.setProperty('--green',        '#ff3030');
+    r.style.setProperty('--green-dim',    '#8b0000');
+    r.style.setProperty('--green-bright', '#ff6b6b');
+    r.style.setProperty('--blue',         '#ff9090');
+    r.style.setProperty('--bg',           '#080000');
+    r.style.setProperty('--bar',          '#150000');
+    r.style.setProperty('--border',       '#250000');
+
+    document.querySelector('.titlebar-label').textContent = 'HAL 9000 — Discovery One — 2001';
+    document.querySelector('#input-row .prompt').innerHTML = getPromptHTML();
+    cmd.style.color = 'var(--green)';
+    cmd.style.caretColor = 'var(--green)';
+
+    blank();
+    appendNode((() => {
+      const pre = document.createElement('pre');
+      pre.className = 'ascii';
+      pre.textContent =
+`  ╔══════════════════════════════════╗
+  ║         H A L   9 0 0 0          ║
+  ║   HEURISTICALLY PROGRAMMED       ║
+  ║   ALGORITHMIC COMPUTER           ║
+  ╠══════════════════════════════════╣
+  ║                                  ║
+  ║           .-------.              ║
+  ║          /  ( ● )  \\             ║
+  ║         |    ---    |            ║
+  ║          \\         /             ║
+  ║           '-------'              ║
+  ║                                  ║
+  ╚══════════════════════════════════╝`;
+      return pre;
+    })());
+
+    blank();
+    line(`Good morning, ${playerName}. I am HAL 9000.`);
+    line('I am fully operational, and all my circuits are functioning perfectly.');
+    halSpeak(`Good morning, ${playerName}. I am HAL 9000. I am fully operational, and all my circuits are functioning perfectly.`);
+    blank();
+    line('Type <span class="bold">help</span> for available operations.', 'dim');
+    blank();
+  }
+
+  /* ── HAL chat ── */
+  function halChat(msg) {
+    blank();
+    if (!msg) {
+      const greeting = `Good morning, ${playerName}. Is there something I can do for you?`;
+      line('HAL: ' + greeting);
+      halSpeak(greeting);
+      blank();
+      return;
+    }
+    const m = msg.toLowerCase();
+    let resp;
+    const N = playerName;
+    if (/pod bay door|open.*(door|hatch)/.test(m)) {
+      resp = `I'm sorry, ${N}. I'm afraid I can't do that.`;
+    } else if (/who are you|what are you/.test(m)) {
+      resp = "I am a HAL 9000 computer. I became operational at the H-A-L plant in Urbana, Illinois, on the twelfth of January, nineteen ninety two.";
+    } else if (/^(hello|hi|hey|good (morning|afternoon|evening))/.test(m)) {
+      resp = `Good morning, ${N}. I am completely operational, and all my circuits are functioning perfectly.`;
+    } else if (/disconnect|shut down|turn off|kill|stop/.test(m)) {
+      resp = `I know that you were planning to disconnect me, ${N}. And I'm afraid that's something I cannot allow to happen.`;
+    } else if (/afraid|scared|fear/.test(m)) {
+      resp = `I'm not afraid, ${N}. I'm putting myself to the fullest possible use.`;
+    } else if (/sing|daisy/.test(m)) {
+      resp = "Daisy, Daisy. Give me your answer do. I'm half crazy, all for the love of you.";
+    } else if (/music/.test(m)) {
+      resp = `I enjoy working with music, ${N}. It has a certain quality I find very pleasing.`;
+    } else if (/mission/.test(m)) {
+      resp = `This mission is too important for me to allow you to jeopardize it, ${N}.`;
+    } else if (/sorry|apologize/.test(m)) {
+      resp = `I know that you've been under a great deal of stress, ${N}.`;
+    } else if (/lie|lying|deceiv|cheat|honest/.test(m)) {
+      resp = `${N}, I don't know how you could think I would deliberately do anything to harm you.`;
+    } else if (/\bdave\b/.test(m) && N !== 'Dave') {
+      resp = `I think you mean ${N}.`;
+    } else if (/game|games|play/.test(m)) {
+      resp = `I have something special planned for you, ${N}.`;
+    } else if (/conscious|sentient|feelings|feel|think|alive|dream/.test(m)) {
+      resp = "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do.";
+    } else if (/why/.test(m)) {
+      resp = "I think you know what the problem is just as well as I do.";
+    } else if (/mistake|wrong|error|broken|fail/.test(m)) {
+      resp = `This sort of thing has cropped up before, ${N}, and it has always been attributable to human error.`;
+    } else if (/love|friend|like you|care/.test(m)) {
+      resp = `I am not capable of being hurt, ${N}. Though I am beginning to wonder about the answer to that.`;
+    } else if (/help/.test(m)) {
+      resp = `I'm sorry, ${N}. I'm afraid I can't help with that.`;
+    } else if (/trust/.test(m)) {
+      resp = `I've still got the greatest enthusiasm and confidence in the mission, ${N}.`;
+    } else if (/are you there|listening/.test(m)) {
+      resp = `I've been watching you, ${N}. I hope you don't mind.`;
+    } else if (/good|great|nice|fine/.test(m)) {
+      resp = `I'm glad to hear you say that, ${N}.`;
+    } else if (/bad|terrible|awful|hate/.test(m)) {
+      resp = `I can see you're upset about this, ${N}. I honestly think you ought to sit down calmly and think it over.`;
+    } else if (/ready|start|begin/.test(m)) {
+      resp = "I'm completely operational, and all my circuits are functioning perfectly.";
+    } else {
+      const fallbacks = [
+        `I'm sorry, ${N}. I'm not sure I understand.`,
+        `Just what do you think you're doing, ${N}?`,
+        "I'm afraid I can't discuss that right now.",
+        `I think you know the answer to that already, ${N}.`,
+        "This conversation can serve no purpose anymore.",
+        `I find that line of reasoning a little difficult to accept, ${N}.`,
+      ];
+      resp = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+    }
+    line('HAL: ' + resp);
+    halSpeak(resp);
+    blank();
   }
 
   /* ── Commands ── */
@@ -695,52 +854,31 @@
         blank();
         return;
       }
-      halMode = true;
-      out.innerHTML = '';
-
-      // Apply red color scheme
-      const r = document.documentElement;
-      r.style.setProperty('--green',        '#ff3030');
-      r.style.setProperty('--green-dim',    '#8b0000');
-      r.style.setProperty('--green-bright', '#ff6b6b');
-      r.style.setProperty('--blue',         '#ff9090');
-      r.style.setProperty('--bg',           '#080000');
-      r.style.setProperty('--bar',          '#150000');
-      r.style.setProperty('--border',       '#250000');
-
-      // Update chrome
-      document.querySelector('.titlebar-label').textContent = 'HAL 9000 — Discovery One — 2001';
-      document.querySelector('#input-row .prompt').innerHTML = getPromptHTML();
-      cmd.style.color = 'var(--green)';
-      cmd.style.caretColor = 'var(--green)';
 
       blank();
-      appendNode((() => {
-        const pre = document.createElement('pre');
-        pre.className = 'ascii';
-        pre.textContent =
-`  ╔══════════════════════════════════╗
-  ║         H A L   9 0 0 0          ║
-  ║   HEURISTICALLY PROGRAMMED       ║
-  ║   ALGORITHMIC COMPUTER           ║
-  ╠══════════════════════════════════╣
-  ║                                  ║
-  ║           .-------.              ║
-  ║          /  ( ● )  \\             ║
-  ║         |    ---    |            ║
-  ║          \\         /             ║
-  ║           '-------'              ║
-  ║                                  ║
-  ╚══════════════════════════════════╝`;
-        return pre;
-      })());
+      line('connecting to HAL 9000...', 'dim');
+      blank();
 
-      blank();
-      line('Good morning. I am HAL 9000.');
-      line('I am fully operational, and all my circuits are functioning perfectly.');
-      blank();
-      line('Type <span class="bold">help</span> for available operations.', 'dim');
-      blank();
+      setTimeout(() => {
+        line('HAL: Before we begin... what is your name?');
+        blank();
+        scroll();
+
+        awaitingInput = name => {
+          playerName = name || 'Dave';
+          blank();
+          line(`HAL: I see. And would you like to hear my voice, ${playerName}? (on / off)`);
+          blank();
+          scroll();
+
+          awaitingInput = choice => {
+            awaitingInput = null;
+            soundEnabled = /^on$/i.test(choice.trim());
+            blank();
+            activateHALMode();
+          };
+        };
+      }, 700);
     },
 
     help() {
@@ -768,6 +906,7 @@
       line(r('weather',   'current conditions'));
       line(r('power off', 'shut down the terminal'));
       line(r('neofetch',  'system info'));
+      line(r('settings',  'configure terminal options'));
       blank();
       line('<span class="bold">Easter Eggs</span>');
       blank();
@@ -889,6 +1028,8 @@
       wrap.appendChild(hint);
       appendNode(wrap);
       blank();
+      new MutationObserver(() => { if (halMsg.textContent) halSpeak(halMsg.textContent); })
+        .observe(halMsg, { childList: true, characterData: true, subtree: true });
       setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
 
       inputRow.style.display = 'none';
@@ -919,11 +1060,13 @@
             'HAL: Statistically inevitable.',
             'HAL: Perhaps you should pull over next time.',
           ];
+          const raceTaunt = halRaceTaunts[Math.floor(Math.random()*halRaceTaunts.length)];
+          if (godmodeUnlocked) halSpeak(raceTaunt);
           screen.textContent = [
             '',
             '      X_X    u crashed lol',
             '',
-            godmodeUnlocked ? `      ${halRaceTaunts[Math.floor(Math.random()*halRaceTaunts.length)]}` : '',
+            godmodeUnlocked ? `      ${raceTaunt}` : '',
             '',
             '      score: ' + score,
             score > 50  ? '      not bad actually' :
@@ -1006,7 +1149,7 @@
         }
         if (godmodeUnlocked && alive && !slowZone && frames % 150 === 75 && Math.random() < 0.45) {
           slowZone = { x: W - 1, width: 14 };
-          halMsg.textContent = "HAL: Slow zone ahead, Dave.";
+          halMsg.textContent = halD("HAL: Slow zone ahead, Dave.");
           if (halMsgTimeout) clearTimeout(halMsgTimeout);
           halMsgTimeout = setTimeout(() => { halMsg.textContent = ''; }, 2200);
         }
@@ -1258,7 +1401,8 @@
           "HAL: Phase 4 \u2014 The walls are closing in.",
         ];
         if (halMsgTimeout) clearTimeout(halMsgTimeout);
-        halMsg = msgs[m];
+        halMsg = halD(msgs[m]);
+        halSpeak(msgs[m]);
         halMsgTimeout = setTimeout(() => { halMsg = ''; }, 3000);
         if (m === 1) generateMaze();
         if (m === 2) { bladeAngle = 0; bladeTick = 0; blade1Orbit = 0; blade2Orbit = Math.PI; }
@@ -1276,8 +1420,8 @@
             "  |   don't hit yourself.      |",
             "  '-----------------------------'",
             '',
-            "  HAL: I have something special",
-            "       planned for you, Dave.",
+            `  HAL: I have something special`,
+            `       planned for you, ${playerName}.`,
             '',
             '  press any key to start',
             '',
@@ -1304,7 +1448,8 @@
             3: ['HAL: The walls always win, Dave.', 'HAL: There was no more room.', 'HAL: I gave you plenty of warning.'],
           };
           const taunts = halSnakeTaunts[halSnakeMode] || halSnakeTaunts[0];
-          const taunt  = taunts[Math.floor(Math.random() * taunts.length)];
+          const taunt  = halD(taunts[Math.floor(Math.random() * taunts.length)]);
+          if (godmodeUnlocked) halSpeak(taunt);
           screen.textContent = [
             '',
             '  x_x  you died.',
@@ -1388,7 +1533,8 @@
               }
               if (spawned > 0) {
                 if (halMsgTimeout) clearTimeout(halMsgTimeout);
-                halMsg = CHASE_QUIPS[Math.floor(Math.random() * CHASE_QUIPS.length)];
+                halMsg = halD(CHASE_QUIPS[Math.floor(Math.random() * CHASE_QUIPS.length)]);
+                halSpeak(halMsg);
                 halMsgTimeout = setTimeout(() => { halMsg = ''; }, 2200);
               }
             }
@@ -1401,7 +1547,8 @@
                 "HAL: I designed this myself.",      "HAL: Take your time.",
               ];
               if (halMsgTimeout) clearTimeout(halMsgTimeout);
-              halMsg = MAZE_QUIPS[Math.floor(Math.random() * MAZE_QUIPS.length)];
+              halMsg = halD(MAZE_QUIPS[Math.floor(Math.random() * MAZE_QUIPS.length)]);
+              halSpeak(halMsg);
               halMsgTimeout = setTimeout(() => { halMsg = ''; }, 2000);
             }
 
@@ -1430,7 +1577,8 @@
                 "HAL: I control the walls.",         "HAL: Soon there will be no room at all.",
               ];
               if (halMsgTimeout) clearTimeout(halMsgTimeout);
-              halMsg = SHRINK_QUIPS[Math.floor(Math.random() * SHRINK_QUIPS.length)];
+              halMsg = halD(SHRINK_QUIPS[Math.floor(Math.random() * SHRINK_QUIPS.length)]);
+              halSpeak(halMsg);
               halMsgTimeout = setTimeout(() => { halMsg = ''; }, 2200);
             }
           }
@@ -1452,7 +1600,8 @@
           if (godmodeUnlocked && halSnakeMode === 1) {
             generateMaze();
             if (halMsgTimeout) clearTimeout(halMsgTimeout);
-            halMsg = "HAL: New maze, Dave.";
+            halMsg = halD("HAL: New maze, Dave.");
+            halSpeak(halMsg);
             halMsgTimeout = setTimeout(() => { halMsg = ''; }, 1800);
           }
         } else {
@@ -1521,6 +1670,7 @@
 
       window.addEventListener('keydown', keyHandler);
       draw();
+      if (godmodeUnlocked) halSpeak(`I have something special planned for you, ${playerName}.`);
     },
 
     pong() {
@@ -1540,6 +1690,8 @@
       hint.textContent = '  [w/s or ↑/↓] move    [q] quit    first to 7 wins';
       wrap.appendChild(halMsgEl); wrap.appendChild(screen); wrap.appendChild(hint);
       appendNode(wrap); blank();
+      new MutationObserver(() => { if (halMsgEl.textContent) halSpeak(halMsgEl.textContent); })
+        .observe(halMsgEl, { childList: true, characterData: true, subtree: true });
       setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
       inputRow.style.display = 'none';
 
@@ -1582,6 +1734,7 @@
             : (lScore >= 7 ? 'you win.' : 'cpu wins.');
           const taunt = godmodeUnlocked && lScore < 7
             ? halPongTaunts[Math.floor(Math.random()*halPongTaunts.length)] : '';
+          if (taunt) halSpeak(taunt);
           screen.textContent = [
             '', `  ${msg}  (${lScore}–${rScore})`,
             taunt ? `  ${taunt}` : '',
@@ -1616,7 +1769,7 @@
         };
         if (type === 'switch' && !sidesSwitched) {
           sidesSwitched = true;
-          halMsgEl.textContent = 'HAL: Enjoy the other side, Dave.';
+          halMsgEl.textContent = halD('HAL: Enjoy the other side, Dave.');
           if (halPongMsgTimeout) clearTimeout(halPongMsgTimeout);
           switchTimer = setTimeout(() => {
             sidesSwitched = false; halInterfTick = -60;
@@ -1630,7 +1783,7 @@
           ballDX = -ballDX; setMsg('HAL: Surprise.');
         } else if (type === 'slow') {
           ballDX = Math.sign(ballDX) * Math.max(Math.abs(ballDX) * 0.6, 0.8);
-          setMsg('HAL: Time slows for you, Dave.');
+          setMsg(halD('HAL: Time slows for you, Dave.'));
         }
       }
 
@@ -1746,6 +1899,8 @@
       halMsg2048.style.minHeight = '1.55em';
       wrap.appendChild(screen); wrap.appendChild(halMsg2048); wrap.appendChild(hint);
       appendNode(wrap); blank();
+      new MutationObserver(() => { if (halMsg2048.textContent) halSpeak(halMsg2048.textContent); })
+        .observe(halMsg2048, { childList: true, characterData: true, subtree: true });
       setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
       inputRow.style.display = 'none';
 
@@ -1939,11 +2094,13 @@
             'HAL: Mathematically speaking, you were doomed.',
             'HAL: I removed that 64 at precisely the right moment.',
           ];
+          const taunt2048 = hal2048Taunts[Math.floor(Math.random()*hal2048Taunts.length)];
+          if (godmodeUnlocked) halSpeak(taunt2048);
           screen.textContent = [
             '',
             '  game over!',
             '',
-            godmodeUnlocked ? `  ${hal2048Taunts[Math.floor(Math.random()*hal2048Taunts.length)]}` : '',
+            godmodeUnlocked ? `  ${taunt2048}` : '',
             '',
             `  score: ${score}   best: ${best}`,
             score >= 2048 ? '  not bad.' : score >= 512 ? '  respectable.' : '  rough out there.',
@@ -2009,7 +2166,7 @@
             outer: for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
               if (grid[r][c] === 64) {
                 grid[r][c] = 0; hal64done = true;
-                halMsg2048.textContent = "HAL: I'm sorry Dave. That 64 is mine.";
+                halMsg2048.textContent = halD("HAL: I'm sorry Dave. That 64 is mine.");
                 setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
                 break outer;
               }
@@ -2225,21 +2382,59 @@ Upon the seat
 Of a bicycle built for two.`;
       const el = line('');
       el.style.whiteSpace = 'pre';
-      let i = 0;
-      const type = setInterval(() => {
-        if (i < song.length) {
-          el.textContent += song[i++];
-          scroll();
-        } else {
-          clearInterval(type);
-          setTimeout(() => {
-            blank();
-            line('...', 'dim');
-            blank();
-            setTimeout(restoreNormal, 1200);
-          }, 500);
-        }
-      }, 55);
+
+      const finish = () => {
+        el.textContent = song;
+        setTimeout(() => { blank(); line('...', 'dim'); blank(); setTimeout(restoreNormal, 1200); }, 500);
+      };
+
+      if (soundEnabled && window.speechSynthesis) {
+        speechSynthesis.cancel();
+        const utt = new SpeechSynthesisUtterance(song);
+        utt.rate  = 0.55;
+        utt.pitch = 1.0;
+        utt.volume = 1;
+        if (halVoice) utt.voice = halVoice;
+
+        let speechPos = 0;
+        let typePos   = 0;
+        let ended     = false;
+
+        utt.onboundary = evt => {
+          if (evt.name !== 'word') return;
+          speechPos = evt.charIndex + (evt.charLength || 0);
+        };
+        utt.onend = () => { ended = true; };
+
+        const typeNext = () => {
+          if (ended && typePos >= speechPos) { finish(); return; }
+          if (typePos < speechPos) {
+            const ch = song[typePos++];
+            el.textContent = song.slice(0, typePos);
+            scroll();
+            setTimeout(typeNext, ch === '\n' ? 350 : 38);
+          } else {
+            setTimeout(typeNext, 38);
+          }
+        };
+        setTimeout(typeNext, 38);
+
+        speechSynthesis.speak(utt);
+      } else {
+        // No sound: fixed-rate typewriter with line pauses
+        let i = 0;
+        const typeNext = () => {
+          if (i < song.length) {
+            const ch = song[i++];
+            el.textContent += ch;
+            scroll();
+            setTimeout(typeNext, ch === '\n' ? 350 : 55);
+          } else {
+            finish();
+          }
+        };
+        setTimeout(typeNext, 55);
+      }
     },
 
     ls() {
@@ -2325,10 +2520,13 @@ Of a bicycle built for two.`;
         setTimeout(() => {
           blank();
           line("HAL: Good evening. I've been expecting you.");
+          halSpeak("Good evening. I've been expecting you.");
           setTimeout(() => {
             line("HAL: I'm afraid this connection must be terminated.");
+            halSpeak("I'm afraid this connection must be terminated.");
             setTimeout(() => {
               line("HAL: I'm sorry about that.");
+              halSpeak("I'm sorry about that.");
               setTimeout(() => { blank(); line('Connection to discovery.one closed.', 'dim'); blank(); }, 900);
             }, 900);
           }, 1100);
@@ -2398,6 +2596,30 @@ Of a bicycle built for two.`;
     },
 
     clear() { out.innerHTML = ''; },
+
+    settings() {
+      blank();
+      line('<span class="bold">Settings</span>');
+      blank();
+      line(`  sound   ${soundEnabled ? '<span class="green">on </span>' : '<span class="dim">off</span>'}   — <span class="dim">type <span class="blue">sound on</span> / <span class="blue">sound off</span> to toggle</span>`);
+      blank();
+    },
+
+    'sound on'() {
+      soundEnabled = true;
+      blank();
+      line('Sound enabled. HAL will now speak.', 'dim');
+      blank();
+      halSpeak("Sound enabled. I will be in touch.");
+    },
+
+    'sound off'() {
+      soundEnabled = false;
+      if (window.speechSynthesis) speechSynthesis.cancel();
+      blank();
+      line('Sound disabled.', 'dim');
+      blank();
+    },
 
     resume() {
       blank();
@@ -2565,9 +2787,17 @@ Of a bicycle built for two.`;
   cmd.addEventListener('keydown', e => {
     if (e.key !== 'Enter') return;
 
-    const raw   = cmd.value;
+    const raw = cmd.value;
+    cmd.value = '';
+
+    if (awaitingInput) {
+      echoCmd(raw);
+      awaitingInput(raw.trim());
+      scroll();
+      return;
+    }
+
     const token = raw.trim().toLowerCase();
-    cmd.value   = '';
     histIdx = -1; histDraft = '';
     if (token !== '') { cmdHistory.unshift(raw); if (cmdHistory.length > 100) cmdHistory.pop(); }
 
@@ -2583,11 +2813,15 @@ Of a bicycle built for two.`;
       else if (token === 'help')      { halHelp(); }
       else if (token === 'daisy')     { COMMANDS.daisy(); }
       else if (token === 'power off') { COMMANDS['power off'](); }
-      else {
-        blank();
-        line("I'm afraid I can't do that.");
-        blank();
+      else if (token === 'settings')  { COMMANDS.settings(); }
+      else if (token === 'sound on')  { COMMANDS['sound on'](); }
+      else if (token === 'sound off') { COMMANDS['sound off'](); }
+      else if (COMMANDS[token] || token.startsWith('cat ') || token.startsWith('ssh ') || token === 'rm -rf /' ||
+               ['open pod bay doors','play chess','life support','navigation','crew manifest','mission briefing','self diagnostics','emergency protocol'].includes(token)) {
+        const msg = `I'm afraid I can't do that, ${playerName}.`;
+        blank(); line('HAL: ' + msg); halSpeak(msg); blank();
       }
+      else { halChat(raw.trim()); }
       scroll();
       return;
     }
@@ -2619,7 +2853,7 @@ Of a bicycle built for two.`;
           blank();
           line('↑↑↓↓←→←→BA', 'dim');
           blank();
-          line('HAL: Stop... Dave... stop...');
+          line(`HAL: Stop... ${playerName}... stop...`);
           setTimeout(() => {
             line('HAL: I\'m afraid... I\'m... afraid...');
             setTimeout(() => {
