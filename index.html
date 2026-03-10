@@ -1843,8 +1843,8 @@
 
       function init() {
         ballX = W/2; ballY = H/2;
-        ballDX = Math.random() > 0.5 ? 1.45 : -1.45;
-        ballDY = (Math.random() - 0.5) * 1.45;
+        ballDX = Math.random() > 0.5 ? 1.15 : -1.15;
+        ballDY = (Math.random() - 0.5) * 1.15;
         leftY  = Math.floor(H/2 - PAD_H/2);
         rightY = Math.floor(H/2 - PAD_H/2);
         rightY2 = Math.min(H - PAD_H, rightY + PAD_H + 2);
@@ -1944,15 +1944,15 @@
           if (keys['ArrowUp']   || keys['w']) leftY = Math.max(0, leftY - 1);
           if (keys['ArrowDown'] || keys['s']) leftY = Math.min(H - PAD_H, leftY + 1);
         }
-        // AI paddle(s)
+        // AI paddle(s) — tracks 75% of frames so player can win
         if (sidesSwitched) {
-          if (ballDX < 0) {
+          if (ballDX < 0 && Math.random() < 0.75) {
             const mid = leftY + PAD_H / 2;
             if (ballY > mid + 0.5) leftY = Math.min(H - PAD_H, leftY + 1);
             else if (ballY < mid - 0.5) leftY = Math.max(0, leftY - 1);
           }
         } else {
-          if (ballDX > 0) {
+          if (ballDX > 0 && Math.random() < 0.75) {
             const mid = rightY + PAD_H / 2;
             if (ballY > mid + 0.5) rightY = Math.min(H - PAD_H, rightY + 1);
             else if (ballY < mid - 0.5) rightY = Math.max(0, rightY - 1);
@@ -1994,8 +1994,8 @@
           }
         }
         ballDY = Math.max(-1.5, Math.min(1.5, ballDY));
-        if (ballX < 0)  { rScore++; if (rScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX= 1.45; ballDY=(Math.random()-0.5)*1.45; }
-        if (ballX >= W) { lScore++; if (lScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX=-1.45; ballDY=(Math.random()-0.5)*1.45; }
+        if (ballX < 0)  { rScore++; if (rScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX= 1.15; ballDY=(Math.random()-0.5)*1.15; }
+        if (ballX >= W) { lScore++; if (lScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX=-1.15; ballDY=(Math.random()-0.5)*1.15; }
         draw();
       }
 
