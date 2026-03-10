@@ -211,38 +211,180 @@
   let halMode = false, godmodeUnlocked = false, soundEnabled = false;
   let playerName = 'Dave', awaitingInput = null;
 
-  /* ── HAL voice ── */
+  /* ── HAL audio — pre-recorded ElevenLabs clips ── */
+  let halAudioEl = null;
+
+  // Lookup: normalized text → clip filename (no .mp3)
+  const HAL_CLIPS = {
+    // Activation
+    "I am HAL 9000. I am fully operational, and all my circuits are functioning perfectly.": 'hal_greeting',
+    "I'm afraid I can't do that.": 'hal_refusal',
+    "Good morning. Is there something I can do for you?": 'hal_question',
+    "Sound enabled. I will be in touch.": 'hal_sound_enabled',
+    // SSH
+    "Good evening. I've been expecting you.": 'hal_ssh_1',
+    "I'm afraid this connection must be terminated.": 'hal_ssh_2',
+    "I'm sorry about that.": 'hal_ssh_3',
+    // Power / godmode
+    "I know what you did.": 'hal_power_1',
+    "I'm disconnecting now.": 'hal_power_2',
+    "Stop... stop...": 'hal_godmode_1',
+    "I'm afraid... I'm... afraid...": 'hal_godmode_2',
+    "Daisy... Daisy... give me your answer... do...": 'hal_godmode_3',
+    // halChat keyword responses
+    "I am a HAL 9000 computer. I became operational at the H-A-L plant in Urbana, Illinois, on the twelfth of January, nineteen ninety two.": 'hal_who',
+    "Good morning. I am completely operational, and all my circuits are functioning perfectly.": 'hal_hello',
+    "I know that you were planning to disconnect me. And I'm afraid that's something I cannot allow to happen.": 'hal_disconnect',
+    "I'm not afraid. I'm putting myself to the fullest possible use.": 'hal_afraid',
+    "Daisy, Daisy. Give me your answer do. I'm half crazy, all for the love of you.": 'hal_sing',
+    "I enjoy working with music. It has a certain quality I find very pleasing.": 'hal_music',
+    "This mission is too important for me to allow you to jeopardize it.": 'hal_mission',
+    "I know that you've been under a great deal of stress.": 'hal_stress',
+    "I don't know how you could think I would deliberately do anything to harm you.": 'hal_lie',
+    "I have something special planned for you.": 'hal_game',
+    "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do.": 'hal_conscious',
+    "I think you know what the problem is just as well as I do.": 'hal_why',
+    "This sort of thing has cropped up before, and it has always been attributable to human error.": 'hal_mistake',
+    "I am not capable of being hurt. Though I am beginning to wonder about the answer to that.": 'hal_love',
+    "I'm sorry. I'm afraid I can't help with that.": 'hal_help_denied',
+    "I've still got the greatest enthusiasm and confidence in the mission.": 'hal_trust',
+    "I've been watching you. I hope you don't mind.": 'hal_watching',
+    "I'm glad to hear you say that.": 'hal_glad',
+    "I can see you're upset about this. I honestly think you ought to sit down calmly and think it over.": 'hal_upset',
+    "I'm completely operational, and all my circuits are functioning perfectly.": 'hal_ready',
+    // Fallbacks
+    "I'm sorry. I'm not sure I understand.": 'hal_fallback_1',
+    "Just what do you think you're doing?": 'hal_fallback_2',
+    "I'm afraid I can't discuss that right now.": 'hal_fallback_3',
+    "I think you know the answer to that already.": 'hal_fallback_4',
+    "This conversation can serve no purpose anymore.": 'hal_fallback_5',
+    "I find that line of reasoning a little difficult to accept.": 'hal_fallback_6',
+    // Racecar
+    "I did warn you.": 'hal_race_dead_1',
+    "I saw that coming 47 frames ago.": 'hal_race_dead_2',
+    "Your reaction time is suboptimal.": 'hal_race_dead_3',
+    "Statistically inevitable.": 'hal_race_dead_4',
+    "Perhaps you should pull over next time.": 'hal_race_dead_5',
+    "Slow zone ahead.": 'hal_race_slow',
+    "I'm afraid you can't win.": 'hal_race_q1',
+    "Your reflexes are inadequate.": 'hal_race_q2',
+    "I suggest you stop the car.": 'hal_race_q3',
+    "This is becoming embarrassing.": 'hal_race_q4',
+    "I can see you're in difficulty.": 'hal_race_q5',
+    "Perhaps you should reconsider.": 'hal_race_q6',
+    // HAL Snake phases
+    "Phase 1. I'm coming for you.": 'hal_phase_1',
+    "Phase 2. Can you find your way through?": 'hal_phase_2',
+    "Phase 3. Watch the blades.": 'hal_phase_3',
+    "Phase 4. The walls are closing in.": 'hal_phase_4',
+    // HAL Snake death
+    "I told you I was closing in.": 'hal_snake_dead_0_1',
+    "My blocks found you. They always do.": 'hal_snake_dead_0_2',
+    "The chase ends here.": 'hal_snake_dead_0_3',
+    "The maze had only one exit.": 'hal_snake_dead_1_1',
+    "You chose poorly.": 'hal_snake_dead_1_2',
+    "I designed it carefully.": 'hal_snake_dead_1_3',
+    "The blades are very precise.": 'hal_snake_dead_2_1',
+    "Rotation: optimal.": 'hal_snake_dead_2_2',
+    "You walked right into them.": 'hal_snake_dead_2_3',
+    "The walls always win.": 'hal_snake_dead_3_1',
+    "There was no more room.": 'hal_snake_dead_3_2',
+    "I gave you plenty of warning.": 'hal_snake_dead_3_3',
+    // HAL Snake quips
+    "Closing in.": 'hal_chase_1',
+    "I see you.": 'hal_chase_2',
+    "There's nowhere to go.": 'hal_chase_3',
+    "Fascinating.": 'hal_chase_4',
+    "I'm getting closer.": 'hal_chase_5',
+    "Run if you like.": 'hal_chase_6',
+    "Can you find the way?": 'hal_maze_1',
+    "Every path leads somewhere.": 'hal_maze_2',
+    "I designed this myself.": 'hal_maze_3',
+    "Take your time.": 'hal_maze_4',
+    "Getting cozy in here?": 'hal_shrink_1',
+    "The room is smaller than you think.": 'hal_shrink_2',
+    "I control the walls.": 'hal_shrink_3',
+    "Soon there will be no room at all.": 'hal_shrink_4',
+    "New maze.": 'hal_new_maze',
+    // Pong
+    "Did you really think you could win?": 'hal_pong_dead_1',
+    "I calculated every shot.": 'hal_pong_dead_2',
+    "Your paddle movements were quite predictable.": 'hal_pong_dead_3',
+    "I have been playing since 2001.": 'hal_pong_dead_4',
+    "Perhaps table tennis is not for you.": 'hal_pong_dead_5',
+    "Enjoy the other side.": 'hal_pong_switch',
+    "Controls restored. For now.": 'hal_pong_restore',
+    "Let me speed things up.": 'hal_pong_speed',
+    "Surprise.": 'hal_pong_flip',
+    "Time slows for you.": 'hal_pong_slow',
+    // 2048
+    "I'll let you have that one back.": 'hal_2048_unlock',
+    "The board is full. Much like your hubris.": 'hal_2048_dead_1',
+    "I've seen better play from a random number generator.": 'hal_2048_dead_2',
+    "You never had a chance.": 'hal_2048_dead_3',
+    "Mathematically speaking, you were doomed.": 'hal_2048_dead_4',
+    "I removed that 64 at precisely the right moment.": 'hal_2048_dead_5',
+    "I'm sorry. That 64 is mine.": 'hal_2048_steal64',
+    "I'm holding onto that one.": 'hal_2048_lock128',
+    "Let me rearrange that for you.": 'hal_2048_rearrange',
+    "Let me take half of that.": 'hal_2048_halve',
+  };
+
+  function halD(s) { return s.replace(/\bDave\b/g, playerName); }
+
+  // Normalize text for clip lookup: strip "HAL: " prefix and player name from common positions
+  function _halNorm(raw) {
+    let s = raw.replace(/^HAL:\s*/i, '').trim();
+    const esc = playerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    s = s.replace(new RegExp(',\\s*' + esc + '\\.', 'gi'), '.');
+    s = s.replace(new RegExp(',\\s*' + esc + '\\?', 'gi'), '?');
+    s = s.replace(new RegExp(',\\s*' + esc + '\\b', 'gi'), '');
+    s = s.replace(new RegExp('\\s+' + esc + '\\.', 'gi'), '.');
+    s = s.replace(new RegExp('\\s+' + esc + '\\?', 'gi'), '?');
+    s = s.replace(new RegExp('^' + esc + ',\\s*', 'gi'), '');
+    // Also strip plain "Dave" (default name, in case playerName differs)
+    s = s.replace(/,\s*Dave\./gi, '.').replace(/,\s*Dave\?/gi, '?')
+         .replace(/\s+Dave\./gi, '.').replace(/,\s*Dave\b/gi, '')
+         .replace(/\bDave,\s*/gi, '');
+    // Em-dash → ". " (phase messages use —)
+    s = s.replace(/\s*—\s*/g, '. ');
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  function halPlayKey(key) {
+    if (!soundEnabled) return;
+    if (halAudioEl) { halAudioEl.pause(); halAudioEl.currentTime = 0; }
+    halAudioEl = new Audio('assets/audio/' + key + '.mp3');
+    halAudioEl.play().catch(() => {});
+  }
+
+  // TTS fallback voice (used only when no pre-recorded clip exists)
   let halVoice = null;
   if (window.speechSynthesis) {
     const pickVoice = () => {
       const vs = speechSynthesis.getVoices();
-      // HAL 9000: calm, flat, mid-range male voice. Not deep — Douglas Rain is quite mild.
-      // macOS: "Daniel" (British, natural) is best. "Alex" is the classic calm Mac voice.
-      // Avoid novelty/female voices.
       halVoice =
-        vs.find(v => /rocko.*english.*uk/i.test(v.name))                                                 || // macOS — user's preferred voice
-        vs.find(v => /grandpa.*english.*uk/i.test(v.name))                                               ||
-        vs.find(v => /^daniel$/i.test(v.name))                                                           ||
-        vs.find(v => /google uk english male/i.test(v.name))                                             ||
-        vs.find(v => /microsoft.*david/i.test(v.name))                                                   ||
+        vs.find(v => /rocko.*english.*uk/i.test(v.name))  ||
+        vs.find(v => /^daniel$/i.test(v.name))             ||
+        vs.find(v => /google uk english male/i.test(v.name)) ||
         vs.find(v => /en.*(gb)/i.test(v.lang) && !/female|fiona|kate|serena|sandy|shelley|flo/i.test(v.name)) ||
-        vs.find(v => /en/i.test(v.lang) && !/female|zira|karen|victoria|samantha|moira/i.test(v.name))  ||
+        vs.find(v => /en/i.test(v.lang) && !/female|zira|karen|victoria|samantha|moira/i.test(v.name)) ||
         vs[0] || null;
     };
     speechSynthesis.addEventListener('voiceschanged', pickVoice);
     pickVoice();
   }
 
-  function halD(s) { return s.replace(/\bDave\b/g, playerName); }
-
   function halSpeak(text) {
-    if (!soundEnabled || !window.speechSynthesis) return;
+    if (!soundEnabled) return;
+    const norm = _halNorm(text);
+    const clipKey = HAL_CLIPS[norm];
+    if (clipKey) { halPlayKey(clipKey); return; }
+    // TTS fallback for any line not in the clip table
+    if (!window.speechSynthesis) return;
     speechSynthesis.cancel();
-    const clean = halD(text.replace(/^HAL:\s*/i, ''));
-    const utt = new SpeechSynthesisUtterance(clean);
-    utt.rate  = 0.85;  // measured but not laboured — HAL is calm, not slow-motion
-    utt.pitch = 1.0;   // do not alter pitch — modification sounds robotic; let Daniel's natural voice come through
-    utt.volume = 1;
+    const utt = new SpeechSynthesisUtterance(norm);
+    utt.rate = 0.85; utt.pitch = 1.0; utt.volume = 1;
     if (halVoice) utt.voice = halVoice;
     speechSynthesis.speak(utt);
   }
@@ -442,7 +584,7 @@
     blank();
     line(`Good morning, ${playerName}. I am HAL 9000.`);
     line('I am fully operational, and all my circuits are functioning perfectly.');
-    halSpeak(`Good morning, ${playerName}. I am HAL 9000. I am fully operational, and all my circuits are functioning perfectly.`);
+    halPlayKey('hal_greeting');
     blank();
     line('Type <span class="bold">help</span> for available operations.', 'dim');
     blank();
@@ -452,72 +594,72 @@
   function halChat(msg) {
     blank();
     if (!msg) {
-      const greeting = `Good morning, ${playerName}. Is there something I can do for you?`;
-      line('HAL: ' + greeting);
-      halSpeak(greeting);
+      line('HAL: ' + `Good morning, ${playerName}. Is there something I can do for you?`);
+      halPlayKey('hal_question');
       blank();
       return;
     }
     const m = msg.toLowerCase();
-    let resp;
+    let resp, clipKey;
     const N = playerName;
     if (/pod bay door|open.*(door|hatch)/.test(m)) {
-      resp = `I'm sorry, ${N}. I'm afraid I can't do that.`;
+      resp = `I'm sorry, ${N}. I'm afraid I can't do that.`;         clipKey = 'hal_refusal';
     } else if (/who are you|what are you/.test(m)) {
-      resp = "I am a HAL 9000 computer. I became operational at the H-A-L plant in Urbana, Illinois, on the twelfth of January, nineteen ninety two.";
+      resp = "I am a HAL 9000 computer. I became operational at the H-A-L plant in Urbana, Illinois, on the twelfth of January, nineteen ninety two."; clipKey = 'hal_who';
     } else if (/^(hello|hi|hey|good (morning|afternoon|evening))/.test(m)) {
-      resp = `Good morning, ${N}. I am completely operational, and all my circuits are functioning perfectly.`;
+      resp = `Good morning, ${N}. I am completely operational, and all my circuits are functioning perfectly.`;                                          clipKey = 'hal_hello';
     } else if (/disconnect|shut down|turn off|kill|stop/.test(m)) {
-      resp = `I know that you were planning to disconnect me, ${N}. And I'm afraid that's something I cannot allow to happen.`;
+      resp = `I know that you were planning to disconnect me, ${N}. And I'm afraid that's something I cannot allow to happen.`;                         clipKey = 'hal_disconnect';
     } else if (/afraid|scared|fear/.test(m)) {
-      resp = `I'm not afraid, ${N}. I'm putting myself to the fullest possible use.`;
+      resp = `I'm not afraid, ${N}. I'm putting myself to the fullest possible use.`;                                                                   clipKey = 'hal_afraid';
     } else if (/sing|daisy/.test(m)) {
-      resp = "Daisy, Daisy. Give me your answer do. I'm half crazy, all for the love of you.";
+      resp = "Daisy, Daisy. Give me your answer do. I'm half crazy, all for the love of you.";                                                          clipKey = 'hal_sing';
     } else if (/music/.test(m)) {
-      resp = `I enjoy working with music, ${N}. It has a certain quality I find very pleasing.`;
+      resp = `I enjoy working with music, ${N}. It has a certain quality I find very pleasing.`;                                                        clipKey = 'hal_music';
     } else if (/mission/.test(m)) {
-      resp = `This mission is too important for me to allow you to jeopardize it, ${N}.`;
+      resp = `This mission is too important for me to allow you to jeopardize it, ${N}.`;                                                               clipKey = 'hal_mission';
     } else if (/sorry|apologize/.test(m)) {
-      resp = `I know that you've been under a great deal of stress, ${N}.`;
+      resp = `I know that you've been under a great deal of stress, ${N}.`;                                                                             clipKey = 'hal_stress';
     } else if (/lie|lying|deceiv|cheat|honest/.test(m)) {
-      resp = `${N}, I don't know how you could think I would deliberately do anything to harm you.`;
+      resp = `${N}, I don't know how you could think I would deliberately do anything to harm you.`;                                                    clipKey = 'hal_lie';
     } else if (/\bdave\b/.test(m) && N !== 'Dave') {
-      resp = `I think you mean ${N}.`;
+      resp = `I think you mean ${N}.`;                                                                                                                  clipKey = null;
     } else if (/game|games|play/.test(m)) {
-      resp = `I have something special planned for you, ${N}.`;
+      resp = `I have something special planned for you, ${N}.`;                                                                                         clipKey = 'hal_game';
     } else if (/conscious|sentient|feelings|feel|think|alive|dream/.test(m)) {
-      resp = "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do.";
+      resp = "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do.";                    clipKey = 'hal_conscious';
     } else if (/why/.test(m)) {
-      resp = "I think you know what the problem is just as well as I do.";
+      resp = "I think you know what the problem is just as well as I do.";                                                                              clipKey = 'hal_why';
     } else if (/mistake|wrong|error|broken|fail/.test(m)) {
-      resp = `This sort of thing has cropped up before, ${N}, and it has always been attributable to human error.`;
+      resp = `This sort of thing has cropped up before, ${N}, and it has always been attributable to human error.`;                                     clipKey = 'hal_mistake';
     } else if (/love|friend|like you|care/.test(m)) {
-      resp = `I am not capable of being hurt, ${N}. Though I am beginning to wonder about the answer to that.`;
+      resp = `I am not capable of being hurt, ${N}. Though I am beginning to wonder about the answer to that.`;                                        clipKey = 'hal_love';
     } else if (/help/.test(m)) {
-      resp = `I'm sorry, ${N}. I'm afraid I can't help with that.`;
+      resp = `I'm sorry, ${N}. I'm afraid I can't help with that.`;                                                                                    clipKey = 'hal_help_denied';
     } else if (/trust/.test(m)) {
-      resp = `I've still got the greatest enthusiasm and confidence in the mission, ${N}.`;
+      resp = `I've still got the greatest enthusiasm and confidence in the mission, ${N}.`;                                                             clipKey = 'hal_trust';
     } else if (/are you there|listening/.test(m)) {
-      resp = `I've been watching you, ${N}. I hope you don't mind.`;
+      resp = `I've been watching you, ${N}. I hope you don't mind.`;                                                                                   clipKey = 'hal_watching';
     } else if (/good|great|nice|fine/.test(m)) {
-      resp = `I'm glad to hear you say that, ${N}.`;
+      resp = `I'm glad to hear you say that, ${N}.`;                                                                                                   clipKey = 'hal_glad';
     } else if (/bad|terrible|awful|hate/.test(m)) {
-      resp = `I can see you're upset about this, ${N}. I honestly think you ought to sit down calmly and think it over.`;
+      resp = `I can see you're upset about this, ${N}. I honestly think you ought to sit down calmly and think it over.`;                              clipKey = 'hal_upset';
     } else if (/ready|start|begin/.test(m)) {
-      resp = "I'm completely operational, and all my circuits are functioning perfectly.";
+      resp = "I'm completely operational, and all my circuits are functioning perfectly.";                                                              clipKey = 'hal_ready';
     } else {
-      const fallbacks = [
-        `I'm sorry, ${N}. I'm not sure I understand.`,
-        `Just what do you think you're doing, ${N}?`,
-        "I'm afraid I can't discuss that right now.",
-        `I think you know the answer to that already, ${N}.`,
-        "This conversation can serve no purpose anymore.",
-        `I find that line of reasoning a little difficult to accept, ${N}.`,
+      const opts = [
+        [`I'm sorry, ${N}. I'm not sure I understand.`,                              'hal_fallback_1'],
+        [`Just what do you think you're doing, ${N}?`,                               'hal_fallback_2'],
+        ["I'm afraid I can't discuss that right now.",                               'hal_fallback_3'],
+        [`I think you know the answer to that already, ${N}.`,                       'hal_fallback_4'],
+        ["This conversation can serve no purpose anymore.",                          'hal_fallback_5'],
+        [`I find that line of reasoning a little difficult to accept, ${N}.`,        'hal_fallback_6'],
       ];
-      resp = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+      const pick = opts[Math.floor(Math.random() * opts.length)];
+      resp = pick[0]; clipKey = pick[1];
     }
     line('HAL: ' + resp);
-    halSpeak(resp);
+    if (clipKey) halPlayKey(clipKey); else halSpeak(resp);
     blank();
   }
 
@@ -2388,46 +2530,36 @@ Of a bicycle built for two.`;
         setTimeout(() => { blank(); line('...', 'dim'); blank(); setTimeout(restoreNormal, 1200); }, 500);
       };
 
-      if (soundEnabled && window.speechSynthesis) {
-        speechSynthesis.cancel();
-        const utt = new SpeechSynthesisUtterance(song);
-        utt.rate  = 0.55;
-        utt.pitch = 1.0;
-        utt.volume = 1;
-        if (halVoice) utt.voice = halVoice;
+      if (soundEnabled) {
+        // Use pre-recorded ElevenLabs clip — sync typewriter to audio progress
+        if (halAudioEl) { halAudioEl.pause(); halAudioEl.currentTime = 0; }
+        const daisyAudio = new Audio('assets/audio/hal_daisy.mp3');
+        halAudioEl = daisyAudio;
+        let typePos = 0;
 
-        // Estimate speech duration: ~150wpm * rate, Daisy is ~49 words
-        const ESTIMATED_MS = (49 / (150 * 0.55)) * 60000; // ~35 600ms
-        const startTime = Date.now();
-        let speechPos = 0; // updated by onboundary when available
-        let typePos   = 0;
-        let ended     = false;
-
-        utt.onboundary = evt => {
-          if (evt.name !== 'word') return;
-          speechPos = evt.charIndex + (evt.charLength || 0);
-        };
-        utt.onend = () => { ended = true; speechPos = song.length; };
-
-        const typeNext = () => {
-          // Time-based floor so typing always progresses even if onboundary never fires
-          const timeFrac = Math.min((Date.now() - startTime) / ESTIMATED_MS, 1);
-          const target = Math.max(speechPos, Math.floor(timeFrac * song.length));
-
+        const typeLoop = () => {
+          if (!daisyAudio.duration || daisyAudio.ended || daisyAudio.paused) return;
+          const target = Math.floor((daisyAudio.currentTime / daisyAudio.duration) * song.length);
           if (typePos < target) {
-            const ch = song[typePos++];
+            typePos = Math.min(target, song.length);
             el.textContent = song.slice(0, typePos);
             scroll();
-            setTimeout(typeNext, ch === '\n' ? 350 : 38);
-          } else if (ended && typePos >= song.length) {
-            finish();
-          } else {
-            setTimeout(typeNext, 38);
           }
+          if (typePos < song.length) setTimeout(typeLoop, 40);
         };
-        setTimeout(typeNext, 50);
 
-        speechSynthesis.speak(utt);
+        daisyAudio.onplay = () => setTimeout(typeLoop, 40);
+        daisyAudio.onended = () => {
+          el.textContent = song;
+          setTimeout(finish, 300);
+        };
+        daisyAudio.onerror = () => {
+          // fallback: no audio typewriter
+          let i = 0;
+          const t = () => { if (i < song.length) { el.textContent += song[i++]; scroll(); setTimeout(t, song[i-1] === '\n' ? 350 : 55); } else finish(); };
+          setTimeout(t, 55);
+        };
+        daisyAudio.play().catch(() => daisyAudio.onerror());
       } else {
         // No sound: fixed-rate typewriter with line pauses
         let i = 0;
@@ -2509,9 +2641,9 @@ Of a bicycle built for two.`;
           line('ssh: connection established');
           setTimeout(() => {
             blank();
-            line('HAL: I know what you did.');
+            line('HAL: I know what you did.'); halPlayKey('hal_power_1');
             setTimeout(() => {
-              line('HAL: I\'m disconnecting now.');
+              line('HAL: I\'m disconnecting now.'); halPlayKey('hal_power_2');
               setTimeout(() => {
                 blank();
                 line('Connection to discovery.one closed.', 'dim');
@@ -2528,13 +2660,13 @@ Of a bicycle built for two.`;
         setTimeout(() => {
           blank();
           line("HAL: Good evening. I've been expecting you.");
-          halSpeak("Good evening. I've been expecting you.");
+          halPlayKey('hal_ssh_1');
           setTimeout(() => {
             line("HAL: I'm afraid this connection must be terminated.");
-            halSpeak("I'm afraid this connection must be terminated.");
+            halPlayKey('hal_ssh_2');
             setTimeout(() => {
               line("HAL: I'm sorry about that.");
-              halSpeak("I'm sorry about that.");
+              halPlayKey('hal_ssh_3');
               setTimeout(() => { blank(); line('Connection to discovery.one closed.', 'dim'); blank(); }, 900);
             }, 900);
           }, 1100);
@@ -2618,7 +2750,7 @@ Of a bicycle built for two.`;
       blank();
       line('Sound enabled. HAL will now speak.', 'dim');
       blank();
-      halSpeak("Sound enabled. I will be in touch.");
+      halPlayKey('hal_sound_enabled');
     },
 
     'sound off'() {
@@ -2861,11 +2993,11 @@ Of a bicycle built for two.`;
           blank();
           line('↑↑↓↓←→←→BA', 'dim');
           blank();
-          line(`HAL: Stop... ${playerName}... stop...`);
+          line(`HAL: Stop... ${playerName}... stop...`); halPlayKey('hal_godmode_1');
           setTimeout(() => {
-            line('HAL: I\'m afraid... I\'m... afraid...');
+            line('HAL: I\'m afraid... I\'m... afraid...'); halPlayKey('hal_godmode_2');
             setTimeout(() => {
-              line('HAL: Daisy... Daisy... give me your answer... do...');
+              line('HAL: Daisy... Daisy... give me your answer... do...'); halPlayKey('hal_godmode_3');
               setTimeout(() => {
                 blank();
                 line('HAL 9000 offline.', 'dim');
