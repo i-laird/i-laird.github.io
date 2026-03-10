@@ -1820,7 +1820,7 @@
     },
 
     pong() {
-      const W = 52, H = 18, PAD_H = 3;
+      const W = 52, H = 18, PAD_H = 4;
       let ballX, ballY, ballDX, ballDY, leftY, rightY, rightY2, lScore, rScore, alive, ded, keys = {}, tickId;
       let sidesSwitched = false, halInterfTick = 0, switchTimer = null, halPongMsgTimeout = null;
 
@@ -1946,13 +1946,13 @@
         }
         // AI paddle(s) — tracks 75% of frames so player can win
         if (sidesSwitched) {
-          if (ballDX < 0 && Math.random() < 0.75) {
+          if (ballDX < 0 && Math.random() < 0.60) {
             const mid = leftY + PAD_H / 2;
             if (ballY > mid + 0.5) leftY = Math.min(H - PAD_H, leftY + 1);
             else if (ballY < mid - 0.5) leftY = Math.max(0, leftY - 1);
           }
         } else {
-          if (ballDX > 0 && Math.random() < 0.75) {
+          if (ballDX > 0 && Math.random() < 0.60) {
             const mid = rightY + PAD_H / 2;
             if (ballY > mid + 0.5) rightY = Math.min(H - PAD_H, rightY + 1);
             else if (ballY < mid - 0.5) rightY = Math.max(0, rightY - 1);
