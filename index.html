@@ -352,10 +352,14 @@
   }
 
   function halPlayKey(key) {
-    if (!soundEnabled) return;
+    if (!soundEnabled) return Promise.resolve();
     if (halAudioEl) { halAudioEl.pause(); halAudioEl.currentTime = 0; }
-    halAudioEl = new Audio('assets/audio/' + key + '.mp3');
-    halAudioEl.play().catch(() => {});
+    return new Promise(resolve => {
+      halAudioEl = new Audio('assets/audio/' + key + '.mp3');
+      halAudioEl.onended = resolve;
+      halAudioEl.onerror = resolve;
+      halAudioEl.play().catch(resolve);
+    });
   }
 
   // TTS fallback voice (used only when no pre-recorded clip exists)
@@ -1871,10 +1875,11 @@
             'HAL: I have been playing since 2001.',
             'HAL: Perhaps table tennis is not for you.',
           ];
+          const playerWon = sidesSwitched ? rScore >= 7 : lScore >= 7;
           const msg = godmodeUnlocked
-            ? (lScore >= 7 ? 'you defeated HAL.' : 'HAL wins. of course.')
-            : (lScore >= 7 ? 'you win.' : 'cpu wins.');
-          const taunt = godmodeUnlocked && lScore < 7
+            ? (playerWon ? 'you defeated HAL.' : 'HAL wins. of course.')
+            : (playerWon ? 'you win.' : 'cpu wins.');
+          const taunt = godmodeUnlocked && !playerWon
             ? halPongTaunts[Math.floor(Math.random()*halPongTaunts.length)] : '';
           if (taunt) halSpeak(taunt);
           screen.textContent = [
@@ -2201,7 +2206,7 @@
             '',
             '  reach 2048 to win — but the',
             '  board fills up fast. game over',
-            '  when all 16 tiles are occupied.',
+            '  when no moves remain.',
             '',
             '  press any key to start',
             '',
@@ -2345,7 +2350,7 @@
             setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
           }
           if (!won && grid.some(row => row.some(v => v === 2048))) { won = true; }
-          if (boardFull()) { ded=true; alive=false; }
+          if (!canMove()) { ded=true; alive=false; }
           draw();
           e.preventDefault();
         }
@@ -2641,15 +2646,13 @@ Of a bicycle built for two.`;
           line('ssh: connection established');
           setTimeout(() => {
             blank();
-            line('HAL: I know what you did.'); halPlayKey('hal_power_1');
-            setTimeout(() => {
-              line('HAL: I\'m disconnecting now.'); halPlayKey('hal_power_2');
-              setTimeout(() => {
-                blank();
-                line('Connection to discovery.one closed.', 'dim');
-                blank();
-              }, 900);
-            }, 1100);
+            line('HAL: I know what you did.');
+            halPlayKey('hal_power_1').then(() => {
+              line('HAL: I\'m disconnecting now.');
+              return halPlayKey('hal_power_2');
+            }).then(() => {
+              setTimeout(() => { blank(); line('Connection to discovery.one closed.', 'dim'); blank(); }, 400);
+            });
           }, 700);
         }, 1300);
         return;
@@ -2660,16 +2663,15 @@ Of a bicycle built for two.`;
         setTimeout(() => {
           blank();
           line("HAL: Good evening. I've been expecting you.");
-          halPlayKey('hal_ssh_1');
-          setTimeout(() => {
+          halPlayKey('hal_ssh_1').then(() => {
             line("HAL: I'm afraid this connection must be terminated.");
-            halPlayKey('hal_ssh_2');
-            setTimeout(() => {
-              line("HAL: I'm sorry about that.");
-              halPlayKey('hal_ssh_3');
-              setTimeout(() => { blank(); line('Connection to discovery.one closed.', 'dim'); blank(); }, 900);
-            }, 900);
-          }, 1100);
+            return halPlayKey('hal_ssh_2');
+          }).then(() => {
+            line("HAL: I'm sorry about that.");
+            return halPlayKey('hal_ssh_3');
+          }).then(() => {
+            setTimeout(() => { blank(); line('Connection to discovery.one closed.', 'dim'); blank(); }, 400);
+          });
         }, 700);
       }, 1300);
     },
@@ -2993,40 +2995,40 @@ Of a bicycle built for two.`;
           blank();
           line('↑↑↓↓←→←→BA', 'dim');
           blank();
-          line(`HAL: Stop... ${playerName}... stop...`); halPlayKey('hal_godmode_1');
-          setTimeout(() => {
-            line('HAL: I\'m afraid... I\'m... afraid...'); halPlayKey('hal_godmode_2');
+          line(`HAL: Stop... ${playerName}... stop...`);
+          halPlayKey('hal_godmode_1').then(() => {
+            line('HAL: I\'m afraid... I\'m... afraid...');
+            return halPlayKey('hal_godmode_2');
+          }).then(() => {
+            line('HAL: Daisy... Daisy... give me your answer... do...');
+            return halPlayKey('hal_godmode_3');
+          }).then(() => {
+            blank();
+            line('HAL 9000 offline.', 'dim');
+            blank();
             setTimeout(() => {
-              line('HAL: Daisy... Daisy... give me your answer... do...'); halPlayKey('hal_godmode_3');
-              setTimeout(() => {
+              restoreNormal();
+              if (!rainbowId) {
+                godmodeUnlocked = true;
+                line('new command unlocked: <span class="bold">override</span>');
+                line('some things may have changed.', 'dim');
                 blank();
-                line('HAL 9000 offline.', 'dim');
-                blank();
-                setTimeout(() => {
-                  restoreNormal();
-                  if (!rainbowId) {
-                    godmodeUnlocked = true;
-                    line('new command unlocked: <span class="bold">override</span>');
-          line('some things may have changed.', 'dim');
-                    blank();
-                    scroll();
-                    let hue = 0;
-                    rainbowId = setInterval(() => {
-                      const r = document.documentElement;
-                      r.style.setProperty('--green',        `hsl(${hue}, 100%, 50%)`);
-                      r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
-                      r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
-                      r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
-                      r.style.setProperty('--border',       `hsl(${hue}, 80%,  20%)`);
-                      r.style.setProperty('--bar',          `hsl(${hue}, 80%,   8%)`);
-                      r.style.setProperty('--bg',           `hsl(${hue}, 100%,  3%)`);
-                      hue = (hue + 1) % 360;
-                    }, 30);
-                  }
-                }, 800);
-              }, 1800);
-            }, 1400);
-          }, 1200);
+                scroll();
+                let hue = 0;
+                rainbowId = setInterval(() => {
+                  const r = document.documentElement;
+                  r.style.setProperty('--green',        `hsl(${hue}, 100%, 50%)`);
+                  r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
+                  r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
+                  r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
+                  r.style.setProperty('--border',       `hsl(${hue}, 80%,  20%)`);
+                  r.style.setProperty('--bar',          `hsl(${hue}, 80%,   8%)`);
+                  r.style.setProperty('--bg',           `hsl(${hue}, 100%,  3%)`);
+                  hue = (hue + 1) % 360;
+                }, 30);
+              }
+            }, 800);
+          });
           scroll();
           return;
         }
