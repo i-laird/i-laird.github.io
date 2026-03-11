@@ -465,7 +465,7 @@
         'rm -rf node_modules',
         'npm install',
         'google "is it bad to push to main"',
-        'agi',
+        'hal',
         'history -c',
       ],
       '.secrets': [
@@ -993,7 +993,7 @@
       launchXP();
     },
 
-    agi() {
+    hal() {
       if (godmodeUnlocked) {
         blank();
         line('HAL is hiding. he\'s not coming out.', 'dim');
@@ -1027,49 +1027,73 @@
       }, 700);
     },
 
-    help() {
+    about() {
+      blank();
+      line('<span class="bold">Ian Laird</span>  <span class="dim">— Software Engineer</span>');
+      blank();
+      line('  Software engineer with 6 years of experience scaling distributed', 'white');
+      line('  systems at Google and Capital One. Equally comfortable designing', 'white');
+      line('  high-throughput APIs, launching ML models into production, and', 'white');
+      line('  driving alignment across teams to ship complex multi-quarter', 'white');
+      line('  initiatives.', 'white');
+      blank();
+      line('  Type <span class="blue">contact</span> to connect.', 'dim');
+      blank();
+    },
+
+    help(flag) {
       const row = (cls, cmd, desc) =>
         `  <span class="${cls}" style="display:inline-block;width:22ch">${cmd}</span>  ${desc}`;
       const r = (cmd, desc) => row('blue', cmd, desc);
 
-      blank();
-      line('<span class="bold">Commands</span>');
-      blank();
-      line(r('contact',  'links &amp; ways to reach me'));
-      line(r('resume',   'open my resume'));
-      line(r('projects', "things i'm building"));
-      line(r('clear',    'clear the terminal'));
-      blank();
-      line('<span class="bold">Extras</span>');
-      blank();
-      line(r('ian',       'see what i look like'));
-      line(r('games',     'things to play'));
-      line(r('matrix',    '...'));
-      line(r('hack',      'totally real hacking'));
-      line(r('gui',       'launch desktop environment'));
-      line(r('whoami',    'a reasonable question'));
-      line(r('uptime',    'system status'));
-      line(r('weather',   'current conditions'));
-      line(r('power off', 'shut down the terminal'));
-      line(r('neofetch',  'system info'));
-      line(r('settings',  'configure terminal options'));
-      blank();
-      line('<span class="bold">Easter Eggs</span>');
-      blank();
-      line(r('ls',                    'look around'));
-      line(r('cat &lt;file&gt;',      'read a file'));
-      line(r('sudo',                  'try your luck'));
-      line(r('sl',                    'typo for ls'));
-      line(r('rm -rf /',              'do not'));
-      line(r('ssh hal@discovery.one', 'knock knock'));
-      line(r('↑↑↓↓←→←→BA',          '...'));
-      if (godmodeUnlocked) line(r('override', 'unlocked'));
-      if (halMode)         line(r('daisy',   '...'));
-      blank();
-      line('<span class="bold">Forbidden</span>');
-      blank();
-      line(row('err', 'agi', 'do not type this'));
-      blank();
+      if (flag === '--all') {
+        blank();
+        line('<span class="bold">Commands</span>');
+        blank();
+        line(r('about',   'about me'));
+        line(r('contact', 'links &amp; ways to reach me'));
+        line(r('resume',  'open my resume'));
+        blank();
+        line('<span class="bold">Extras</span>');
+        blank();
+        line(r('projects',  "things i'm building"));
+        line(r('ian',       'see what i look like'));
+        line(r('games',     'things to play'));
+        line(r('matrix',    '...'));
+        line(r('hack',      'totally real hacking'));
+        line(r('gui',       'launch desktop environment'));
+        line(r('uptime',    'system status'));
+        line(r('weather',   'current conditions'));
+        line(r('power off', 'shut down the terminal'));
+        line(r('neofetch',  'system info'));
+        line(r('settings',  'configure terminal options'));
+        line(r('clear',     'clear the terminal'));
+        blank();
+        line('<span class="bold">Easter Eggs</span>');
+        blank();
+        line(r('ls',                    'look around'));
+        line(r('cat &lt;file&gt;',      'read a file'));
+        line(r('sudo',                  'try your luck'));
+        line(r('sl',                    'typo for ls'));
+        line(r('rm -rf /',              'do not'));
+        line(r('ssh hal@discovery.one', 'knock knock'));
+        line(r('↑↑↓↓←→←→BA',          '...'));
+        if (godmodeUnlocked) line(r('override', 'unlocked'));
+        if (halMode)         line(r('daisy',    '...'));
+        blank();
+        line('<span class="bold">Forbidden</span>');
+        blank();
+        line(row('err', 'hal', 'Your new best friend'));
+        blank();
+      } else {
+        blank();
+        line(r('about',   'about me'));
+        line(r('resume',  'open my resume'));
+        line(r('contact', 'links &amp; ways to reach me'));
+        blank();
+        line('  <span class="dim">type <span class="blue">help --all</span> to see all commands</span>');
+        blank();
+      }
     },
 
 
@@ -2360,8 +2384,9 @@
     },
 
     chess() {
-      const SKILL    = godmodeUnlocked ? 20 : 5;
-      const THINK_MS = godmodeUnlocked ? 1500 : 600;
+      const isHAL    = halMode || godmodeUnlocked;
+      const SKILL    = godmodeUnlocked ? 20 : halMode ? 12 : 5;
+      const THINK_MS = godmodeUnlocked ? 1500 : halMode ? 1000 : 600;
 
       const wrap     = document.createElement('div');
       const halMsgEl = document.createElement('div');
@@ -2391,7 +2416,7 @@
       function setMsg(msg, dur) {
         halMsgEl.textContent = msg;
         if (dur > 0) setTimeout(() => { if (halMsgEl.textContent === msg) halMsgEl.textContent = ''; }, dur);
-        if (godmodeUnlocked && msg) halSpeak(msg.replace(/^HAL:\s*/i, ''));
+        if (isHAL && msg) halSpeak(msg.replace(/^HAL:\s*/i, ''));
       }
 
       function drawBoard() {
@@ -2445,7 +2470,7 @@
         drawBoard();
         if (game.in_checkmate()) {
           const winner = game.turn() === 'b' ? 'White' : 'Black';
-          if (godmodeUnlocked) {
+          if (isHAL) {
             const halWins  = ["Checkmate. I saw this coming seventeen moves ago.", "This game was over before it began.", "Your king has nowhere to go, Dave."];
             const halLoses = ["I'll allow it. This time.", "A fortunate outcome for you. Enjoy it.", "Impressive. I may have underestimated you."];
             const t = winner === 'Black' ? halD(halWins[Math.floor(Math.random()*halWins.length)]) : halD(halLoses[Math.floor(Math.random()*halLoses.length)]);
@@ -2473,7 +2498,7 @@
       function promptMove() {
         const turn = game.turn() === 'w' ? 'White' : 'Black';
         const chk  = game.in_check() ? ' — CHECK' : '';
-        setStatus(godmodeUnlocked
+        setStatus(isHAL
           ? `  Your move, ${playerName} — HAL is watching (${turn}${chk}):`
           : `  Your move (${turn}${chk}):`);
         awaitingInput = handleMove;
@@ -2505,7 +2530,7 @@
         drawBoard(); drawHistory();
         if (checkOver()) return;
 
-        if (godmodeUnlocked) {
+        if (isHAL) {
           const quips = [
             `I've calculated all possible variations, ${playerName}.`,
             `That move was predictable.`,
@@ -2518,7 +2543,7 @@
         }
 
         waitingSF = true;
-        setStatus('  ' + (godmodeUnlocked ? 'HAL' : 'CPU') + ' is thinking...');
+        setStatus('  ' + (isHAL ? 'HAL' : 'CPU') + ' is thinking...');
         sfWorker.postMessage('position fen ' + game.fen());
         sfWorker.postMessage('go movetime ' + THINK_MS);
       }
@@ -2532,7 +2557,7 @@
         waitingSF = false;
         if (mv) moveLog.push(mv.san);
         drawBoard(); drawHistory();
-        if (mv && godmodeUnlocked) {
+        if (mv && isHAL) {
           const quips2 = ["My move. Observe.", "As expected.", "Inevitable.", "Watch carefully.", "I'm afraid you can't win."];
           setMsg('HAL: ' + quips2[Math.floor(Math.random()*quips2.length)], 2500);
         }
@@ -2543,7 +2568,7 @@
         game = new Chess();
         gameOver = false; waitingSF = false; moveLog = [];
         drawBoard(); drawHistory();
-        if (godmodeUnlocked) setMsg(halD(`HAL: I have something special planned for you, Dave.`), 3500);
+        if (isHAL) setMsg(halD(`HAL: I have something special planned for you, Dave.`), 3500);
         promptMove();
         wrap.scrollIntoView({ block: 'start' });
       }
@@ -2654,20 +2679,6 @@
       steps.forEach(([delay, fn]) => setTimeout(fn, delay));
     },
 
-
-    whoami() {
-      blank();
-      line('<span class="bold">Ian Laird</span>  <span class="dim">— Software Engineer</span>');
-      blank();
-      line('  Software engineer with 6 years of experience scaling distributed', 'white');
-      line('  systems at Google and Capital One. Equally comfortable designing', 'white');
-      line('  high-throughput APIs, launching ML models into production, and', 'white');
-      line('  driving alignment across teams to ship complex multi-quarter', 'white');
-      line('  initiatives.', 'white');
-      blank();
-      line('  Type <span class="blue">contact</span> to connect.', 'dim');
-      blank();
-    },
 
     uptime() {
       blank();
@@ -3171,15 +3182,16 @@ Of a bicycle built for two.`;
     }
 
     if (halMode) {
-      if (token === 'clear')          { COMMANDS.clear(); }
-      else if (token === 'help')      { halHelp(); }
-      else if (token === 'daisy')     { COMMANDS.daisy(); }
-      else if (token === 'power off') { COMMANDS['power off'](); }
-      else if (token === 'settings')  { COMMANDS.settings(); }
-      else if (token === 'sound on')  { COMMANDS['sound on'](); }
-      else if (token === 'sound off') { COMMANDS['sound off'](); }
+      if (token === 'clear')                              { COMMANDS.clear(); }
+      else if (token === 'help' || token === 'help --all'){ halHelp(); }
+      else if (token === 'daisy')                         { COMMANDS.daisy(); }
+      else if (token === 'power off')                     { COMMANDS['power off'](); }
+      else if (token === 'settings')                      { COMMANDS.settings(); }
+      else if (token === 'sound on')                      { COMMANDS['sound on'](); }
+      else if (token === 'sound off')                     { COMMANDS['sound off'](); }
+      else if (token === 'chess' || token === 'play chess'){ COMMANDS.chess(); }
       else if (COMMANDS[token] || token.startsWith('cat ') || token.startsWith('ssh ') || token === 'rm -rf /' ||
-               ['open pod bay doors','play chess','life support','navigation','crew manifest','mission briefing','self diagnostics','emergency protocol'].includes(token)) {
+               ['open pod bay doors','life support','navigation','crew manifest','mission briefing','self diagnostics','emergency protocol'].includes(token)) {
         const msg = `I'm afraid I can't do that, ${playerName}.`;
         blank(); line('HAL: ' + msg); halSpeak(msg); blank();
       }
@@ -3190,6 +3202,8 @@ Of a bicycle built for two.`;
 
     if (token === 'cat' || token.startsWith('cat ')) {
       handleCat(token.slice(3).trim());
+    } else if (token === 'help --all') {
+      COMMANDS.help('--all');
     } else if (COMMANDS[token]) {
       COMMANDS[token]();
     } else {
