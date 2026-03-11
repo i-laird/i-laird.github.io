@@ -209,7 +209,7 @@
   }
 
   let halMode = false, godmodeUnlocked = false, soundEnabled = false;
-  let playerName = 'Dave', awaitingInput = null;
+  let playerName = 'Dave', awaitingInput = null, silentInput = false;
 
   /* ── HAL audio — pre-recorded ElevenLabs clips ── */
   let halAudioEl = null;
@@ -2365,21 +2365,28 @@
 
       const wrap     = document.createElement('div');
       const halMsgEl = document.createElement('div');
+      const boardRow = document.createElement('div');
       const boardEl  = document.createElement('pre');
+      const histEl   = document.createElement('pre');
       const statusEl = document.createElement('div');
       const hintEl   = document.createElement('span');
       halMsgEl.className = 'line'; halMsgEl.style.minHeight = '1.55em';
       boardEl.className  = 'ascii';
-      boardEl.style.cssText = 'font-size:13px;line-height:1.5;color:var(--green)';
+      boardEl.style.cssText = 'font-size:13px;line-height:1.5;color:var(--green);margin:0';
+      histEl.className   = 'ascii';
+      histEl.style.cssText = 'font-size:13px;line-height:1.5;color:var(--green);margin:0;padding-left:2ch;min-width:22ch;vertical-align:top';
+      boardRow.style.cssText = 'display:flex;align-items:flex-start';
+      boardRow.appendChild(boardEl); boardRow.appendChild(histEl);
       statusEl.className = 'line';
       hintEl.className   = 'line dim';
       hintEl.textContent = '  type move (e.g. e4  Nf3  e2e4)    [q] quit    [r] new game';
-      wrap.appendChild(halMsgEl); wrap.appendChild(boardEl);
+      wrap.appendChild(halMsgEl); wrap.appendChild(boardRow);
       wrap.appendChild(statusEl); wrap.appendChild(hintEl);
       appendNode(wrap); blank();
       setTimeout(() => wrap.scrollIntoView({ block: 'start' }), 0);
+      silentInput = true;
 
-      let game = null, sfWorker = null, waitingSF = false, gameOver = false;
+      let game = null, sfWorker = null, waitingSF = false, gameOver = false, moveLog = [];
 
       function setMsg(msg, dur) {
         halMsgEl.textContent = msg;
@@ -2411,8 +2418,22 @@
         statusEl.textContent = msg;
       }
 
+      function drawHistory() {
+        const start = Math.max(0, moveLog.length - 20);
+        const visible = moveLog.slice(start);
+        const lines = ['  Move History     ', '  ───────────────  '];
+        for (let i = 0; i < visible.length; i += 2) {
+          const num = Math.floor((start + i) / 2) + 1;
+          const w = visible[i] || '';
+          const b = visible[i + 1] || '';
+          lines.push(`  ${String(num).padStart(2)}.  ${w.padEnd(6)}  ${b}`);
+        }
+        histEl.textContent = lines.join('\n');
+      }
+
       function endGame() {
         awaitingInput = null;
+        silentInput = false;
         if (sfWorker) { sfWorker.terminate(); sfWorker = null; }
         inputRow.style.display = 'flex';
         setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
@@ -2451,9 +2472,10 @@
 
       function promptMove() {
         const turn = game.turn() === 'w' ? 'White' : 'Black';
+        const chk  = game.in_check() ? ' — CHECK' : '';
         setStatus(godmodeUnlocked
-          ? `  Your move, ${playerName} — HAL is watching (${turn}):`
-          : `  Your move (${turn}):`);
+          ? `  Your move, ${playerName} — HAL is watching (${turn}${chk}):`
+          : `  Your move (${turn}${chk}):`);
         awaitingInput = handleMove;
       }
 
@@ -2470,12 +2492,17 @@
         if (!mv) mv = game.move(inp);
 
         if (!mv) {
-          setStatus('  Illegal move — try again:', 'err');
+          if (game.moves().length === 0) { checkOver(); return; }
+          const msg = game.in_check()
+            ? '  In check — only moves that escape check are legal. Try again:'
+            : '  Illegal move — try again:';
+          setStatus(msg, 'err');
           awaitingInput = handleMove;
           return;
         }
 
-        drawBoard();
+        moveLog.push(mv.san);
+        drawBoard(); drawHistory();
         if (checkOver()) return;
 
         if (godmodeUnlocked) {
@@ -2503,7 +2530,8 @@
         if (!bm || bm === '(none)') { waitingSF = false; checkOver(); return; }
         const mv = game.move({ from: bm.slice(0,2), to: bm.slice(2,4), promotion: bm[4] || 'q' });
         waitingSF = false;
-        drawBoard();
+        if (mv) moveLog.push(mv.san);
+        drawBoard(); drawHistory();
         if (mv && godmodeUnlocked) {
           const quips2 = ["My move. Observe.", "As expected.", "Inevitable.", "Watch carefully.", "I'm afraid you can't win."];
           setMsg('HAL: ' + quips2[Math.floor(Math.random()*quips2.length)], 2500);
@@ -2513,8 +2541,8 @@
 
       function startChess() {
         game = new Chess();
-        gameOver = false; waitingSF = false;
-        drawBoard();
+        gameOver = false; waitingSF = false; moveLog = [];
+        drawBoard(); drawHistory();
         if (godmodeUnlocked) setMsg(halD(`HAL: I have something special planned for you, Dave.`), 3500);
         promptMove();
         wrap.scrollIntoView({ block: 'start' });
@@ -2547,7 +2575,7 @@
           boardEl.textContent = '';
           setStatus('  Failed to load chess engine. Check your connection.', 'err');
           blank();
-          awaitingInput = inp => { if (inp.toLowerCase() === 'q') { awaitingInput = null; inputRow.style.display = 'flex'; setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0); } };
+          awaitingInput = inp => { if (inp.toLowerCase() === 'q') { awaitingInput = null; silentInput = false; inputRow.style.display = 'flex'; setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0); } };
         });
     },
 
@@ -3125,7 +3153,7 @@ Of a bicycle built for two.`;
     cmd.value = '';
 
     if (awaitingInput) {
-      echoCmd(raw);
+      if (!silentInput) echoCmd(raw);
       awaitingInput(raw.trim());
       scroll();
       return;
