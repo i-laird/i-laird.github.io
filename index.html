@@ -1168,36 +1168,19 @@
       line('  evaluates them numerically, and graphs f(x) alongside its nth-order derivatives.', 'white');
       blank();
 
-      // ── Link cards ──────────────────────────────────────────────────
-      const wrap = document.createElement('div');
-      wrap.className = 'cards';
-      [
-        { label: 'Live App',       href: 'https://deb53kr4s9gkh.cloudfront.net/calculator',                  svg: linkSvg },
-        { label: 'Frontend Repo',  href: 'https://github.com/i-laird/Derivation_Solver_Frontend',            svg: ghSvg   },
-        { label: 'Backend Repo',   href: 'https://github.com/i-laird/Derivation_Solver',                     svg: ghSvg   },
-      ].forEach(({ label, href, svg }) => {
-        const a = document.createElement('a');
-        a.className = 'card';
-        a.href = href;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-        a.innerHTML = svg + label;
-        wrap.appendChild(a);
-      });
-      appendNode(wrap);
-      blank();
-
       // ── Tech Stack ───────────────────────────────────────────────────
+      blank();
       line('<span class="bold">Tech Stack</span>');
       line('  ──────────────────────────────────────────────────────────────', 'dim');
       blank();
       line('  <span class="blue">Frontend</span>   Angular 21  ·  TypeScript  ·  Angular Material  ·  Chart.js  ·  mathjs  ·  RxJS', 'white');
       line('  <span class="blue">Backend</span>    Spring Boot 4  ·  Java 25  ·  Spring Security  ·  JWT  ·  Lombok  ·  Maven', 'white');
       line('  <span class="blue">Database</span>   MySQL  ·  Spring Data JPA  ·  Hibernate  ·  BCrypt password hashing', 'white');
-      line('  <span class="blue">DevOps</span>     Docker (multi-stage build)  ·  GitHub Actions  ·  CodeQL  ·  Qodana', 'white');
+      line('  <span class="blue">DevOps</span>     Docker (multi-stage build)  ·  ECR (image registry)  ·  GitHub Actions  ·  CodeQL  ·  Qodana', 'white');
       blank();
 
       // ── Algorithm Complexity ─────────────────────────────────────────
+      blank();
       line('<span class="bold">Algorithm</span>  <span class="dim">— Symbolic Differentiation via Abstract Syntax Tree</span>');
       line('  ──────────────────────────────────────────────────────────────', 'dim');
       blank();
@@ -1221,7 +1204,8 @@
       blank();
 
       // ── AWS Architecture ─────────────────────────────────────────────
-      line('<span class="bold">AWS Architecture</span>  <span class="dim">— planned</span>');
+      blank();
+      line('<span class="bold">AWS Architecture</span>  <span class="dim">— desired  (~$40+/mo)</span>');
       line('  ──────────────────────────────────────────────────────────────', 'dim');
       blank();
       line('  User Request', 'white');
@@ -1232,12 +1216,51 @@
       line('       └──▶  <span class="blue">Application Load Balancer</span>  health checks  ·  HTTP/S routing', 'white');
       line('                  └──▶  <span class="blue">ECS + Fargate</span>       Spring Boot container  ·  auto-scaling', 'white');
       line('                              └──▶  <span class="blue">RDS MySQL</span>   user accounts  ·  auth tokens', 'white');
+      line('                         ▲', 'dim');
+      line('                  <span class="blue">ECR</span>  ──┘              image registry  ·  Docker image pull on deploy', 'dim');
+      blank();
+      blank();
+      line('<span class="bold">AWS Architecture</span>  <span class="dim">— prod  (cost-optimized, &lt;$10/mo)</span>');
+      line('  ──────────────────────────────────────────────────────────────', 'dim');
+      blank();
+      line('  <span class="dim">ALB + ECS swapped for App Runner to reduce costs — App Runner provides integrated</span>', 'dim');
+      line('  <span class="dim">load balancing out of the box. Database connectivity disabled in prod to save on</span>', 'dim');
+      line('  <span class="dim">RDS costs; still enabled in dev. Will be re-enabled if user features scale.</span>', 'dim');
+      blank();
+      line('  User Request', 'white');
+      line('       │', 'dim');
+      line('       ▼', 'dim');
+      line('  <span class="blue">CloudFront</span>         CDN  ·  HTTPS termination  ·  global edge caching', 'white');
+      line('       ├──▶  <span class="blue">S3 Bucket</span>          Angular static build  <span class="dim">(HTML / JS / CSS assets)</span>', 'white');
+      line('       └──▶  <span class="blue">App Runner</span>         Spring Boot container  ·  built-in load balancing  ·  auto-scaling', 'white');
+      line('                ▲', 'dim');
+      line('         <span class="blue">ECR</span>  ──┘              image registry  ·  Docker image pull on deploy', 'dim');
+      blank();
       blank();
       line('<span class="bold">Roadmap</span>');
       line('  ──────────────────────────────────────────────────────────────', 'dim');
       blank();
       line('  ○  Multivariable derivative support  <span class="dim">(partial derivatives ∂f/∂x, ∂f/∂y)</span>', 'white');
       line('  ○  Integration support  <span class="dim">(indefinite and definite integrals)</span>', 'white');
+      blank();
+
+      // ── Link cards ──────────────────────────────────────────────────
+      const wrap = document.createElement('div');
+      wrap.className = 'cards';
+      [
+        { label: 'Live App',       href: 'https://deb53kr4s9gkh.cloudfront.net/calculator',                  svg: linkSvg },
+        { label: 'Frontend Repo',  href: 'https://github.com/i-laird/Derivation_Solver_Frontend',            svg: ghSvg   },
+        { label: 'Backend Repo',   href: 'https://github.com/i-laird/Derivation_Solver',                     svg: ghSvg   },
+      ].forEach(({ label, href, svg }) => {
+        const a = document.createElement('a');
+        a.className = 'card';
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.innerHTML = svg + label;
+        wrap.appendChild(a);
+      });
+      appendNode(wrap);
       blank();
       line('  <span class="dim">type <span class="blue">projects</span> to return  ·  type <span class="blue">contact</span> to get in touch</span>');
       blank();
