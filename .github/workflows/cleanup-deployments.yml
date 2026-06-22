@@ -1,0 +1,45 @@
+name: Cleanup old deployments
+
+# Whenever a new github-pages deployment succeeds, prune every older
+# github-pages deployment so only the most recent one is ever kept.
+on:
+  deployment_status:
+  workflow_dispatch:
+
+permissions:
+  deployments: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # Only run once the new deployment is live (deployment_status fires on
+    # pending/in_progress/success); manual runs always proceed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment == 'github-pages')
+    steps:
+      - name: Delete old github-pages deployments (keep newest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Deployments come back newest-first; keep the first, prune the rest.
+          ids=$(gh api --paginate "repos/$REPO/deployments?environment=github-pages" --jq '.[].id')
+          first=1
+          echo "$ids" | while read -r id; do
+            [ -z "$id" ] && continue
+            if [ "$first" = "1" ]; then
+              first=0
+              echo "Keeping newest deployment $id"
+              continue
+            fi
+            # A deployment must be inactive before it can be deleted.
+            gh api -X POST "repos/$REPO/deployments/$id/statuses" -f state=inactive >/dev/null || true
+            if gh api -X DELETE "repos/$REPO/deployments/$id" >/dev/null; then
+              echo "Deleted $id"
+            else
+              echo "Failed to delete $id"
+            fi
+          done
