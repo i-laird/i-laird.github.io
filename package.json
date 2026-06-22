@@ -1,0 +1,34 @@
+{
+  "name": "i-laird.github.io",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ian Laird's interactive terminal-style portfolio — a single-page site with games, easter eggs, and a paranoid AI. No framework, no build step; hand-written HTML/CSS/JS.",
+  "homepage": "https://ianclaird.com",
+  "author": "Ian Laird",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/i-laird/i-laird.github.io.git"
+  },
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:html": "html-validate index.html 404.html",
+    "format": "prettier --write \"**/*.{js,css,html,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,css,html,json,md}\"",
+    "serve": "python3 -m http.server 8000",
+    "check": "npm run lint && npm run lint:html && npm run format:check && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "eslint": "^9.13.0",
+    "globals": "^15.11.0",
+    "html-validate": "^11.5.3",
+    "prettier": "^3.3.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

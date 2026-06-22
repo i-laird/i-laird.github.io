@@ -1,6 +1,12 @@
+# Dependencies
+node_modules/
+
+# Jekyll (disabled via .nojekyll, but ignore its artifacts anyway)
 _site
 .sass-cache
 .jekyll-cache
 .jekyll-metadata
 vendor
+
+# OS / editor
 .DS_Store

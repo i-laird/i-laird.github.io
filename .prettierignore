@@ -1,0 +1,19 @@
+# The browser runtime is hand-formatted and must stay byte-stable:
+#  - app.js / stickfighter.js share a global scope and use multi-line template
+#    literals whose indentation is load-bearing (see CLAUDE.md). Reformatting
+#    them would create an enormous, risky diff for no benefit.
+app.js
+stickfighter.js
+index.html
+404.html
+style.css
+
+# Hand-maintained agent/docs prose — leave wrapping/structure alone.
+CLAUDE.md
+
+# Generated / vendored / binary
+assets/
+_site/
+vendor/
+node_modules/
+package-lock.json

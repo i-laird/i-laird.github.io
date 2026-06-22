@@ -508,22 +508,8 @@
   const EGG2_CIPHER   = '07091b1a0a66107962680a057777101d6412263721202d732d5a551046273328';
   const EGG2_KEY_HASH = 67679802;
 
-  function _djb2(s) {
-    let h = 5381;
-    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
-    return h;
-  }
-
-  function _xorDecode(cipherHex, key) {
-    return cipherHex.match(/../g)
-      .map((h, i) => String.fromCharCode(parseInt(h, 16) ^ key.charCodeAt(i % key.length)))
-      .join('');
-  }
-
-  function _hexRows(cipherHex) {
-    return cipherHex.match(/.{1,32}/g).map((r, i) =>
-      '0x' + (i * 16).toString(16).padStart(4, '0') + ':  ' + r.match(/../g).join(' '));
-  }
+  // _djb2 / _xorDecode / _hexRows live in lib/codec.js (loaded before this
+  // script in index.html, so they're globals here) and are unit-tested there.
 
   function handleDecrypt(arg) {
     blank();
@@ -834,23 +820,8 @@
   function halD(s) { return s.replace(/\bDave\b/g, playerName); }
 
   // Normalize text for clip lookup: strip "HAL: " prefix and player name from common positions
-  function _halNorm(raw) {
-    let s = raw.replace(/^HAL:\s*/i, '').trim();
-    const esc = playerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    s = s.replace(new RegExp(',\\s*' + esc + '\\.', 'gi'), '.');
-    s = s.replace(new RegExp(',\\s*' + esc + '\\?', 'gi'), '?');
-    s = s.replace(new RegExp(',\\s*' + esc + '\\b', 'gi'), '');
-    s = s.replace(new RegExp('\\s+' + esc + '\\.', 'gi'), '.');
-    s = s.replace(new RegExp('\\s+' + esc + '\\?', 'gi'), '?');
-    s = s.replace(new RegExp('^' + esc + ',\\s*', 'gi'), '');
-    // Also strip plain "Dave" (default name, in case playerName differs)
-    s = s.replace(/,\s*Dave\./gi, '.').replace(/,\s*Dave\?/gi, '?')
-         .replace(/\s+Dave\./gi, '.').replace(/,\s*Dave\b/gi, '')
-         .replace(/\bDave,\s*/gi, '');
-    // Em-dash → ". " (phase messages use —)
-    s = s.replace(/\s*—\s*/g, '. ');
-    return s.replace(/\s+/g, ' ').trim();
-  }
+  // _halNorm lives in lib/text.js (loaded before this script; it reads the
+  // playerName global when called with one argument) and is unit-tested there.
 
   function halPlayKey(key) {
     if (!soundEnabled) return Promise.resolve();
@@ -894,43 +865,8 @@
     speechSynthesis.speak(utt);
   }
 
-  // LCS-based alignment: maps each display character to a timestamp from the clip.
-  // Characters not in the clip (player name, "HAL: " prefix) inherit the previous
-  // matched timestamp — so injected name chars all appear at the same moment.
-  function _alignTimings(srcChars, srcTimes, fullText) {
-    const m = srcChars.length, n = fullText.length;
-    // Build LCS DP table
-    const dp = [];
-    for (let i = 0; i <= m; i++) dp.push(new Uint16Array(n + 1));
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        dp[i][j] = srcChars[i-1].toLowerCase() === fullText[j-1].toLowerCase()
-          ? dp[i-1][j-1] + 1
-          : Math.max(dp[i-1][j], dp[i][j-1]);
-      }
-    }
-    // Traceback
-    const matched = new Float64Array(n); // 0 = unmatched sentinel
-    let i = m, j = n;
-    while (i > 0 && j > 0) {
-      if (srcChars[i-1].toLowerCase() === fullText[j-1].toLowerCase()) {
-        matched[j-1] = srcTimes[i-1] + 1e-9; // +epsilon so 0.0s is distinguishable from unmatched
-        i--; j--;
-      } else if (dp[i-1][j] >= dp[i][j-1]) {
-        i--;
-      } else {
-        j--;
-      }
-    }
-    // Fill unmatched chars with the previous known time (or 0)
-    let last = 0;
-    const times = new Float64Array(n);
-    for (let k = 0; k < n; k++) {
-      times[k] = matched[k] ? matched[k] - 1e-9 : last;
-      if (matched[k]) last = times[k];
-    }
-    return times;
-  }
+  // _alignTimings lives in lib/timing.js (loaded before this script, so it's a
+  // global here) and is unit-tested there.
 
   // Plays clipKey and reveals displayText in el, synced to ElevenLabs character
   // timing data. alignText (defaults to displayText) is the prefix matched against
