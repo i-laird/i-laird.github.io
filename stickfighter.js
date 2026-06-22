@@ -9,7 +9,6 @@
 
         function openStickFighter(xp) {
           if (document.getElementById('sf-canvas')) { xp._sfCleanup && xp._sfCleanup(); return; }
-          unlockAchievement('brawler');
 
           const GW = xp.offsetWidth;
           const GH = xp.offsetHeight - 40;
@@ -1865,6 +1864,7 @@
             sparks.push({ x: e.x, y: e.y - 26, t: 20, color: '#ffd24d', txt: '+' + pts });
             sfSfx.killE();
             if (e.type === 'witchking') {
+              unlockAchievement('witch-king');
               bossActive = false; nineDone = true; corpses = [];
               const gotTok = grantLevelToken(5);   // first Witch-king kill earns an upgrade token
               banner = 'the Witch-king is no more'; bannerSub = '+1000' + (gotTok ? '  ·  token earned' : ''); bannerT = 160;
@@ -1876,11 +1876,13 @@
             } else if (e.type === 'trooper') {
               swTroopersLeft--;
             } else if (e.type === 'ogre') {
+              unlockAchievement('ogre-slayer');
               // the mini-boss falls hard — extra points, a meter surge, and a guaranteed powerup drop
               banner = 'the war-ogre falls!'; bannerSub = '+200'; bannerT = 130;
               score += 200; addMeter(30); shake = 14;
               powerups.push({ x: e.x, y: e.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(Math.random() * 3)], t: 820 });
             } else if (e.type === 'vader') {
+              unlockAchievement('dark-lord');
               // the dark lord falls — but a darker master waits in the void. keep the saber.
               vaderActive = false; swState = 'vaderdown';   // stay in the void; keep the lightsaber + starfield
               arrows = []; player.choke = 0; player.stunT = 0; swFlash = 0;  // clear in-flight saber / Force effects
@@ -2275,6 +2277,7 @@
             if (!reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 4);
           }
           function finishDioFinale() {
+            unlockAchievement('world-stopper');
             const e = enemies.find(en => en.type === 'dio'); if (e) e.dead = true;
             dioFinale = null; jojoActive = false; dioStopT = 0; dioStopFx = 0; roadRoller = null;
             arrows = []; dlg = []; dlgT = 0; player.stunT = 0;
@@ -3362,6 +3365,7 @@
             }
             if (stone && !heldSaber && Math.hypot(player.x - stone.x, player.y - stone.y) < PULL_R) {
               stone = null;
+              unlockAchievement('excalibur');
               swordT = SWORD_T;
               banner = '⚔ EXCALIBUR ⚔'; bannerSub = 'X — swing the blade'; bannerT = 100;
               sfSfx.sword(); shake = 8;

@@ -92,7 +92,7 @@ cat > "$TMP_HTML" << 'EOF'
   // footer
   ctx.fillStyle = DIM;
   ctx.font = `26px ${MONO}`;
-  ctx.fillText('5 games · 44 easter eggs · 1 paranoid AI   →   ianclaird.com', 72, 572);
+  ctx.fillText('5 games · 47 easter eggs · 1 paranoid AI   →   ianclaird.com', 72, 572);
 
   // scanlines
   ctx.fillStyle = 'rgba(0,0,0,0.13)';

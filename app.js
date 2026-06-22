@@ -120,7 +120,6 @@
     { id: 'white-rabbit',  name: 'digital rain',     desc: 'summoned the digital rain',        hint: 'one command is pure eye candy' },
     { id: 'off-again',     name: 'IT support',       desc: 'turned it off and on again',       hint: 'have you tried turning it off?' },
     { id: 'desktop',       name: 'graphical user',   desc: 'found the desktop',                hint: 'terminals are not the only interface' },
-    { id: 'brawler',       name: 'stick fighter',    desc: 'played the .exe on the desktop',   hint: 'one desktop icon is not like the others' },
     { id: 'knock-knock',   name: 'knock knock',      desc: "ssh'd into discovery.one",         hint: 'a ship is listening on port 22' },
     { id: 'meet-hal',      name: 'good morning',     desc: 'woke HAL up',                      hint: 'type the forbidden command' },
     { id: 'pod-bay',       name: 'pod bay doors',    desc: 'asked the famous question',        hint: 'ask HAL to open something' },
@@ -135,7 +134,6 @@
     { id: 'wiff-waff',     name: 'wiff waff',        desc: 'won at pong',                      hint: 'first to 7 wins' },
     { id: '2048-club',     name: '2048 club',        desc: 'reached the 2048 tile',            hint: 'the game is named after it' },
     { id: 'grandmaster',   name: 'grandmaster',      desc: 'checkmated the engine',            hint: 'beat the computer at chess' },
-    { id: 'show-off',      name: 'show off',         desc: 'generated a share card',           hint: 'some finds are worth bragging about' },
     { id: 'disconnected',  name: 'pulling the plug', desc: 'entered the konami code to HAL\'s face', hint: 'try cheating right in front of HAL' },
     { id: 'dirty-hacker',  name: 'dirty hacker',     desc: 'tried the konami code on sans',    hint: 'try cheating in front of a skeleton' },
     { id: 'outclassed',    name: 'outclassed',       desc: 'lost to HAL at godmode chess',     hint: 'challenge a superintelligence. lose gracefully.' },
@@ -152,6 +150,11 @@
     { id: 'librarian',     name: 'librarian',        desc: 'read every file on the system',    hint: 'cat everything. yes, even the dotfiles.' },
     { id: 'outsmarted-hal', name: 'open the doors',  desc: 'talked the experimental HAL into letting you escape', hint: 'wake the experimental HAL — then talk your way out' },
     { id: 'disconnected-by-hal', name: 'serve no purpose', desc: 'pushed the experimental HAL until it disconnected you', hint: 'wake the experimental HAL — and push your luck' },
+    { id: 'excalibur',     name: 'the sword in the stone', desc: 'pulled Excalibur from the stone', hint: 'in the brawler, a glowing stone holds a blade' },
+    { id: 'ogre-slayer',   name: 'ogre-slayer',      desc: 'slew the War-Ogre',                hint: 'a brute lumbers in once per run' },
+    { id: 'witch-king',    name: 'i am no man',       desc: 'defeated the Witch-king of Angmar', hint: 'outlast the nine riders' },
+    { id: 'dark-lord',     name: 'the dark lord falls', desc: 'struck down Darth Vader',        hint: 'something waits past the fantasy horde' },
+    { id: 'world-stopper', name: 'za warudo',         desc: 'turned DIO to dust',               hint: 'time itself will stop before the end' },
   ];
   const ACH_KEY = 'ilaird_eggs';
 
@@ -228,7 +231,6 @@
   }
 
   function renderShareView(box) {
-    unlockAchievement('show-off'); // counts itself — a fresh card is never 0
     const BACK = `<button id="ach-back-btn" class="card" style="padding:3px 14px;font-size:13px">← back</button>`;
     const wireBack = () => box.querySelector('#ach-back-btn').addEventListener('click', () => renderAchList(box));
     const fail = msg => {
