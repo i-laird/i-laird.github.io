@@ -3122,7 +3122,6 @@
   }
 
   async function boot() {
-    await sleep(120);
     appendNode((() => {
       const pre = document.createElement('pre');
       pre.className = 'ascii';
@@ -3133,7 +3132,7 @@
       return pre;
     })());
 
-    await sleep(60);  blank();
+    await sleep(40);  blank();
 
     inputRow.style.display = 'flex';
     cmd.focus();
