@@ -1,0 +1,291 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --green:       #00ff41;
+  --green-dim:   #00802b;
+  --green-bright:#7fff8f;
+  --blue:        #4fc3f7;
+  --red:         #ff5555;
+  --white:       #d0d0d0;
+  --bg:          #0a0e0a;
+  --bar:         #141814;
+  --border:      #1e261e;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--green);
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+/* ── CRT scanlines ── */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0px, transparent 2px,
+    rgba(0,0,0,.06) 2px, rgba(0,0,0,.06) 4px
+  );
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* ── Outer window ── */
+.window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 900px;
+  margin: 0 auto;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+/* ── Title bar ── */
+.titlebar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+#linkedin-btn { cursor: pointer; transition: color .15s; }
+#linkedin-btn:hover { color: #0a66c2; }
+
+.dot { width: 13px; height: 13px; border-radius: 50%; }
+.dot.r { background: #ff5f57; }
+.dot.y { background: #febc2e; }
+.dot.g { background: #28c840; }
+
+.titlebar-label {
+  flex: 1;
+  text-align: center;
+  color: #555;
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+
+/* ── Terminal body ── */
+.terminal {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 12px;
+  cursor: text;
+  scroll-behavior: smooth;
+}
+
+.terminal::-webkit-scrollbar { width: 6px; }
+.terminal::-webkit-scrollbar-track { background: transparent; }
+.terminal::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 3px; }
+
+/* ── Output lines ── */
+.line { display: block; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.line + .line { margin-top: 1px; }
+.dim   { color: var(--green-dim); }
+.white { color: var(--white); }
+.bold  { color: var(--green-bright); font-weight: bold; }
+.blue  { color: var(--blue); }
+.err   { color: var(--red); }
+
+/* blue command names in output are click-to-run */
+#out .blue { cursor: pointer; }
+#out .blue:hover { text-decoration: underline; }
+
+/* first-visit nudge pointing at the egg counter */
+#egg-nudge {
+  position: fixed;
+  top: 40px;
+  z-index: 7000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  transition: opacity .4s;
+  font-size: 13px;
+}
+#egg-nudge-arrow {
+  color: #ffd24d;
+  margin-right: 34px;
+  line-height: 1;
+  font-size: 15px;
+  text-shadow: 0 0 8px rgba(255, 210, 77, 0.9);
+  animation: egg-nudge-bob 1.2s ease-in-out infinite;
+}
+#egg-nudge-box {
+  max-width: 250px;
+  background: #1c1606;
+  border: 2px solid #ffd24d;
+  border-radius: 6px;
+  padding: 9px 13px;
+  color: #ffe9b0;
+  font-size: 14px;
+  line-height: 1.5;
+  animation: egg-nudge-glow 1.6s ease-in-out infinite;
+}
+#egg-nudge-close {
+  color: #b08d2e;
+  cursor: pointer;
+  margin-left: 7px;
+  white-space: nowrap;
+}
+#egg-nudge-close:hover { color: #ffd24d; }
+@keyframes egg-nudge-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(4px); }
+}
+@keyframes egg-nudge-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(255, 210, 77, 0.35); }
+  50%      { box-shadow: 0 0 20px rgba(255, 210, 77, 0.75); }
+}
+
+/* gold announcement popups (godmode unlock, etc.) — same family as the nudge */
+.gold-pop {
+  position: fixed;
+  top: 44px;
+  right: 14px;
+  z-index: 7200;
+  max-width: 290px;
+  background: #1c1606;
+  border: 2px solid #ffd24d;
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: #ffe9b0;
+  font-size: 14px;
+  line-height: 1.55;
+  transition: opacity .4s;
+  animation: egg-nudge-glow 1.6s ease-in-out infinite;
+}
+.gold-pop b { color: #ffd24d; }
+.gold-pop-close {
+  color: #b08d2e;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gold-pop-close:hover { color: #ffd24d; }
+
+pre.ascii {
+  color: var(--green);
+  font-size: 16px;
+  line-height: 1.3;
+  white-space: pre;
+  letter-spacing: .05em;
+}
+
+/* ── Input row ── */
+.input-row {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.prompt { white-space: nowrap; }
+.p-user { color: var(--green-bright); }
+.p-sep  { color: #444; }
+.p-host { color: var(--blue); }
+.p-path { color: #555; }
+.p-sym  { color: var(--green); }
+
+#cmd {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--green);
+  font: inherit;
+  caret-color: var(--green);
+  min-width: 0;
+}
+
+/* ── Link cards ── */
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 8px;
+}
+
+.card {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  text-decoration: none;
+  color: var(--green);
+  border: 1px solid var(--green-dim);
+  padding: 10px 22px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 16px;
+  transition: background .12s, color .12s, border-color .12s;
+  background: transparent;
+  cursor: pointer;
+}
+
+.card:hover {
+  background: var(--green);
+  color: var(--bg);
+  border-color: var(--green);
+}
+
+.card svg { flex-shrink: 0; width: 17px; height: 17px; }
+
+/* larger landing tiles (the cards shown on the boot screen) */
+.cards-home { gap: 12px; }
+.cards-home .card { padding: 10px 21px; font-size: 15px; gap: 11px; border-radius: 4px; }
+.cards-home .card svg { width: 17px; height: 17px; }
+
+/* Resume — the primary card; wrapped in the same pulsing gold glow as the egg hint */
+.card-primary {
+  border-color: #ffd24d;
+  color: #ffd24d;
+  font-weight: 600;
+  animation: egg-nudge-glow 1.6s ease-in-out infinite;
+}
+.card-primary:hover {
+  background: #ffd24d;
+  color: #1c1606;
+  border-color: #ffd24d;
+}
+
+@media (max-width: 540px) {
+  pre.ascii { font-size: 7px; }
+  .terminal { padding: 12px 14px 10px; }
+  body { font-size: 13px; }
+}
+
+/* ── Accessibility: honour "reduce motion" — stop the pulsing/glowing loops.
+   The JS also reads this preference to kill the rainbow, full-screen flashes,
+   and game screen-shake (see `reduceMotion` in app.js). ── */
+@media (prefers-reduced-motion: reduce) {
+  #egg-nudge-arrow,
+  #egg-nudge-box,
+  .gold-pop,
+  .card-primary {
+    animation: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── SEO / accessibility: real content for crawlers and screen readers, kept
+   out of the visual layout (the terminal renders everything via JS). Not
+   display:none — that would be de-indexed; this stays crawlable. ── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+  

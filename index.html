@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ian Laird</title>
+  <meta name="description" content="Ian Laird — Software Engineer">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://ianclaird.com/">
+  <meta property="og:title" content="Ian Laird — Software Engineer">
+  <meta property="og:description" content="An interactive terminal portfolio. Games, easter eggs, and one paranoid AI. Type help.">
+  <meta property="og:image" content="https://ianclaird.com/assets/og_image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Ian Laird — Software Engineer">
+  <meta name="twitter:description" content="An interactive terminal portfolio. Games, easter eggs, and one paranoid AI. Type help.">
+  <meta name="twitter:image" content="https://ianclaird.com/assets/og_image.png">
+  <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2016%2016'%3E%3Crect%20width%3D'16'%20height%3D'16'%20rx%3D'3'%20fill%3D'%230a0e0a'%2F%3E%3Crect%20x%3D'4'%20y%3D'4'%20width%3D'8'%20height%3D'9'%20fill%3D'%2300ff41'%2F%3E%3C%2Fsvg%3E">
+  <link rel="stylesheet" href="style.css">
+  <!-- Cloudflare Turnstile (bot gate for the opt-in LLM HAL backend). Loaded for everyone but only used when a player wakes the experimental HAL. -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    "name": "Ian Laird",
+    "jobTitle": "Software Engineer",
+    "url": "https://ianclaird.com/",
+    "image": "https://ianclaird.com/assets/og_image.png",
+    "description": "Software engineer with 6 years of experience scaling distributed systems at Google and Capital One — high-throughput APIs, machine learning in production, and cross-team delivery of complex, multi-quarter initiatives.",
+    "knowsAbout": ["Distributed systems", "High-throughput APIs", "Machine learning", "Backend engineering", "Java", "Spring Boot"],
+    "sameAs": [
+      "https://github.com/i-laird",
+      "https://linkedin.com/in/ianclaird"
+    ]
+  }
+  </script>
+</head>
+<body>
+
+<!-- Crawlable, non-visual content (the terminal UI is rendered by app.js). Hidden inline (clip, not display:none) so it stays indexable and screen-reader accessible regardless of stylesheet caching. -->
+<div class="sr-only" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">
+  <!-- styles are inline (not just the .sr-only class) so a stale cached style.css can't reveal this block -->
+  <h1>Ian Laird — Software Engineer</h1>
+  <p>Software engineer with 6 years of experience scaling distributed systems at Google and Capital One. Equally comfortable designing high-throughput APIs, launching machine-learning models into production, and driving alignment across teams to ship complex, multi-quarter initiatives.</p>
+  <h2>Skills</h2>
+  <ul>
+    <li>Distributed systems</li>
+    <li>High-throughput and backend APIs</li>
+    <li>Machine learning in production</li>
+    <li>Java, Spring Boot</li>
+  </ul>
+  <h2>Experience</h2>
+  <p>Engineering experience at Google and Capital One.</p>
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://github.com/i-laird">GitHub</a></li>
+    <li><a href="https://linkedin.com/in/ianclaird">LinkedIn</a></li>
+    <li><a href="/assets/documents/ianclaird_resume.pdf">Resume (PDF)</a></li>
+  </ul>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="dot r"></div>
+    <div class="dot y"></div>
+    <div class="dot g"></div>
+    <div class="titlebar-label">ian@portfolio</div>
+    <a id="linkedin-btn" href="https://linkedin.com/in/ianclaird" target="_blank" rel="noopener noreferrer" onclick="unlockAchievement('networker')" title="LinkedIn" style="display:flex;align-items:center;color:#555;padding:2px 5px;border-radius:4px;text-decoration:none">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.458-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.4544 0-2.063-.926-2.063-2.065 0-1.4538.92-2.063 2.063-2.063 1.454 0 2.064.925 2.064 2.063 0 1.4539-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+    </a>
+    <div id="ach-badge" onclick="toggleAchievements()" title="Easter eggs found" style="cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none;font-size:13px;color:#555;padding:2px 6px;border-radius:4px">
+      <span style="font-size:13px">🥚</span><span id="ach-count">0/44</span>
+    </div>
+    <div id="sound-toggle" onclick="toggleSound()" style="cursor:pointer;display:flex;align-items:center;gap:7px;user-select:none;font-size:13px;color:#555;padding:2px 4px;border-radius:4px" title="Toggle sound">
+      <span style="color:#555;font-size:12px;letter-spacing:.04em">SOUND</span>
+      <div id="sound-toggle-track" style="width:36px;height:20px;border-radius:10px;background:#333;position:relative;transition:background 0.2s">
+        <div id="sound-toggle-thumb" style="position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#666;transition:transform 0.2s,background 0.2s"></div>
+      </div>
+      <span id="sound-toggle-label" style="display:inline-block;width:2.2ch;text-align:left">OFF</span>
+    </div>
+  </div>
+
+  <div class="terminal" id="terminal" onclick="focusCmd()">
+    <div id="out"></div>
+    <div class="input-row" id="input-row" style="display:none">
+      <span class="prompt">
+        <span class="p-user">ian</span><span class="p-sep">@</span><span class="p-host">portfolio</span><span class="p-path">:~</span><span class="p-sym">$ </span>
+      </span>
+      <input id="cmd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
