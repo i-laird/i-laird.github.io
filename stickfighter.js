@@ -37,6 +37,7 @@
                 and the boss-skip cheats). Routed through activeMusic so the
                 titlebar sound toggle / stopAllAudio / resumeModeAudio reach it. ── */
           const sfMusic = new Audio('assets/audio/stick_fury.mp3');
+          sfMusic.preload = 'none';   // created at launch but not played until first movement
           sfMusic.loop = true;
           sfMusic.volume = 0.45;
           function startSfMusic() {

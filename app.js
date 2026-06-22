@@ -4,7 +4,14 @@
   const terminal = document.getElementById('terminal');
 
   function focusCmd() { cmd.focus(); }
-  function scroll() { terminal.scrollTop = terminal.scrollHeight; }
+  // Coalesce scroll-to-bottom into one rAF so the per-character typewriter loops
+  // (and the 50+ other call sites) don't each force a synchronous layout/reflow.
+  let _scrollPending = false;
+  function scroll() {
+    if (_scrollPending) return;
+    _scrollPending = true;
+    requestAnimationFrame(() => { _scrollPending = false; terminal.scrollTop = terminal.scrollHeight; });
+  }
   function openUrl(url) {
     const a = document.createElement('a');
     a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
@@ -21,9 +28,18 @@
   const TURNSTILE_SITE_KEY = '0x4AAAAAADn5dDkcE9exLUeE';                              // public Turnstile site key
   let halLLM = false, halLLMBusy = false, halLLMState = null;
   let sansBattleActive = false, sansBattle = {}, sansDeaths = 0;
-  const sansMenuMusic = new Audio('assets/audio/pixelated_dreams.mp3');
-  sansMenuMusic.loop = true;
-  sansMenuMusic.volume = 0.4;
+  // Lazily created on first play — the sans menu music is a hidden mode most
+  // visitors never reach, so don't fetch/decode it on every page load.
+  let _sansMenuMusic = null;
+  function sansMenuMusic() {
+    if (!_sansMenuMusic) {
+      _sansMenuMusic = new Audio('assets/audio/pixelated_dreams.mp3');
+      _sansMenuMusic.preload = 'none';   // don't buffer the loop until it actually plays
+      _sansMenuMusic.loop = true;
+      _sansMenuMusic.volume = 0.4;
+    }
+    return _sansMenuMusic;
+  }
   let rainbowId = null;
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
@@ -89,18 +105,18 @@
       // follow-up lines complete instantly instead of hanging forever.
       if (done) done();
     }
-    sansMenuMusic.pause();
+    if (_sansMenuMusic) _sansMenuMusic.pause();
     if (activeMusic) activeMusic.pause();
   }
 
   function resumeModeAudio() {
     if (activeMusic) activeMusic.play().catch(() => {});
-    else if (sansMode) sansMenuMusic.play().catch(() => {});
+    else if (sansMode) sansMenuMusic().play().catch(() => {});
   }
 
   function toggleSound() {
     soundEnabled = !soundEnabled;
-    if (soundEnabled) resumeModeAudio();
+    if (soundEnabled) { ensureHalTiming(); resumeModeAudio(); }
     else stopAllAudio();
     syncSoundToggle();
   }
@@ -668,7 +684,15 @@
   /* ── HAL audio — pre-recorded ElevenLabs clips ── */
   let halAudioEl = null;
   let HAL_TIMING = {};
-  fetch('assets/audio/hal_timing.json').then(r => r.json()).then(d => { HAL_TIMING = d; }).catch(() => {});
+  // Per-character clip timing is only needed once sound is on (it syncs the
+  // typewriter to audio). Fetch lazily so the common, sound-off visitor never
+  // pays for it; the audio paths degrade gracefully until it resolves.
+  let _halTimingRequested = false;
+  function ensureHalTiming() {
+    if (_halTimingRequested) return;
+    _halTimingRequested = true;
+    fetch('assets/audio/hal_timing.json').then(r => r.json()).then(d => { HAL_TIMING = d; }).catch(() => {});
+  }
 
   // Lookup: normalized text → clip filename (no .mp3)
   const HAL_CLIPS = {
@@ -1170,8 +1194,7 @@
     halMode = false;
     halLLM = false; halLLMBusy = false; halLLMState = null;
     sansMode = false;
-    sansMenuMusic.pause();
-    sansMenuMusic.currentTime = 0;
+    if (_sansMenuMusic) { _sansMenuMusic.pause(); _sansMenuMusic.currentTime = 0; }
     cwd = fsHome();
     applyTheme('normal');
   }
@@ -1183,7 +1206,7 @@
     sansMode = true;
     awaitingInput = null;
     applyTheme('sans');
-    if (soundEnabled) sansMenuMusic.play().catch(() => {});
+    if (soundEnabled) sansMenuMusic().play().catch(() => {});
   }
 
   function goldPopup(html, ms = 12000) {
@@ -1503,8 +1526,9 @@
 
     /* ── music — does NOT start yet. The intro plays in silence; the music
           drops with the first attack, the way it's supposed to. ── */
-    sansMenuMusic.pause();
+    if (_sansMenuMusic) _sansMenuMusic.pause();
     const battleMusic = new Audio('assets/audio/pixel_fury.mp3');
+    battleMusic.preload = 'none';   // created up front but doesn't play until the first attack
     battleMusic.loop = true;
     battleMusic.volume = 0.5;
     let musicStarted = false;
@@ -1736,7 +1760,7 @@
         Promise.resolve()
       ).then(() => {
         blank();
-        if (soundEnabled) sansMenuMusic.play().catch(() => {});
+        if (soundEnabled) sansMenuMusic().play().catch(() => {});
         sansShowSansScreen();
       });
     }
@@ -3002,16 +3026,36 @@
   }
 
   /* ── Append helpers ── */
+  // Rolling cap on the output log: long sessions (HAL chat, repeated commands)
+  // otherwise grow #out without bound, so every reflow gets progressively heavier.
+  const MAX_OUT_NODES = 2000;
+  function pruneOut() {
+    while (out.childElementCount > MAX_OUT_NODES) out.removeChild(out.firstChild);
+  }
   function line(html = '', cls = '') {
     const el = document.createElement('span');
     el.className = 'line' + (cls ? ' ' + cls : '');
     el.innerHTML = html;
     out.appendChild(el);
+    pruneOut();
     scroll();
     return el;
   }
 
   function blank() { line(''); }
+
+  // Safe-by-default sibling of line(): renders the argument as plain text (no
+  // markup interpretation), so untrusted/interpolated content can't inject HTML.
+  // Reach for this instead of line() whenever the content isn't deliberately markup.
+  function text(str = '', cls = '') {
+    const el = document.createElement('span');
+    el.className = 'line' + (cls ? ' ' + cls : '');
+    el.textContent = str;
+    out.appendChild(el);
+    pruneOut();
+    scroll();
+    return el;
+  }
 
   function appendNode(node) { out.appendChild(node); scroll(); }
 
@@ -3227,7 +3271,10 @@
     blank();
     scroll();
     awaitingInput = name => {
-      playerName = (name && name.trim()) ? name.trim() : 'Dave';
+      // Strip angle brackets and cap length so the name can never inject markup,
+      // no matter which output path (many use innerHTML) interpolates it later.
+      const clean = (name || '').trim().replace(/[<>]/g, '').slice(0, 40);
+      playerName = clean || 'Dave';
       if (playerName.toLowerCase() === 'dave') unlockAchievement('actually-dave');
       blank();
       if (soundEnabled) {
@@ -3240,6 +3287,7 @@
         awaitingInput = choice => {
           awaitingInput = null;
           soundEnabled = /^on$/i.test((choice || '').trim());
+          if (soundEnabled) ensureHalTiming();
           syncSoundToggle();
           blank();
           onDone();
@@ -3333,10 +3381,25 @@
     return () => { clearInterval(iv); el.remove(); };
   }
 
-  // Wait for the async Turnstile script, then run an invisible challenge and
-  // resolve with a token (or null on failure/timeout). The widget renders
+  // Inject the Cloudflare Turnstile script on demand. Only the opt-in LLM HAL
+  // needs it, so we don't load it for every visitor — it's pulled in the first
+  // time someone wakes the experimental HAL. getTurnstileToken's poll then waits
+  // for window.turnstile to appear.
+  let _turnstileRequested = false;
+  function loadTurnstile() {
+    if (_turnstileRequested) return;
+    _turnstileRequested = true;
+    const s = document.createElement('script');
+    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    s.async = true; s.defer = true;
+    document.head.appendChild(s);
+  }
+
+  // Load (if needed) the async Turnstile script, then run an invisible challenge
+  // and resolve with a token (or null on failure/timeout). The widget renders
   // inline in the terminal so the rare interactive challenge is completable.
   function getTurnstileToken() {
+    loadTurnstile();
     const ready = new Promise((resolve) => {
       if (window.turnstile && window.turnstile.render) return resolve(true);
       let tries = 0;
@@ -3580,15 +3643,34 @@
     window.addEventListener('keydown', onKeyDown);
     if (onKeyUp) window.addEventListener('keyup', onKeyUp);
 
+    // Scoped timer registry: timers scheduled via after()/every() are tracked and
+    // guaranteed cancelled on end(), so no delayed callback can fire into this
+    // game's torn-down DOM after the player has left. Use these instead of the
+    // bare global setTimeout/setInterval for any game-lifetime timer.
+    const timers = new Set();
+    function after(fn, ms) {
+      const id = setTimeout(() => { timers.delete(id); fn(); }, ms);
+      timers.add(id);
+      return id;
+    }
+    function every(fn, ms) {
+      const id = setInterval(fn, ms);
+      timers.add(id);
+      return id;
+    }
+    function cancel(id) { timers.delete(id); clearTimeout(id); clearInterval(id); }
+
     function end() {
       if (observer) observer.disconnect();
+      for (const id of timers) { clearTimeout(id); clearInterval(id); }
+      timers.clear();
       window.removeEventListener('keydown', onKeyDown);
       if (onKeyUp) window.removeEventListener('keyup', onKeyUp);
       inputRow.style.display = 'flex';
       setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
     }
 
-    return { wrap, screen, halMsgEl, end };
+    return { wrap, screen, halMsgEl, end, after, every, cancel };
   }
 
   /* ── Commands ── */
@@ -4381,8 +4463,8 @@
         if (godmodeUnlocked && alive && !slowZone && ticks % 270 === 135 && Math.random() < 0.45) {
           slowZone = { x: W - 1, px: W - 1, width: 14 };
           halMsg.textContent = halD("HAL: Slow zone ahead, Dave.");
-          if (halMsgTimeout) clearTimeout(halMsgTimeout);
-          halMsgTimeout = setTimeout(() => { halMsg.textContent = ''; }, 2200);
+          if (halMsgTimeout) shell.cancel(halMsgTimeout);
+          halMsgTimeout = shell.after(() => { halMsg.textContent = ''; }, 2200);
         }
 
         // coin pickup
@@ -4396,9 +4478,9 @@
               nitro = 60; // 3 seconds of boost + invincibility
               unlockAchievement('nitrous');
               _chirp(1320, 'square', 0.18, 0.12);
-              if (halMsgTimeout) clearTimeout(halMsgTimeout);
+              if (halMsgTimeout) shell.cancel(halMsgTimeout);
               halMsg.textContent = 'NITRO!  speed boost + invincibility';
-              halMsgTimeout = setTimeout(() => { halMsg.textContent = ''; }, 1800);
+              halMsgTimeout = shell.after(() => { halMsg.textContent = ''; }, 1800);
             }
           }
         }
@@ -4429,8 +4511,8 @@
             obs.push({ lane: l, x: W - 1 + gap, px: W - 1 + gap, char: 'H' });
           }
         }
-        if (halMsgTimeout) clearTimeout(halMsgTimeout);
-        halMsgTimeout = setTimeout(() => { halMsg.textContent = ''; }, 2200);
+        if (halMsgTimeout) shell.cancel(halMsgTimeout);
+        halMsgTimeout = shell.after(() => { halMsg.textContent = ''; }, 2200);
       }
 
       function crash() {
@@ -4454,7 +4536,7 @@
         safeLane = 1; safeChangeCooldown = 0; spawnTimer = 24;
         slowZone = null; inSlowZone = false;
         halMsg.textContent = '';
-        if (halMsgTimeout) clearTimeout(halMsgTimeout);
+        if (halMsgTimeout) shell.cancel(halMsgTimeout);
         alive = true; ded = false; crashing = false;
         lastTickAt = performance.now();
         showCanvas(true);
@@ -5545,6 +5627,7 @@
 
       const chessMusicSrc = godmodeUnlocked ? 'assets/audio/ais_gambit.mp3' : 'assets/audio/checkmate_in_the_void.mp3';
       const chessMusic = new Audio(chessMusicSrc);
+      chessMusic.preload = 'none';   // skip buffering when sound is off
       chessMusic.loop = false;
       chessMusic.volume = 0.5;
       activeMusic = chessMusic;
@@ -6226,6 +6309,7 @@ Of a bicycle built for two.`;
 
     'sound on'() {
       soundEnabled = true;
+      ensureHalTiming();
       resumeModeAudio();
       syncSoundToggle();
       blank();

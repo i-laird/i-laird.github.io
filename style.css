@@ -57,8 +57,64 @@ body::after {
   user-select: none;
 }
 
-#linkedin-btn { cursor: pointer; transition: color .15s; }
+/* ── Titlebar controls (markup styles live here, not inline; the sound toggle's
+   colours/transform are still set dynamically by syncSoundToggle in app.js) ── */
+#linkedin-btn {
+  display: flex;
+  align-items: center;
+  color: #555;
+  padding: 2px 5px;
+  border-radius: 4px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color .15s;
+}
 #linkedin-btn:hover { color: #0a66c2; }
+
+#ach-badge {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  font-size: 13px;
+  color: #555;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+#ach-badge .egg-icon { font-size: 13px; }
+
+#sound-toggle {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  user-select: none;
+  font-size: 13px;
+  color: #555;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.sound-toggle-text { color: #555; font-size: 12px; letter-spacing: .04em; }
+#sound-toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: #333;
+  position: relative;
+  transition: background .2s;
+}
+#sound-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #666;
+  transition: transform .2s, background .2s;
+}
+#sound-toggle-label { display: inline-block; width: 2.2ch; text-align: left; }
 
 .dot { width: 13px; height: 13px; border-radius: 50%; }
 .dot.r { background: #ff5f57; }
