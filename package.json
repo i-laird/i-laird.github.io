@@ -26,6 +26,7 @@
     "eslint": "^9.13.0",
     "globals": "^15.11.0",
     "html-validate": "^11.5.3",
+    "jsdom": "^29.1.1",
     "prettier": "^3.3.3"
   },
   "engines": {

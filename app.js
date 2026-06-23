@@ -1,4 +1,5 @@
   const out      = document.getElementById('out');
+  const a11yLive = document.getElementById('a11y-live');
   const inputRow = document.getElementById('input-row');
   const cmd      = document.getElementById('cmd');
   const terminal = document.getElementById('terminal');
@@ -17,6 +18,33 @@
     a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
+
+  // Global error boundary. app.js is one large classic script in a shared global scope,
+  // so an uncaught throw inside a game loop, async chain, or command handler can wedge the
+  // terminal — the input row is often hidden by a running game, leaving a dead page with no
+  // way to type. Catch it, restore a usable prompt, and print one in-character recovery line
+  // instead. Audio play() rejections (the common benign async failure) are all .catch()-ed
+  // at their call sites, so an unhandledrejection that reaches here is a real bug worth
+  // surfacing. Debounced so a loop that throws every frame can't spam recovery lines.
+  let _faultActive = false;
+  function handleFatal(err) {
+    try { console.error('[terminal] recovered from an error:', err); } catch (e) { /* no console */ }
+    if (_faultActive) return;
+    _faultActive = true;
+    setTimeout(() => { _faultActive = false; }, 1500); // re-arm after the dust settles
+    try {
+      if (inputRow) inputRow.style.display = 'flex';
+      if (typeof blank === 'function' && typeof line === 'function') {
+        blank();
+        line('a system fault occurred — terminal recovered. type <span class="blue">help</span> to continue.', 'dim');
+      }
+      if (cmd) cmd.focus();
+    } catch (e) { /* last resort: never let the handler itself throw */ }
+  }
+  // No capture phase: stay on the bubbling path so this catches script errors only, not
+  // failed resource loads (a 404'd audio clip or a down chess CDN shouldn't read as a fault).
+  window.addEventListener('error', (e) => handleFatal((e && e.error) || (e && e.message) || e));
+  window.addEventListener('unhandledrejection', (e) => handleFatal(e && e.reason));
 
   let halMode = false, sansMode = false, godmodeUnlocked = false, soundEnabled = false;
   // explorable-filesystem cursor (declared early: getPromptHTML reads it at load)
@@ -927,6 +955,7 @@
   function halTypeLine(text, clipKey) {
     const fullText = 'HAL: ' + text;
     const el = line('');
+    announce(fullText); // give screen readers the whole line up front, not char-by-char
     if (soundEnabled && clipKey) {
       return playClipTyped(el, fullText, clipKey).then(() => { el.textContent = fullText; });
     }
@@ -953,6 +982,7 @@
     const fullText = 'HAL: ' + text;
     const prefixLen = 5; // 'HAL: '
     const el = line('');
+    announce(fullText); // give screen readers the whole line up front, not char-by-char
     return new Promise(resolve => {
       if (halAudioEl) { halAudioEl.pause(); halAudioEl.currentTime = 0; }
       let audio;
@@ -1028,6 +1058,7 @@
   // Pauses longer at punctuation.
   function chirpTypeLine(displayText, chirpFn, msPerChar) {
     const el = line('');
+    announce(displayText); // give screen readers the whole line up front, not char-by-char
     return new Promise(resolve => {
       let i = 0;
       const type = () => {
@@ -2968,11 +2999,26 @@
   function pruneOut() {
     while (out.childElementCount > MAX_OUT_NODES) out.removeChild(out.firstChild);
   }
+  // Mirror a completed line of terminal text into the polite live region so screen
+  // readers announce it. Kept separate from #out (rather than aria-live on #out) so the
+  // per-character typewriter and the game canvases don't generate a flood of mutations.
+  // Empty/whitespace lines are skipped, and the region is pruned to a small window so it
+  // doesn't grow unbounded over a long session.
+  function announce(str) {
+    if (!a11yLive || !str) return;
+    const s = String(str).trim();
+    if (!s) return;
+    const el = document.createElement('div');
+    el.textContent = s;
+    a11yLive.appendChild(el);
+    while (a11yLive.childElementCount > 30) a11yLive.removeChild(a11yLive.firstChild);
+  }
   function line(html = '', cls = '') {
     const el = document.createElement('span');
     el.className = 'line' + (cls ? ' ' + cls : '');
     el.innerHTML = html;
     out.appendChild(el);
+    announce(el.textContent);
     pruneOut();
     scroll();
     return el;
@@ -2988,6 +3034,7 @@
     el.className = 'line' + (cls ? ' ' + cls : '');
     el.textContent = str;
     out.appendChild(el);
+    announce(str);
     pruneOut();
     scroll();
     return el;
@@ -4043,8 +4090,8 @@
       blank();
       line('<span class="bold">Portfolio Site</span>  <span class="dim">— You are here</span>');
       blank();
-      line('  A terminal-style portfolio built with zero dependencies — no framework,', 'white');
-      line('  no build system, no bundler. Three hand-written files: HTML, CSS, JS.', 'white');
+      line('  A terminal-style portfolio with no framework, no bundler, and no build', 'white');
+      line('  step — hand-written HTML, CSS, and JavaScript served straight off GitHub Pages.', 'white');
       blank();
 
       // ── Link card ────────────────────────────────────────────────────
@@ -4065,70 +4112,35 @@
       line('  ──────────────────────────────────────────────────────────────', 'dim');
       blank();
       line('  Vanilla HTML  ·  CSS custom properties  ·  Vanilla JavaScript', 'white');
-      line('  GitHub Pages  <span class="dim">(push to main → live, no CI step needed)</span>', 'white');
+      line('  Lazy-loaded modules ', 'white');
+      line('  Tested in CI  <span class="dim">— ESLint · Prettier · node --test  (unit + jsdom smoke tests)</span>', 'white');
+      line('  Accessible  <span class="dim">— screen-reader live region · reduced-motion support · keyboard-first</span>', 'white');
+      line('  GitHub Pages  <span class="dim">(push to main → live)</span>', 'white');
       blank();
 
       // ── Interesting Parts ─────────────────────────────────────────────
       line('<span class="bold">Interesting Parts</span>');
       line('  ──────────────────────────────────────────────────────────────', 'dim');
       blank();
-      line('  <span class="blue">Live weather</span>', 'white');
-      line('    The weather command hits the Open-Meteo API for real-time conditions', 'dim');
-      line('    in Seattle, WA — temperature, wind speed, humidity, and a WMO weather', 'dim');
-      line('    code translated into ASCII art and a plain-English description.', 'dim');
+      line('  <span class="blue">Two HAL 9000s</span>', 'white');
+      line('    A scripted HAL voiced by pregenerated elevenlabs synced to a typewriter —', 'dim');
+      line('    and an experimental, opt-in HAL run by a live language model that you have', 'dim');
+      line('    to talk your way past to escape the terminal.', 'dim');
       blank();
-      line('  <span class="blue">Authentic terminal experience</span>', 'white');
-      line('    Tab completion cycles through matching commands from the current input.', 'dim');
-      line('    Arrow keys cycle through command history like a real shell.', 'dim');
-      line('    Easter egg shell commands: ls · sl (typo) · cd · cat &lt;file&gt; · sudo', 'dim');
+      line('  <span class="blue">47 easter eggs</span>', 'white');
+      line('    Discoveries unlock achievements that persist in localStorage and render to', 'dim');
+      line('    a shareable card.  A few are deep cuts, with a finale for the completionists.', 'dim');
       blank();
-      line('  <span class="blue">HAL 9000 easter egg</span>', 'white');
-      line('    Typing hal triggers a multi-step setup (name, sound preference), then', 'dim');
-      line('    activates HAL mode.  ~100 voice clips pre-generated via ElevenLabs are', 'dim');
-      line('    served as MP3s and played back on demand.', 'dim');
+      line('  <span class="blue">Five games + a hidden brawler</span>  <span class="dim">Racecar · Snake · Pong · 2048 · Chess</span>', 'white');
+      line('    Chess runs on Stockfish across three difficulty tiers; the Konami code', 'dim');
+      line('    unlocks HAL-sabotaged variants of the rest.  Buried in the XP desktop is', 'dim');
+      line('    Stick Fighter 2000 — a horde-survival brawler whose boss run climbs from', 'dim');
+      line('    Excalibur to the depths of outer space and beyond.', 'dim');
       blank();
-      line('  <span class="blue">SSH easter egg</span>', 'white');
-      line('    ssh hal@discovery.one initiates a fake SSH handshake — HAL responds', 'dim');
-      line('    with authentication refusals voiced over pre-recorded audio.  Access', 'dim');
-      line('    is denied.  In godmode HAL plays different audio.', 'dim');
-      blank();
-      line('  <span class="blue">Five built-in games</span>  <span class="dim">Racecar · Snake · Pong · 2048 · Chess</span>', 'white');
-      line('    Unlocking godmode via the Konami code activates HAL-sabotaged variants', 'dim');
-      line('    of all four games.', 'dim');
-      blank();
-      line('    <span class="blue">Snake</span>  —  4-phase HAL mode (godmode only)', 'white');
-      line('      Phase 1  Chase blocks spawn and hunt the snake', 'dim');
-      line('      Phase 2  A maze appears on the board', 'dim');
-      line('      Phase 3  Spinning blade obstacles fill the arena', 'dim');
-      line('      Phase 4  The walls steadily shrink inward', 'dim');
-      blank();
-      line('    <span class="blue">Pong</span>  —  HAL interference fires every 120 ticks (godmode only)', 'white');
-      line('      HAL gains a second paddle on his side of the board', 'dim');
-      line('      Sabotages cycle through: side-switch · speed boost · flip · slow', 'dim');
-      blank();
-      line('    <span class="blue">2048</span>  —  HAL sabotages trigger at score thresholds (godmode only)', 'white');
-      line('      Steals the 64-tile  ·  Locks the 128-tile for 3 moves', 'dim');
-      line('      Rearranges the board  ·  Halves all tile values', 'dim');
-      blank();
-      line('    <span class="blue">Chess</span>  —  Powered by Stockfish  ·  Three difficulty tiers', 'white');
-      line('      Default   Skill Level  5  ·  600ms think  ·  ~1500 ELO', 'dim');
-      line('      HAL mode  Skill Level 12  ·  1000ms think  ·  ~2100 ELO', 'dim');
-      line('      Godmode   Skill Level 20  ·  1500ms think  ·  ~3200 ELO', 'dim');
-      blank();
-      line('  <span class="blue">GUI / desktop environment</span>', 'white');
-      line('    Typing gui launches a Windows XP-style desktop complete with desktop', 'dim');
-      line('    icons for GitHub, LinkedIn, resume, and email.  On mobile it loads', 'dim');
-      line('    automatically as the default experience.  On desktop it includes', 'dim');
-      line('    Stick Fighter 2000 — a fantasy horde-survival game hidden as an', 'dim');
-      line('    .exe icon.  Outrun goblins, pull the sword from the stone, and', 'dim');
-      line('    summon the white wizard when all hope is lost.', 'dim');
-      blank();
-      line('  <span class="blue">Visual details</span>', 'white');
-      line('    Dynamic theming — all colors are CSS custom properties on :root.  HAL', 'dim');
-      line('    mode overwrites them at runtime via setProperty() — no class swaps,', 'dim');
-      line('    no stylesheet reload.', 'dim');
-      line('    CRT scanline effect — a CSS pseudo-element overlays repeating', 'dim');
-      line('    linear-gradient stripes, giving the illusion of a phosphor screen.', 'dim');
+      line('  <span class="blue">Authentic terminal</span>', 'white');
+      line('    Tab completion, command history, and shell-style easter eggs', 'dim');
+      line('    (ls · cat &lt;file&gt; · sudo · sl).  The weather command pulls real-time', 'dim');
+      line('    Seattle conditions from the Open-Meteo API and draws them as ASCII art.', 'dim');
       blank();
       line('  <span class="dim">type <span class="blue">projects</span> to return  ·  type <span class="blue">hal</span> if you dare</span>');
       blank();
@@ -5924,6 +5936,7 @@ Upon the seat
 Of a bicycle built for two.`;
       const el = line('');
       el.style.whiteSpace = 'pre';
+      announce(song); // give screen readers the whole song up front, not char-by-char
 
       const finish = () => {
         el.textContent = song;
@@ -5980,6 +5993,7 @@ Of a bicycle built for two.`;
           const sansPart = " heh. heh heh heh. you know what, pal, not bad. not bad at all.";
           const fullLine = 'HAL: ' + halPart + sansPart;
           const el = line('');
+          announce(fullLine); // give screen readers the whole line up front, not char-by-char
 
           function startSansPart() {
             el.textContent = 'HAL: ' + halPart;

@@ -92,11 +92,18 @@
 
   <div class="terminal" id="terminal" onclick="focusCmd()">
     <div id="out"></div>
+    <!-- Screen-reader announcer: completed terminal lines are mirrored here so assistive
+         tech reads command output as it appears. It's a separate polite live region (not
+         aria-live on #out itself) so the per-character typewriter and the 60fps game
+         canvases that render into #out don't spam announcements. Visually hidden via inline
+         styles (clip, not display:none) so a stale cached style.css can't reveal it. -->
+    <div id="a11y-live" role="log" aria-live="polite" aria-relevant="additions" aria-label="Terminal output"
+         style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0"></div>
     <div class="input-row" id="input-row" style="display:none">
       <span class="prompt">
         <span class="p-user">ian</span><span class="p-sep">@</span><span class="p-host">portfolio</span><span class="p-path">:~</span><span class="p-sym">$ </span>
       </span>
-      <input id="cmd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <input id="cmd" type="text" aria-label="Terminal command input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
     </div>
   </div>
 </div>
