@@ -18,7 +18,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+: html-validate's CLI uses fs.globSync, which doesn't exist on Node 20.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
