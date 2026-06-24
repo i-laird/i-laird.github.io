@@ -1,14 +1,27 @@
 // Stick Fighter 2000 — fantasy horde-survival game, lazily loaded on first launch
 // from the gui XP desktop (see launchStickFighter() in app.js). Loaded as a CLASSIC
-// script into the shared global scope, so it can read app.js's top-level globals
-// (unlockAchievement, reduceMotion, cmd, performance, etc.) and exposes a global
-// openStickFighter(xp). The running game parks its teardown on xp._sfCleanup so the
-// desktop's shutdown() can stop it when the XP window closes.
+// script, it exposes one global, openStickFighter(xp, api). Everything it needs from
+// app.js/lib arrives through the explicit `api` bridge (app.js's sfBridge():
+// unlockAchievement, _chirp, makeRng, HAL_WORKER_URL, and the live soundEnabled /
+// reduceMotion / activeMusic accessors) — it references NOTHING from app.js by free
+// global name, so it can be bundled & obfuscated as an independent lazy chunk without
+// cross-file name-mangling breaking. The only contract is openStickFighter + the api
+// key names (keep both on the obfuscator's reserved list). The running game parks its
+// teardown on xp._sfCleanup so the desktop's shutdown() can stop it when the XP window
+// closes.
 // NOTE: kept at its original (8-space) indentation on purpose — it contains multi-line
 // template literals, so blanket de-indenting would corrupt them.
 
-        function openStickFighter(xp) {
+        function openStickFighter(xp, api) {
           if (document.getElementById('sf-canvas')) { xp._sfCleanup && xp._sfCleanup(); return; }
+
+          // Dependency bridge from app.js (see sfBridge() there). The game references
+          // NOTHING from app.js by free global name — everything external comes through
+          // `api`, so this file can be obfuscated as an independent lazy chunk. Stable
+          // refs are destructured here (call sites unchanged); the runtime-varying flags
+          // (soundEnabled / reduceMotion) and the shared, game-mutated activeMusic are
+          // read/written through `api` live (api.soundEnabled, api.activeMusic = …, etc.).
+          const { unlockAchievement, _chirp, makeRng, HAL_WORKER_URL } = api;
 
           const GW = xp.offsetWidth;
           const GH = xp.offsetHeight - 40;
@@ -34,20 +47,20 @@
 
           /* ── horde battle music — loops through the regular waves, then cuts
                 out the moment the ringwraith set piece begins (see summonTheNine
-                and the boss-skip cheats). Routed through activeMusic so the
+                and the boss-skip cheats). Routed through api.activeMusic so the
                 titlebar sound toggle / stopAllAudio / resumeModeAudio reach it. ── */
           const sfMusic = new Audio('assets/audio/stick_fury.mp3');
           sfMusic.preload = 'none';   // created at launch but not played until first movement
           sfMusic.loop = true;
           sfMusic.volume = 0.45;
           function startSfMusic() {
-            if (activeMusic === sfMusic) return;
-            activeMusic = sfMusic;
-            if (soundEnabled) { sfMusic.currentTime = 0; sfMusic.play().catch(() => {}); }
+            if (api.activeMusic === sfMusic) return;
+            api.activeMusic = sfMusic;
+            if (api.soundEnabled) { sfMusic.currentTime = 0; sfMusic.play().catch(() => {}); }
           }
           function stopSfMusic() {
             sfMusic.pause();
-            if (activeMusic === sfMusic) activeMusic = null;
+            if (api.activeMusic === sfMusic) api.activeMusic = null;
           }
 
           /* ── recorded ringwraith screech — plays once each time the Nine lunge
@@ -55,7 +68,7 @@
           const wraithSfx = new Audio('assets/audio/ringwraith.mp3');
           wraithSfx.volume = 0.6;
           function playWraithScreech() {
-            if (!soundEnabled) return;
+            if (!api.soundEnabled) return;
             try { wraithSfx.currentTime = 0; wraithSfx.play().catch(() => {}); } catch (_) {}
           }
 
@@ -295,7 +308,7 @@
             const ready = stored > 0 && !banned;
             const x = 14, y = GH - 22, segGap = 4, barW = 150, barH = 12;
             const segW = (barW - segGap * (cap - 1)) / cap;
-            const pulse = reduceMotion ? 1 : 0.72 + 0.28 * Math.sin(frame * 0.13);
+            const pulse = api.reduceMotion ? 1 : 0.72 + 0.28 * Math.sin(frame * 0.13);
             ctx.save();
             ctx.textAlign = 'left';
             ctx.font = 'bold 11px Tahoma,Arial';
@@ -447,12 +460,12 @@
           //   'rise' standing in relief (spared), 'dying' kneeling as he crumbles.
           // e.crumble fades him to ash, e.fade dims him out.
           function drawIan(e, col) {
-            const tremble = reduceMotion ? 0 : Math.sin((e.phase || 0)) * 0.7;
+            const tremble = api.reduceMotion ? 0 : Math.sin((e.phase || 0)) * 0.7;
             const cr = e.crumble || 0;
             const mode = e.mode || 'idle';
             const kneel = mode === 'idle' || mode === 'dying';
             const armsUp = mode === 'idle' || mode === 'dying' || mode === 'plead';
-            const wob = reduceMotion ? 0 : Math.sin((frame || 0) * 0.16) * 1.6;   // pleading-hand wave
+            const wob = api.reduceMotion ? 0 : Math.sin((frame || 0) * 0.16) * 1.6;   // pleading-hand wave
             ctx.save();
             ctx.globalAlpha = (e.fade == null ? 1 : e.fade) * (1 - cr);
             ctx.translate(e.x + tremble, e.y);
@@ -486,7 +499,7 @@
             ctx.beginPath(); ctx.arc(-3, hy, 2.4, 0, Math.PI * 2); ctx.arc(3, hy, 2.4, 0, Math.PI * 2); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(-0.6, hy); ctx.lineTo(0.6, hy); ctx.stroke();
             // a tear, while he kneels
-            if (kneel && !reduceMotion && Math.floor((frame || 0) / 18) % 3 === 0) {
+            if (kneel && !api.reduceMotion && Math.floor((frame || 0) / 18) % 3 === 0) {
               ctx.fillStyle = '#8fd8ff';
               ctx.beginPath(); ctx.arc(5, hy + 4, 1.6, 0, Math.PI * 2); ctx.fill();
             }
@@ -620,7 +633,7 @@
             const charging = e.mode === 'charge';
             const winding = e.mode === 'wind';
             // telegraph: a dashed charge line + a swelling glow while it winds up the rush
-            if (winding && (reduceMotion || Math.floor(frame / 4) % 2 === 0)) {
+            if (winding && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0)) {
               ctx.save();
               ctx.strokeStyle = 'rgba(255,82,82,0.6)'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
               ctx.beginPath(); ctx.moveTo(e.x, e.y - 20);
@@ -1041,7 +1054,7 @@
             ctx.beginPath(); ctx.ellipse(0, 4 + hop, 13, 4, 0, 0, Math.PI * 2); ctx.fill();
 
             // motion-blur ghosts while moving fast — sells speed so leaps/spins read as motion, not teleport
-            if (!reduceMotion && (e.mode === 'leap' || e.mode === 'spin')) {
+            if (!api.reduceMotion && (e.mode === 'leap' || e.mode === 'spin')) {
               const mvx = e.mvx || 0, mvy = e.mvy || 0;
               if (Math.hypot(mvx, mvy) > 2.5) {
                 for (let g = 3; g >= 1; g--) {
@@ -1165,7 +1178,7 @@
               ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(-3, -34); ctx.lineTo(0, -30); ctx.stroke();
               _saberBlade(0, -30, -Math.PI / 2 - 0.45, 44);
               _saberBlade(0, -30, -Math.PI / 2 + 0.45, 44);
-              if (reduceMotion || Math.floor(frame / 4) % 2 === 0) {
+              if (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) {
                 ctx.globalAlpha = 0.3; ctx.strokeStyle = '#ff6f63'; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.arc(0, -22, 50, 0, Math.PI * 2); ctx.stroke();
                 ctx.globalAlpha = 1;
@@ -1181,7 +1194,7 @@
               ctx.strokeStyle = '#cfcabf'; ctx.lineWidth = 2;                          // bony hands
               ctx.beginPath(); ctx.moveTo(h1.x - Math.cos(pa) * 3, h1.y - Math.sin(pa) * 3); ctx.lineTo(h1.x, h1.y); ctx.stroke();
               ctx.beginPath(); ctx.moveTo(h2.x - Math.cos(pa) * 3, h2.y - Math.sin(pa) * 3); ctx.lineTo(h2.x, h2.y); ctx.stroke();
-              const steady = reduceMotion || e.mode === 'lightning';
+              const steady = api.reduceMotion || e.mode === 'lightning';
               // the orb swells as the charge builds, so the windup is unmistakable
               const prog = e.mode === 'cast' && e.castDur ? clamp(1 - e.st / e.castDur, 0, 1) : 1;
               const ox = (h1.x + h2.x) / 2, oy = (h1.y + h2.y) / 2;
@@ -1189,7 +1202,7 @@
               ctx.fillStyle = 'rgba(196,158,255,' + (steady ? 0.55 : 0.35 + 0.3 * prog + 0.2 * Math.abs(Math.sin(frame * 0.5))).toFixed(2) + ')';
               ctx.beginPath(); ctx.arc(ox, oy, 4 + prog * 6, 0, Math.PI * 2); ctx.fill();
               // little arcs spitting off the gathering orb during the windup
-              if (e.mode === 'cast' && !reduceMotion && prog > 0.25) {
+              if (e.mode === 'cast' && !api.reduceMotion && prog > 0.25) {
                 ctx.strokeStyle = 'rgba(220,200,255,0.8)'; ctx.lineWidth = 1.2; ctx.lineCap = 'round';
                 for (let a = 0; a < 3; a++) {
                   const ar = (frame * 0.5 + a * 2.1), rr = (4 + prog * 6);
@@ -1209,7 +1222,7 @@
               ctx.strokeStyle = '#cfcabf'; ctx.lineWidth = 2;                           // bony fingers
               ctx.beginPath(); ctx.moveTo(h1.x - dir * 3, h1.y); ctx.lineTo(h1.x, h1.y); ctx.stroke();
               ctx.beginPath(); ctx.moveTo(h2.x - dir * 3, h2.y); ctx.lineTo(h2.x, h2.y); ctx.stroke();
-              if (!reduceMotion) {            // small idle sparks crawling between the fingertips
+              if (!api.reduceMotion) {            // small idle sparks crawling between the fingertips
                 ctx.strokeStyle = 'rgba(200,175,255,0.7)'; ctx.lineWidth = 1; ctx.lineCap = 'round';
                 for (const h of [h1, h2]) {
                   const a = frame * 0.4 + h.y;
@@ -1253,7 +1266,7 @@
             ctx.fillStyle = '#1f2024';                          // grip collar
             ctx.beginPath(); ctx.arc(grip.x, grip.y, 1.8, 0, Math.PI * 2); ctx.fill();
             // emitter tip — always faintly lit, flares when aiming/lunging
-            const hot = reach && (reduceMotion || Math.floor(frame / 4) % 2 === 0);
+            const hot = reach && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0);
             ctx.shadowColor = '#ff4d4d'; ctx.shadowBlur = reach ? 10 : 5;
             ctx.strokeStyle = hot ? '#ff8a8a' : '#d23030'; ctx.lineWidth = reach ? 3.2 : 2.4;
             const ta = Math.atan2(tip.y - butt.y, tip.x - butt.x);
@@ -1414,14 +1427,14 @@
             if (inten > 0.05) {
               const hands = [{ x: sidX - 13, y: sidY + 13 }, { x: sidX + 13, y: sidY + 16 }, { x: sidX, y: sidY - 2 }];
               const targets = [{ x: f.vx, y: vy + vDrop - 41 }, { x: f.vx - 5, y: vy + vDrop - 20 }, { x: f.vx + 5, y: vy + vDrop - 18 }];
-              const n = reduceMotion ? 2 : 3 + Math.round(inten * 2);
+              const n = api.reduceMotion ? 2 : 3 + Math.round(inten * 2);
               for (let pass = 0; pass < 2; pass++) {
                 ctx.save(); ctx.lineCap = 'round';
                 ctx.shadowColor = '#9a6cff'; ctx.shadowBlur = pass === 0 ? 9 : 3;
                 ctx.strokeStyle = pass === 0 ? 'rgba(170,120,255,0.5)' : 'rgba(255,255,255,0.95)';
                 ctx.lineWidth = pass === 0 ? 2.3 : 1;
                 for (let i = 0; i < n; i++) {
-                  const seed = reduceMotion ? i * 11 : frame * 0.7 + i * 4.3;
+                  const seed = api.reduceMotion ? i * 11 : frame * 0.7 + i * 4.3;
                   const a = hands[i % hands.length], b = targets[i % targets.length];
                   _ltnArc(a.x, a.y, b.x, b.y, 7, 4, seed);
                 }
@@ -1430,7 +1443,7 @@
                 ctx.restore();
               }
               // sparks flying off
-              if (!reduceMotion && frame % 4 === 0) {
+              if (!api.reduceMotion && frame % 4 === 0) {
                 const t = targets[Math.floor(rnd() * targets.length)];
                 sparks.push({ x: t.x + (rnd() - 0.5) * 14, y: t.y + (rnd() - 0.5) * 14, t: 8, color: '#d8c4ff', txt: '✦' });
               }
@@ -1469,7 +1482,7 @@
           function drawTheWorld(dir, alpha, mode) {
             const gold = '#e8c24a', lit = '#f6dd86', dk = '#6b5a1f', grn = '#5f9c52', pink = '#e84d8a';
             const muda = mode === 'muda';
-            const jt = reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
+            const jt = api.reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
             const sway = Math.sin(frame * 0.09) * 1.2;
             ctx.save(); ctx.globalAlpha = 0.82 * alpha; ctx.scale(dir, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -1491,7 +1504,7 @@
             const reach = muda ? 8 + jt * 9 : 2;
             _standArm(-13, -44, -20 - reach, -29, gold, dk);
             _standArm(13, -44, 20 + reach, -29, gold, dk);
-            if (muda && !reduceMotion) {
+            if (muda && !api.reduceMotion) {
               ctx.globalAlpha = 0.28 * alpha; ctx.fillStyle = lit;
               for (let i = 0; i < 3; i++) { const r = rnd() * 15; ctx.beginPath(); ctx.arc(19 + r, -31 + (rnd() * 6 - 3), 2.6, 0, Math.PI * 2); ctx.fill(); }
               ctx.globalAlpha = 0.82 * alpha;
@@ -1518,7 +1531,7 @@
           // Star Platinum — Jotaro's violet Stand, looming over his shoulder during the DIO fight
           function drawStarPlatinum(dir, alpha, punching) {
             const pur = '#7d6fd6', lit = '#a99cf0', dk = '#352a63', cy = '#86f0e0', gold = '#e8c24a', skin = '#caa6ff';
-            const jt = reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
+            const jt = api.reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
             const sway = Math.sin(frame * 0.08) * 1.6;
             ctx.save(); ctx.globalAlpha = 0.78 * alpha; ctx.scale(dir, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -1545,7 +1558,7 @@
             const reach = punching ? 9 + jt * 10 : 2;
             _standArm(-14, -44, -21 - reach, -30, pur, dk);
             _standArm(14, -44, 21 + reach, -30, pur, dk);
-            if (punching && !reduceMotion) {
+            if (punching && !api.reduceMotion) {
               ctx.globalAlpha = 0.28 * alpha; ctx.fillStyle = lit;
               for (let i = 0; i < 3; i++) { const r = rnd() * 17; ctx.beginPath(); ctx.arc(20 + r, -31 + (rnd() * 6 - 3), 2.8, 0, Math.PI * 2); ctx.fill(); }
               ctx.globalAlpha = 0.78 * alpha;
@@ -1581,7 +1594,7 @@
               // dissolve from the feet up: clip away the lower (cr) of the body, fade the rest, jitter as ash
               ctx.globalAlpha = 1 - cr * 0.55;
               ctx.beginPath(); ctx.rect(-46, -60, 92, 63 * (1 - cr)); ctx.clip();
-              if (!reduceMotion) ctx.translate((rnd() - 0.5) * cr * 3, (rnd() - 0.5) * cr * 2);
+              if (!api.reduceMotion) ctx.translate((rnd() - 0.5) * cr * 3, (rnd() - 0.5) * cr * 2);
             }
             if ((e.stand || 0) > 0.05) {   // The World rises above and behind DIO's shoulder
               ctx.save(); ctx.translate(-dir * 12, -24); ctx.scale(1.4, 1.4);
@@ -1635,13 +1648,13 @@
           function drawRoadRoller(r) {
             // ground danger zone — telegraph (48×18) sits just outside the lethal ellipse (46×17), so the warning never under-reads
             if (r.phase !== 'impact' || r.t < 12) {
-              const warn = reduceMotion || Math.floor(frame / (r.phase === 'drop' ? 3 : 5)) % 2 === 0;   // flashes faster as it falls
+              const warn = api.reduceMotion || Math.floor(frame / (r.phase === 'drop' ? 3 : 5)) % 2 === 0;   // flashes faster as it falls
               ctx.save();
               ctx.strokeStyle = warn ? 'rgba(255,70,70,0.95)' : 'rgba(255,70,70,0.4)';
               ctx.fillStyle = 'rgba(255,70,70,0.10)'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
               ctx.beginPath(); ctx.ellipse(r.zoneX, r.zoneY, 48, 18, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
               // a ring that contracts toward the zone as the roller closes in — shows exactly when impact lands
-              if (r.phase === 'drop' && !reduceMotion) {
+              if (r.phase === 'drop' && !api.reduceMotion) {
                 const prog = clamp((r.y - (r.y0 || 0)) / Math.max(1, r.zoneY - (r.y0 || 0)), 0, 1);
                 const k = 1 + (1 - prog) * 1.4;
                 ctx.globalAlpha = 0.5 + 0.5 * prog; ctx.setLineDash([]); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,90,90,0.9)';
@@ -1814,7 +1827,7 @@
             const trail = heldSaber ? '90,200,255' : '255,245,157';
             const bladeLen = heldSaber ? 46 : 40;
             ctx.save();
-            if (!heldSaber && !reduceMotion && swordT < 180 && Math.floor(frame / 6) % 2 === 0) ctx.globalAlpha = 0.45;  // Excalibur expiring
+            if (!heldSaber && !api.reduceMotion && swordT < 180 && Math.floor(frame / 6) % 2 === 0) ctx.globalAlpha = 0.45;  // Excalibur expiring
             ctx.lineCap = 'round';
             if (swingT > 0) {  // cleave wedge + sweep trail
               ctx.fillStyle = 'rgba(' + trail + ',' + (swingT / 34).toFixed(2) + ')';
@@ -2326,7 +2339,7 @@
               if (f.exitDir > 0 ? f.vx > GW + 54 : f.vx < -54) { finishSidiousFinale(); return; }
             }
             if (f.phase !== 'rise' && f.t % 10 === 0) ltnFlash = Math.max(ltnFlash, 6);  // the void strobes violet
-            if (!reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 5);    // jolts from the shocks
+            if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 5);    // jolts from the shocks
           }
           function finishSidiousFinale() {
             sidFinale = null;
@@ -2445,16 +2458,16 @@
             if (f.phase === 'stagger') {                          // he reels, refusing to believe it
               if (f.t >= 80) { f.phase = 'laststand'; f.t = 0; banner = 'toki yo... to... maré...?'; bannerSub = 'but time will not obey him'; bannerT = 150; sfSfx.zawarudo(); dioStopFx = 16; }
             } else if (f.phase === 'laststand') {                 // one last ZA WARUDO — and it sputters out
-              if (!reduceMotion && f.t % 12 === 0) dioStopFx = Math.max(dioStopFx, 9);
+              if (!api.reduceMotion && f.t % 12 === 0) dioStopFx = Math.max(dioStopFx, 9);
               if (f.t >= 96) { f.phase = 'crumble'; f.t = 0; banner = 'WRYYYYYYY!'; bannerSub = ''; bannerT = 200; sfSfx.die(); shake = 22; }
             } else {                                              // he crumbles to dust from the feet up
               if (e) e.crumble = clamp(f.t / 120, 0, 1);
-              if (!reduceMotion && f.t % 2 === 0 && e) {
+              if (!api.reduceMotion && f.t % 2 === 0 && e) {
                 sparks.push({ x: e.x + (rnd() - 0.5) * 26, y: e.y - 6 - (e.crumble || 0) * 42 + (rnd() - 0.5) * 10, t: 22 + rnd() * 24, color: rnd() < 0.5 ? '#d8c9a4' : '#caa6ff', txt: '·' });
               }
               if (f.t >= 132) { finishDioFinale(); return; }
             }
-            if (!reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 4);
+            if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 4);
           }
           function finishDioFinale() {
             unlockAchievement('world-stopper');
@@ -2520,7 +2533,7 @@
                 if (f.t >= 30) { f.phase = 'fall'; f.t = 0; if (e) { e.mode = 'dying'; e.crumble = 0; } sfSfx.die(); shake = 14; }
               } else {                                       // he fades to ash
                 if (e) e.crumble = clamp(f.t / 90, 0, 1);
-                if (!reduceMotion && f.t % 3 === 0 && e) sparks.push({ x: e.x + (rnd() - 0.5) * 22, y: e.y - 18 - (e.crumble || 0) * 28, t: 26, color: '#9e9e9e', txt: '·' });
+                if (!api.reduceMotion && f.t % 3 === 0 && e) sparks.push({ x: e.x + (rnd() - 0.5) * 22, y: e.y - 18 - (e.crumble || 0) * 28, t: 26, color: '#9e9e9e', txt: '·' });
                 if (f.t >= 116) { finishIanKill(); return; }
               }
             } else {
@@ -2567,7 +2580,7 @@
             ctx.shadowBlur = 0;
             for (let i = 0; i < 2; i++) {
               const sel = c.sel === i, bx = x0 + i * (bw + gap), o = opts[i];
-              const pulse = sel && !reduceMotion ? 0.75 + 0.25 * Math.sin(c.t * 0.18) : 1;
+              const pulse = sel && !api.reduceMotion ? 0.75 + 0.25 * Math.sin(c.t * 0.18) : 1;
               ctx.globalAlpha = sel ? pulse : 0.85;
               ctx.fillStyle = sel ? hexA(o.accent, 0.22) : 'rgba(8,10,14,0.85)';
               roundRectPath(bx, y, bw, bh, 8); ctx.fill();
@@ -2637,7 +2650,7 @@
               if (e.x < 22 || e.x > GW - 22) { e.wang = Math.PI - e.wang; e.x = clamp(e.x, 22, GW - 22); }  // turn at the walls
               if (e.y < 42 || e.y > GH - 14) { e.wang = -e.wang; e.y = clamp(e.y, 42, GH - 14); }
               e.phase += 0.05 + (e.wsp || 0) * 0.12;
-              if (!reduceMotion && rnd() < 0.005) sparks.push({ x: e.x - 4 + rnd() * 8, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' });
+              if (!api.reduceMotion && rnd() < 0.005) sparks.push({ x: e.x - 4 + rnd() * 8, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' });
               return;
             }
             const dx = player.x - e.x, dy = player.y - e.y, d = Math.hypot(dx, dy) || 1;
@@ -3121,7 +3134,7 @@
             ctx.beginPath(); ctx.moveTo(tx, boxY + 32); ctx.lineTo(tx + tw, boxY + 32); ctx.stroke();
             ctx.fillStyle = '#e8eef5'; ctx.font = '15px Tahoma,Arial';
             wrapText(line.text.slice(0, Math.floor(bi.chars)), tx, boxY + 54, tw, 20);
-            if (bi.chars >= line.text.length && (reduceMotion || Math.floor(bi.t / 16) % 2 === 0)) {
+            if (bi.chars >= line.text.length && (api.reduceMotion || Math.floor(bi.t / 16) % 2 === 0)) {
               ctx.fillStyle = glow; ctx.font = 'bold 14px Tahoma,Arial';
               ctx.fillText('▼', boxX + boxW - 24, boxY + boxH - 12);
             }
@@ -3149,7 +3162,7 @@
               ctx.save();
               ctx.translate(GW / 2, GH / 2); ctx.rotate(-0.46);
               ctx.globalAlpha = 0.09; ctx.fillStyle = accent;
-              const off = reduceMotion ? 0 : (t * 1.4) % 86;
+              const off = api.reduceMotion ? 0 : (t * 1.4) % 86;
               for (let x = -GW; x < GW * 1.5; x += 86) ctx.fillRect(x + off, -GH, 40, GH * 2);
               ctx.restore();
 
@@ -3157,7 +3170,7 @@
               const ps = eOut(Math.min(1, t / 22));
               const px = GW * 0.66 + (1 - ps) * GW * 0.55;
               const sc = (GH * 0.62) / 55 * (0.92 + 0.08 * ps);
-              if (!reduceMotion) {
+              if (!api.reduceMotion) {
                 const gl = ctx.createRadialGradient(px, GH * 0.5, 10, px, GH * 0.5, GH * 0.55);
                 gl.addColorStop(0, hexA(glow, 0.4)); gl.addColorStop(1, hexA(glow, 0));
                 ctx.fillStyle = gl; ctx.fillRect(0, 0, GW, GH);
@@ -3188,7 +3201,7 @@
               // top kicker
               const top = eOut(Math.min(1, t / 16));
               ctx.save();
-              ctx.globalAlpha = top * (reduceMotion ? 1 : 0.7 + 0.3 * Math.sin(t * 0.12));
+              ctx.globalAlpha = top * (api.reduceMotion ? 1 : 0.7 + 0.3 * Math.sin(t * 0.12));
               ctx.fillStyle = glow; ctx.font = 'italic bold 26px Tahoma,Arial'; ctx.textAlign = 'center';
               ctx.shadowColor = hexA(accent, 0.9); ctx.shadowBlur = 12;
               ctx.fillText('⚠  CHALLENGER  APPROACHING  ⚠', GW / 2, 56);
@@ -3220,7 +3233,7 @@
               const line = cfg.lines[bi.lineIdx];
               if (bi.chars < line.text.length) {
                 const before = Math.floor(bi.chars);
-                bi.chars = Math.min(line.text.length, bi.chars + (reduceMotion ? 2.4 : 0.62));
+                bi.chars = Math.min(line.text.length, bi.chars + (api.reduceMotion ? 2.4 : 0.62));
                 if (Math.floor(bi.chars) > before && Math.floor(bi.chars) % 2 === 0 && line.text[before] !== ' ') sfSfx.blip();
                 bi.holdT = 0;
               } else {
@@ -3514,14 +3527,14 @@
               if (b.kind === 'fire' || b.kind === 'frost') {
                 const grow = b.kind === 'fire' ? FIRE_R : FROST_R;
                 b.r = grow * Math.min(1, b.t / (b.kind === 'fire' ? 12 : 9));
-                if (!reduceMotion && b.t % 2 === 0) {
+                if (!api.reduceMotion && b.t % 2 === 0) {
                   const ang = rnd() * Math.PI * 2, rr = b.r * (0.7 + rnd() * 0.35);
                   if (b.kind === 'fire')
                     sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 16, color: rnd() < 0.5 ? '#ffb74d' : '#ff7043', txt: '✦' });
                   else
                     sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 18, color: '#b3e5fc', txt: '❄' });
                 }
-              } else if (b.kind === 'chain' && !reduceMotion && b.t % 2 === 0 && b.pts.length > 1) {
+              } else if (b.kind === 'chain' && !api.reduceMotion && b.t % 2 === 0 && b.pts.length > 1) {
                 const seg = b.pts[Math.floor(rnd() * (b.pts.length - 1)) + 1];
                 sparks.push({ x: seg.x + (rnd() * 16 - 8), y: seg.y + (rnd() * 16 - 8), t: 12, color: '#cff3ff', txt: '·' });
               }
@@ -3778,7 +3791,7 @@
             /* ── render ── */
             ctx.clearRect(0, 0, GW, GH);
             ctx.save();
-            if (shake > 0) { shake--; if (!reduceMotion) ctx.translate((rnd() - 0.5) * shake, (rnd() - 0.5) * shake); }
+            if (shake > 0) { shake--; if (!api.reduceMotion) ctx.translate((rnd() - 0.5) * shake, (rnd() - 0.5) * shake); }
 
             if (swActive) {
               // the corridor: black void + a fixed starfield
@@ -3790,12 +3803,12 @@
               }
               ctx.globalAlpha = 1;
               if (swFlash > 0) {  // a Force surge floods the deck red (steady under reduced motion)
-                const a = reduceMotion ? 0.16 : 0.30 * (0.55 + 0.45 * Math.abs(Math.sin(frame * 0.5)));
+                const a = api.reduceMotion ? 0.16 : 0.30 * (0.55 + 0.45 * Math.abs(Math.sin(frame * 0.5)));
                 ctx.fillStyle = 'rgba(122,14,14,' + a.toFixed(3) + ')'; ctx.fillRect(0, 0, GW, GH);
                 swFlash--;
               }
               if (ltnFlash > 0) {  // Force-lightning floods the void violet-white (steady under reduced motion)
-                const a = reduceMotion ? 0.12 : 0.22 * (0.5 + 0.5 * Math.abs(Math.sin(frame * 0.8)));
+                const a = api.reduceMotion ? 0.12 : 0.22 * (0.5 + 0.5 * Math.abs(Math.sin(frame * 0.8)));
                 ctx.fillStyle = 'rgba(150,110,255,' + a.toFixed(3) + ')'; ctx.fillRect(0, 0, GW, GH);
                 ltnFlash--;
               }
@@ -3823,7 +3836,7 @@
               const mx = cellW * mArch, my = GH * 0.15;
 
               // 2) blood moon + manga emphasis rays, seen through the arch (drawn before the wall)
-              const rot = reduceMotion ? 0.2 : frame * 0.0015;
+              const rot = api.reduceMotion ? 0.2 : frame * 0.0015;
               const RAYS = 30, RR = Math.hypot(GW, GH);
               ctx.save(); ctx.translate(mx, my);
               for (let i = 0; i < RAYS; i++) {
@@ -3844,7 +3857,7 @@
               ctx.beginPath(); ctx.arc(mx - 13, my - 5, 6.5, 0, Math.PI * 2); ctx.arc(mx + 11, my + 10, 5, 0, Math.PI * 2); ctx.arc(mx + 4, my - 16, 3.8, 0, Math.PI * 2); ctx.fill();
 
               // 3) a shaft of moonlight spilling from the moon's arch onto the floor
-              if (!reduceMotion) {
+              if (!api.reduceMotion) {
                 const beam = ctx.createLinearGradient(0, archBot, 0, GH);
                 beam.addColorStop(0, 'rgba(245,225,180,0.10)'); beam.addColorStop(1, 'rgba(245,225,180,0)');
                 ctx.fillStyle = beam; ctx.beginPath();
@@ -3902,7 +3915,7 @@
               // 9) roaring ゴゴゴ "menacing" onomatopoeia — bold, outlined, drifting up
               ctx.save(); ctx.textAlign = 'left'; ctx.lineJoin = 'round';
               for (const m of jojoBg) {
-                if (!reduceMotion) m.y += m.vy;
+                if (!api.reduceMotion) m.y += m.vy;
                 if (m.y < -34) { m.y = GH + 24; m.x = rnd() * GW; }
                 ctx.globalAlpha = Math.min(0.32, m.a * 2.4);
                 ctx.font = '900 ' + m.s.toFixed(0) + 'px serif';
@@ -3921,11 +3934,11 @@
               ctx.fillStyle = mg; ctx.fillRect(0, 0, GW, GH);
               for (const m of ianBg) {
                 if (m.kind === 'star') {
-                  ctx.globalAlpha = reduceMotion ? 0.6 : 0.35 + 0.45 * Math.abs(Math.sin((frame + m.x) * 0.05));
+                  ctx.globalAlpha = api.reduceMotion ? 0.6 : 0.35 + 0.45 * Math.abs(Math.sin((frame + m.x) * 0.05));
                   ctx.fillStyle = '#fff';
                   ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); ctx.fill();
                 } else {
-                  if (!reduceMotion) { m.y += m.vy; m.x += Math.sin((frame + m.ph) * 0.02) * 0.2; }
+                  if (!api.reduceMotion) { m.y += m.vy; m.x += Math.sin((frame + m.ph) * 0.02) * 0.2; }
                   if (m.y < -20) { m.y = GH + 16; m.x = rnd() * GW; }
                   ctx.globalAlpha = m.a; ctx.fillStyle = m.col;
                   ctx.font = m.s.toFixed(0) + 'px Tahoma,Arial'; ctx.textAlign = 'center';
@@ -3978,7 +3991,7 @@
             }
             for (const ck of coins) {
               if (ck.t < 120 && Math.floor(ck.t / 6) % 2 === 0) continue;  // blink before despawn
-              const spin = reduceMotion ? 0.82 : Math.abs(Math.cos((frame + (ck.x | 0)) * 0.07));  // edge-on coin flip
+              const spin = api.reduceMotion ? 0.82 : Math.abs(Math.cos((frame + (ck.x | 0)) * 0.07));  // edge-on coin flip
               const w = 1.6 + 6.4 * spin;
               ctx.save(); ctx.translate(ck.x, ck.y);
               ctx.fillStyle = 'rgba(0,0,0,0.18)';                          // contact shadow on the ground
@@ -4000,7 +4013,7 @@
               const pulse = 1 + Math.sin(frame * 0.12) * 0.12;
               ctx.save(); ctx.translate(pu.x, pu.y);
               const halo = ctx.createRadialGradient(0, 0, 4, 0, 0, 26);    // soft breathing aura
-              const ha = (reduceMotion ? 0.3 : 0.24 + 0.12 * Math.sin(frame * 0.12));
+              const ha = (api.reduceMotion ? 0.3 : 0.24 + 0.12 * Math.sin(frame * 0.12));
               halo.addColorStop(0, 'rgba(' + accent + ',' + ha.toFixed(3) + ')'); halo.addColorStop(1, 'rgba(' + accent + ',0)');
               ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI * 2); ctx.fill();
               ctx.scale(pulse, pulse);
@@ -4014,10 +4027,10 @@
               ctx.restore();
               // three motes orbiting the rune
               ctx.save(); ctx.translate(pu.x, pu.y); ctx.fillStyle = ac;
-              const rot = reduceMotion ? 0 : frame * 0.05;
+              const rot = api.reduceMotion ? 0 : frame * 0.05;
               for (let s = 0; s < 3; s++) {
                 const a = rot + s / 3 * Math.PI * 2;
-                ctx.globalAlpha = reduceMotion ? 0.6 : 0.4 + 0.4 * Math.abs(Math.sin(frame * 0.1 + s));
+                ctx.globalAlpha = api.reduceMotion ? 0.6 : 0.4 + 0.4 * Math.abs(Math.sin(frame * 0.1 + s));
                 ctx.beginPath(); ctx.arc(Math.cos(a) * 17, Math.sin(a) * 17, 1.7, 0, Math.PI * 2); ctx.fill();
               }
               ctx.restore();
@@ -4067,7 +4080,7 @@
               ctx.restore();
             }
             for (const w of warns) {
-              if (!reduceMotion && Math.floor(w.t / 5) % 2 === 0) continue;  // flash (steady when reduced motion)
+              if (!api.reduceMotion && Math.floor(w.t / 5) % 2 === 0) continue;  // flash (steady when reduced motion)
               ctx.beginPath(); ctx.arc(w.x, w.y, 11, 0, Math.PI * 2);
               ctx.fillStyle = 'rgba(255,0,0,0.25)'; ctx.fill();
               ctx.strokeStyle = '#ff5252'; ctx.lineWidth = 2; ctx.stroke();
@@ -4098,7 +4111,7 @@
               if (e.mode === 'cast') {
                 const prog = e.castDur ? clamp(1 - e.st / e.castDur, 0, 1) : 1;
                 const ox = e.x, oy = e.y - 24, len = 470;
-                const blink = reduceMotion ? 1 : (0.5 + 0.5 * Math.abs(Math.sin(frame * (0.15 + prog * 0.45))));
+                const blink = api.reduceMotion ? 1 : (0.5 + 0.5 * Math.abs(Math.sin(frame * (0.15 + prog * 0.45))));
                 ctx.save();
                 if (e.castKind === 'sweep') {
                   // the whole arc the rake will cross lights up as a danger wedge
@@ -4108,11 +4121,11 @@
                   // the two edges
                   ctx.globalAlpha = 0.4 + 0.55 * prog * blink;
                   ctx.strokeStyle = '#c9a9ff'; ctx.lineWidth = 1.5 + prog * 1.8; ctx.setLineDash([6, 5]);
-                  ctx.lineDashOffset = reduceMotion ? 0 : -frame * 1.5;
+                  ctx.lineDashOffset = api.reduceMotion ? 0 : -frame * 1.5;
                   for (const a of [c - arc, c + arc]) { ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + Math.cos(a) * len, oy + Math.sin(a) * len); ctx.stroke(); }
                   // a bright leading line previewing the sweep direction — flee the OTHER way
                   ctx.setLineDash([]);
-                  const t = reduceMotion ? 0.5 : (frame % 46) / 46;
+                  const t = api.reduceMotion ? 0.5 : (frame % 46) / 46;
                   const lead = (c - dirS * arc) + dirS * 2 * arc * t;
                   ctx.globalAlpha = 0.85; ctx.strokeStyle = '#fff0c0'; ctx.lineWidth = 2.4;
                   ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + Math.cos(lead) * len, oy + Math.sin(lead) * len); ctx.stroke();
@@ -4140,13 +4153,13 @@
                   // bright dashed centre line, pulsing faster the nearer it is to firing
                   ctx.globalAlpha = 0.4 + 0.6 * prog * blink;
                   ctx.strokeStyle = '#c9a9ff'; ctx.lineWidth = 1.5 + prog * 2.2;
-                  ctx.setLineDash([6, 5]); ctx.lineDashOffset = reduceMotion ? 0 : -frame * 1.5;
+                  ctx.setLineDash([6, 5]); ctx.lineDashOffset = api.reduceMotion ? 0 : -frame * 1.5;
                   ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + e.lx * len, oy + e.ly * len); ctx.stroke();
                 }
                 ctx.restore();
               } else if (e.mode === 'lightning') {
                 const ox = e.x, oy = e.y - 24, len = 470, segs = 16;
-                const px = -e.ly, py = e.lx, seed = reduceMotion ? 7 : frame;
+                const px = -e.ly, py = e.lx, seed = api.reduceMotion ? 7 : frame;
                 for (let pass = 0; pass < 2; pass++) {   // wide violet glow, then a bright white core
                   ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
                   ctx.shadowColor = '#9a6cff'; ctx.shadowBlur = pass === 0 ? 16 : 6;
@@ -4210,7 +4223,7 @@
             // the Aegis: a soft hex-bubble around the hero while it holds; a bright flash as it breaks
             if (player.shield || player.iframe > 0) {
               const breaking = !player.shield && player.iframe > 0;
-              const a = breaking ? player.iframe / 44 : (reduceMotion ? 0.5 : 0.42 + 0.18 * Math.sin(frame * 0.14));
+              const a = breaking ? player.iframe / 44 : (api.reduceMotion ? 0.5 : 0.42 + 0.18 * Math.sin(frame * 0.14));
               ctx.save(); ctx.translate(player.x, player.y - 14);
               ctx.strokeStyle = breaking ? 'rgba(200,240,255,' + a + ')' : 'rgba(127,216,255,' + a + ')';
               ctx.lineWidth = breaking ? 3.5 : 2.4;
@@ -4236,7 +4249,7 @@
               ctx.restore(); ctx.textAlign = 'left';
             }
             if (dioStopFx > 0) {   // a sharp white snap on the stop and on resume
-              ctx.save(); ctx.globalAlpha = (reduceMotion ? 0.25 : 0.5) * (dioStopFx / 12);
+              ctx.save(); ctx.globalAlpha = (api.reduceMotion ? 0.25 : 0.5) * (dioStopFx / 12);
               ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, GW, GH); ctx.restore();
             }
             for (let i = sparks.length - 1; i >= 0; i--) {
@@ -4343,35 +4356,35 @@
           function enemyColor(e) {
             if (freezeT > 0 || e.stun > 0 || e.frozen > 0) return '#8fd8ff';
             if (e.type === 'wraith')
-              return e.mode === 'aim' && (reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#5d4f8a' : '#16121e';
+              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#5d4f8a' : '#16121e';
             if (e.type === 'witchking')
-              return e.mode === 'aim' && (reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#7e57c2' : '#14101c';
+              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#7e57c2' : '#14101c';
             if (e.type === 'trooper')
-              return (swState === 'fire' && e.fireT < 10 && (reduceMotion || Math.floor(frame / 3) % 2 === 0)) ? '#ffd0d0' : '#f4f7f9';
+              return (swState === 'fire' && e.fireT < 10 && (api.reduceMotion || Math.floor(frame / 3) % 2 === 0)) ? '#ffd0d0' : '#f4f7f9';
             if (e.type === 'vader') {
-              const tell = reduceMotion || Math.floor(frame / 4) % 2 === 0;
+              const tell = api.reduceMotion || Math.floor(frame / 4) % 2 === 0;
               if ((e.mode === 'cast' || e.mode === 'choke') && tell) return '#3a2d4a';  // Force telegraph (violet)
               if (e.mode === 'wind' && tell) return '#3a3a3a';                          // melee tell (grey)
               return e.phase2 ? '#140a0a' : '#0a0a0a';
             }
             if (e.type === 'sidious') {
-              const tell = reduceMotion || Math.floor(frame / 4) % 2 === 0;
+              const tell = api.reduceMotion || Math.floor(frame / 4) % 2 === 0;
               if (e.mode === 'cast' && tell) return '#3a2750';   // lightning telegraph (violet)
               if (e.mode === 'wind' && tell) return '#2f2f33';   // spin tell (grey)
               return '#0a0a10';
             }
             if (e.type === 'guard') {
-              if (e.mode === 'aim' && (reduceMotion || Math.floor(frame / 4) % 2 === 0)) return '#ff6b6b';
+              if (e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0)) return '#ff6b6b';
               return '#9b1c1c';
             }
             if (e.type === 'dio') return '#1f1b29';   // drawDio uses its own palette
             if (e.type === 'ogre')
-              return e.mode === 'wind' && (reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#a1452f' : '#6d4c41';
+              return e.mode === 'wind' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#a1452f' : '#6d4c41';
             if (e.type === 'troll') return '#5d4037';
             if (e.type === 'archer')
-              return e.mode === 'aim' && (reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : '#cfc8a0';
+              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : '#cfc8a0';
             if (e.type === 'wolf')
-              return e.mode === 'aim' && (reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : '#546e7a';
+              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : '#546e7a';
             return '#1b5e20';
           }
 
@@ -4703,3 +4716,10 @@
           init(); frameStep();
           xp._sfCleanup = stopGame;
         }
+
+        // Public entry point. As a classic script this is already a window global, but
+        // make it explicit so it survives the obfuscated build (where this file is wrapped
+        // in an IIFE — top-level names no longer auto-attach to window). app.js's
+        // launchStickFighter() finds the chunk through this. Keep `openStickFighter` on the
+        // obfuscator's reserved-names list.
+        window.openStickFighter = openStickFighter;

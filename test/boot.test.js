@@ -103,9 +103,17 @@ test('the page loads and boots without throwing', async (t) => {
   // The input row is revealed and the global onclick handlers the inline HTML relies on
   // are present (these are the globals a no-IIFE regression would silently drop).
   assert.equal(window.document.getElementById('input-row').style.display, 'flex');
-  assert.equal(typeof window.toggleSound, 'function');
-  assert.equal(typeof window.focusCmd, 'function');
   assert.equal(typeof window.submitCommand, 'function');
+  // The public API the inline on* handlers in index.html call by name. These are
+  // explicitly exported to window (app.js) so they survive the obfuscated/IIFE build;
+  // this guards that export block against accidental removal.
+  for (const fn of ['toggleSound', 'focusCmd', 'unlockAchievement', 'toggleAchievements']) {
+    assert.equal(
+      typeof window[fn],
+      'function',
+      `window.${fn} must be exported for inline HTML handlers`
+    );
+  }
 });
 
 test('the help command dispatches and prints the command list', async (t) => {

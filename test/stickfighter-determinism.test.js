@@ -169,7 +169,20 @@ async function runGame({ seed, frames }) {
   Object.defineProperty(xp, 'offsetHeight', { configurable: true, value: 600 });
   window.document.body.appendChild(xp);
 
-  window.openStickFighter(xp); // runs init() (seeds the PRNG) + the first frameStep()
+  // The game takes its app.js dependencies through an explicit bridge (app.js's
+  // sfBridge()). Reconstruct a minimal one: the real makeRng (so seeding is the real
+  // PRNG), no-op/static stand-ins for the rest. Static flags are fine here — both runs
+  // use the same bridge, so the sim stays a pure function of the seed.
+  const api = {
+    unlockAchievement: window.unlockAchievement, // function decl → on window
+    _chirp: window._chirp, // no-ops anyway (sound off + no AudioContext)
+    makeRng: window.makeRng, // the real seeded PRNG
+    HAL_WORKER_URL: 'https://example.invalid', // leaderboard only fires on death; fetch is stubbed to reject
+    soundEnabled: false,
+    reduceMotion: false,
+    activeMusic: null,
+  };
+  window.openStickFighter(xp, api); // runs init() (seeds the PRNG) + the first frameStep()
   // Leave the intro and hold a direction so the sim actually advances (waves spawn,
   // enemies pursue — all RNG-driven).
   window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight' }));

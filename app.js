@@ -3841,8 +3841,27 @@
         // openStickFighter(xp). The running game parks its teardown on
         // xp._sfCleanup so shutdown() can stop it when the desktop closes.
         let sfLoading = null;
+        // Explicit dependency bridge: stickfighter.js used to read these app.js/lib
+        // globals as free variables (shared global scope). Passing them in instead
+        // means the game references nothing by free name — so it can be bundled/
+        // obfuscated as an independent lazy chunk without the cross-file name-mangling
+        // breaking. Live flags are getters (read current value); activeMusic also gets
+        // a setter (the game writes it). The KEYS here are the stable contract — keep
+        // them on the obfuscator's reserved-names list. See stickfighter.js header.
+        function sfBridge() {
+          return {
+            unlockAchievement,
+            _chirp,
+            makeRng,
+            HAL_WORKER_URL,
+            get soundEnabled() { return soundEnabled; },
+            get reduceMotion() { return reduceMotion; },
+            get activeMusic() { return activeMusic; },
+            set activeMusic(v) { activeMusic = v; },
+          };
+        }
         function launchStickFighter() {
-          if (typeof openStickFighter === 'function') { openStickFighter(xp); return; }
+          if (typeof openStickFighter === 'function') { openStickFighter(xp, sfBridge()); return; }
           if (!sfLoading) {
             sfLoading = new Promise((resolve, reject) => {
               const s = document.createElement('script');
@@ -3851,7 +3870,7 @@
               document.head.appendChild(s);
             });
           }
-          sfLoading.then(() => openStickFighter(xp)).catch(() => { sfLoading = null; });
+          sfLoading.then(() => openStickFighter(xp, sfBridge())).catch(() => { sfLoading = null; });
         }
         // ────────────────────────────────────────────────────────────
 
@@ -6765,3 +6784,16 @@ Of a bicycle built for two.`;
   // safety net: 26/26 reached but the finale never fired (e.g. closed mid-unlock)
   if (!endingSeen && foundEggs.size === ACHIEVEMENTS.length) setTimeout(armFinale, 3000);
   showEggNudge();
+
+  // ── Public API for index.html's inline on* handlers ──
+  // These are the only app.js names referenced from outside the file (the inline
+  // onclick handlers in index.html). As a classic script they're already window
+  // globals; making the exports explicit means they survive the obfuscated build,
+  // where this file is wrapped in an IIFE and top-level names no longer auto-attach
+  // to window. Keep these four on the obfuscator's reserved-names list.
+  // (openStickFighter is exported by stickfighter.js; the api bridge is passed in,
+  // not looked up by name — see launchStickFighter / sfBridge.)
+  window.unlockAchievement = unlockAchievement;
+  window.toggleAchievements = toggleAchievements;
+  window.toggleSound = toggleSound;
+  window.focusCmd = focusCmd;
