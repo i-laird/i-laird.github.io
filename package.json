@@ -19,6 +19,8 @@
     "format": "prettier --write \"**/*.{js,css,html,json,md}\"",
     "format:check": "prettier --check \"**/*.{js,css,html,json,md}\"",
     "serve": "python3 -m http.server 8000",
+    "build": "node scripts/build.js",
+    "verify-build": "node scripts/verify-build.js",
     "check": "npm run lint && npm run lint:html && npm run format:check && npm test"
   },
   "devDependencies": {
@@ -26,6 +28,7 @@
     "eslint": "^9.13.0",
     "globals": "^15.11.0",
     "html-validate": "^11.5.3",
+    "javascript-obfuscator": "^5.4.3",
     "jsdom": "^29.1.1",
     "prettier": "^3.3.3"
   },

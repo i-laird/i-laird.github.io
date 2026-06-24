@@ -14,7 +14,22 @@ const js = require('@eslint/js');
 const globals = require('globals');
 
 module.exports = [
-  { ignores: ['node_modules/**', '_site/**', 'vendor/**', 'assets/**'] },
+  { ignores: ['node_modules/**', '_site/**', 'vendor/**', 'assets/**', 'dist/**'] },
+
+  // Build tooling runs under Node.
+  {
+    files: ['scripts/**/*.js'],
+    ...js.configs.recommended,
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'commonjs',
+      globals: { ...globals.node },
+    },
+    rules: {
+      ...js.configs.recommended.rules,
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
 
   // Strict rules for the pure, testable helpers.
   {

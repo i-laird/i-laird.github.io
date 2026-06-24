@@ -1,0 +1,82 @@
+name: Build & deploy (obfuscated)
+
+# Produces the obfuscated dist/ (npm run build) and publishes it to GitHub Pages.
+# Runs the full check + the post-build verification first, so a broken or
+# obfuscation-mangled build never goes live.
+#
+# ⚠️ ONE-TIME SETUP to activate: Settings → Pages → Build and deployment →
+#    Source = "GitHub Actions" (it's currently "Deploy from a branch", which
+#    serves the CLEAN source from the repo root). Flipping it hands deployment to
+#    this workflow, so the served site becomes the obfuscated dist/. Until then
+#    this workflow's deploy step will fail / no-op while the branch deploy keeps
+#    serving clean source.
+#
+# Note: this obfuscates what's SERVED. The source in this repo is unaffected — if
+# the repo is public, the clean source is still browsable on github.com. Hiding
+# that is the separate private-source-repo step.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Least privilege + what the Pages deploy needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Don't cancel an in-flight Pages deploy; let it finish before the next runs.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Check, obfuscate & verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the deploy on the clean-source checks (lint + html-validate +
+      # format + the jsdom/determinism/isolation test suite).
+      - name: Lint, format & test
+        run: npm run check
+
+      # Obfuscate: heavy on the app bundle, light on the game chunk.
+      - name: Obfuscated build
+        run: npm run build
+
+      # Boot the obfuscated bundle in jsdom + time the game chunk — catches
+      # obfuscation breakage and a game perf regression before it ships.
+      - name: Verify obfuscated build
+        run: npm run verify-build
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload dist artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

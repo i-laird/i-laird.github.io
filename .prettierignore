@@ -17,3 +17,6 @@ _site/
 vendor/
 node_modules/
 package-lock.json
+
+# Obfuscated production build (generated, not formatted)
+dist/

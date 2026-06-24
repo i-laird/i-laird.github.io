@@ -1,10 +1,12 @@
 name: CI
 
+# Pull-request checks. Pushes to main are checked by deploy.yml (which runs the
+# same `npm run check` before building/deploying), so this no longer runs on push
+# to avoid a redundant double-run.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
 
 jobs:
   check:
