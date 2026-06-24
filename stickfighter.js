@@ -97,6 +97,9 @@
               sidiousActive, sidiousCue, sidiousIntroT, ltnBolts, ltnFlash, dlg, dlgT, sidFinale,
               jojoActive, jojoCue, jojoBg, dioStopT, dioStopFx, roadRoller, dioFinale, bossIntro, playerStand,
               ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned;
+          // online leaderboard ("hall of legends"): lbState drives the death screen
+          //   off=worker down/unscored · loading · enter=typing a name · submitting · view/done=show the board
+          let lbScores = null, lbState = 'off', lbName = '', lbRank = -1, lbScore = 0, lbWave = 0;
 
           function init() {
             player = { x: GW / 2, y: GH / 2, vx: 0, vy: 0, phase: 0,
@@ -123,6 +126,7 @@
             bossIntro = null;
             ianCue = 0; ianActive = false; ianChoice = null; ianFinale = null; mournful = false; endless = false; ianBg = [];
             wraithLunged = false; ogreSpawned = false;
+            lbScores = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
             up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
                    champs: { gandalf: false, luke: false, jotaro: false },
                    champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false };
@@ -1962,6 +1966,51 @@
             alive = false;
             if (score > best) { best = score; newBest = true; localStorage.setItem('ilaird_sf_best', String(best)); }
             sfSfx.die(); shake = 14;
+            lbBegin();
+          }
+
+          /* ── online leaderboard (the "hall of legends") ──
+             Backed by the same hal-worker service as the LLM-HAL game (GET /scores,
+             POST /score). Reads HAL_WORKER_URL — an app.js global (both are classic
+             scripts in one shared scope). Degrades silently to lbState='off' (the
+             original local-best death screen) whenever the worker is absent/unreachable. */
+          function lbBase() {
+            try { return (typeof HAL_WORKER_URL === 'string' && HAL_WORKER_URL) ? HAL_WORKER_URL : null; }
+            catch (_) { return null; }
+          }
+          function lbBegin() {
+            lbScore = score; lbWave = wave; lbRank = -1; lbName = ''; lbScores = null;
+            const base = lbBase();
+            if (!base || score <= 0) { lbState = 'off'; return; }
+            lbState = 'loading';
+            fetch(base + '/scores', { method: 'GET' })
+              .then(r => r.ok ? r.json() : Promise.reject(r.status))
+              .then(d => {
+                if (alive) return;                       // player already restarted — ignore the stale load
+                lbScores = (d && Array.isArray(d.scores)) ? d.scores.slice(0, 10) : [];
+                const lowest = lbScores.length >= 10 ? lbScores[lbScores.length - 1].score : 0;
+                lbState = (lbScores.length < 10 || lbScore > lowest) ? 'enter' : 'view';
+              })
+              .catch(() => { if (!alive) lbState = 'off'; });
+          }
+          function lbSubmit() {
+            const base = lbBase();
+            const nm = (lbName.trim() || 'AAA').slice(0, 10);
+            if (!base) { lbState = 'off'; return; }
+            lbState = 'submitting';
+            fetch(base + '/score', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ game: 'sf', name: nm, score: lbScore, wave: lbWave }),
+            })
+              .then(r => r.ok ? r.json() : Promise.reject(r.status))
+              .then(d => {
+                if (alive) return;                       // restarted mid-submit — drop the response
+                if (d && Array.isArray(d.scores)) lbScores = d.scores.slice(0, 10);
+                lbRank = (d && Number.isInteger(d.rank)) ? d.rank : -1;
+                lbState = 'done';
+              })
+              .catch(() => { if (!alive) lbState = 'view'; });   // show the board we already have
           }
 
           function panel(lines) {
@@ -1974,6 +2023,73 @@
               ctx.font = font; ctx.fillStyle = color;
               ctx.fillText(text, GW / 2, y);
               y += 34;
+            }
+            ctx.shadowBlur = 0; ctx.textAlign = 'left';
+          }
+
+          /* the game-over screen: epitaph + the online "hall of legends" leaderboard.
+             Off when the worker's unreachable (lbState 'off') → just the local best. */
+          function drawDeathScreen() {
+            ctx.fillStyle = 'rgba(0,0,0,0.62)';
+            ctx.fillRect(0, 0, GW, GH);
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
+
+            const cx = GW / 2;
+            const board = (lbState === 'view' || lbState === 'done' || lbState === 'submitting');
+            const rows = lbScores || [];
+            // height-aware top so a full 10-row board stays centred and on-screen
+            const blockH = board ? 150 + rows.length * 20 : lbState === 'enter' ? 230 : 150;
+            let y = Math.max(46, GH / 2 - blockH / 2);
+
+            ctx.font = 'bold 36px Tahoma,Arial'; ctx.fillStyle = 'white';
+            ctx.fillText('THOU ART SLAIN', cx, y); y += 32;
+            ctx.font = '18px Tahoma,Arial'; ctx.fillStyle = newBest ? '#ffd24d' : 'white';
+            ctx.fillText('SCORE ' + score + (newBest ? '   ★ NEW BEST ★' : '   ·   BEST ' + best), cx, y); y += 25;
+            ctx.font = '14px Tahoma,Arial'; ctx.fillStyle = '#ccc';
+            ctx.fillText('you survived ' + wave + (wave === 1 ? ' wave' : ' waves') +
+                         '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes'), cx, y); y += 30;
+
+            if (lbState === 'off' || lbState === 'error') {
+              ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
+              ctx.fillText('press R to rise again', cx, y);
+              ctx.shadowBlur = 0; ctx.textAlign = 'left';
+              return;
+            }
+
+            ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
+            ctx.fillText('— THE HALL OF LEGENDS —', cx, y); y += 28;
+
+            if (lbState === 'loading') {
+              ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#bbb';
+              ctx.fillText('ranking you among the fallen…', cx, y);
+            } else if (lbState === 'enter') {
+              ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = '#caffa0';
+              ctx.fillText('A NEW LEGEND IS BORN', cx, y); y += 30;
+              const caret = (Math.floor(deadT / 16) % 2) ? '▍' : ' ';   // deadT, not frame (frozen while dead)
+              ctx.font = 'bold 24px "Courier New",monospace'; ctx.fillStyle = '#fff';
+              ctx.fillText((lbName || '') + caret, cx, y); y += 26;
+              ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#8a949a';
+              ctx.fillText('type your name  ·  ENTER to enshrine it', cx, y);
+            } else {
+              ctx.font = '15px "Courier New",monospace';
+              if (rows.length === 0) {
+                ctx.fillStyle = '#bbb';
+                ctx.fillText('no legends yet — be the first', cx, y); y += 22;
+              }
+              for (let i = 0; i < rows.length; i++) {
+                const e = rows[i];
+                const isMe = i === lbRank;
+                ctx.fillStyle = isMe ? '#ffd24d' : i < 3 ? '#e8e8e8' : '#9aa3a8';
+                const rk = String(i + 1).padStart(2, ' ');
+                const nm = String(e.name || 'AAA').slice(0, 10).padEnd(10, ' ');
+                const sc = String(e.score).padStart(7, ' ');
+                ctx.fillText((isMe ? '▸ ' : '  ') + rk + '  ' + nm + ' ' + sc + (isMe ? ' ◂' : '  '), cx, y);
+                y += 20;
+              }
+              y += 8;
+              ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
+              ctx.fillText(lbState === 'submitting' ? 'recording your legend…' : 'press R to rise again', cx, y);
             }
             ctx.shadowBlur = 0; ctx.textAlign = 'left';
           }
@@ -3133,15 +3249,11 @@
               const fall = Math.min(1, deadT / 28);
               stickFigure(player.x, player.y, 0, 'white', 1, 1 - fall * 0.4, fall * Math.PI / 2);
               if (deadT > 34) {
-                panel([
-                  ['THOU ART SLAIN', 'bold 36px Tahoma,Arial', 'white'],
-                  ['SCORE ' + score + (newBest ? '   ★ NEW BEST ★' : '   ·   BEST ' + best),
-                    '18px Tahoma,Arial', newBest ? '#ffd24d' : 'white'],
-                  ['you survived ' + wave + (wave === 1 ? ' wave' : ' waves') + '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes'),
-                    '14px Tahoma,Arial', '#ccc'],
-                  ['press R to rise again', '13px Tahoma,Arial', '#ccc'],
-                ]);
-                hud.innerHTML = 'press R to play again';
+                drawDeathScreen();
+                hud.innerHTML = lbState === 'enter'      ? 'type your name · ENTER to submit'
+                              : lbState === 'loading'    ? 'reaching the hall of legends…'
+                              : lbState === 'submitting' ? 'recording your legend…'
+                              : 'press R to play again';
               }
               return;
             }
@@ -4472,6 +4584,15 @@
           }
           function onKey(e) {
             keys[e.key] = true;
+            // entering a name for the leaderboard after death — capture typing, swallow
+            // everything else (so letters/digits go into the name, not cheats or the R-restart)
+            if (!alive && lbState === 'enter') {
+              if (e.key === 'Enter') lbSubmit();
+              else if (e.key === 'Backspace') lbName = lbName.slice(0, -1);
+              else if (e.key.length === 1 && lbName.length < 10 && /[A-Za-z0-9._-]/.test(e.key)) lbName += e.key;
+              e.preventDefault();
+              return;
+            }
             // upgrade menu between waves — input only navigates the shop while paused
             if (paused && upMenu) {
               const rows = availableUpgrades();
