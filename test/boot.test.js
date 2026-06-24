@@ -21,7 +21,7 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 
 // Scripts in the exact order index.html loads them: the lib helpers define globals
 // app.js reads, then app.js itself.
-const SCRIPTS = ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'app.js'];
+const SCRIPTS = ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'lib/rng.js', 'app.js'];
 
 // Browser APIs jsdom doesn't implement that app.js touches at load time. app.js already
 // feature-guards matchMedia / AudioContext / speechSynthesis (so leaving those undefined

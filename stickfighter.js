@@ -84,11 +84,27 @@
           let simAcc = 0;
           const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+          /* ── Determinism foundation (groundwork for replays / future lockstep MP) ──
+             The sim is driven by a seeded PRNG instead of Math.random(), and timing
+             runs off a monotonic tick counter instead of the wall clock — so a run is
+             a pure function of (seed, inputs). For now the seed is random per run, so
+             single-player feels exactly as before; a future MP layer would share one
+             seed across both peers and feed identical inputs. `rnd()` is the drop-in
+             for Math.random() used everywhere in the simulation (audio jitter stays on
+             Math.random() on purpose — it's local/cosmetic and must not advance the
+             shared stream). See lib/rng.js. */
+          const SIM_HZ = 60;                  // logical sim ticks per second — the canonical clock rate
+          let tick = 0;                       // monotonic sim-tick counter; advances once per loop()
+          let sfSeed = 0;                     // this run's seed (random now; a shared seed enables lockstep later)
+          let sfSeedOverride = null;          // MP hook: set before a run to force a shared seed
+          let sfRng = Math.random;            // replaced with a seeded generator in init()
+          function rnd() { return sfRng(); }  // deterministic [0,1) — the simulation's only random source
+
           let best = parseInt(localStorage.getItem('ilaird_sf_best') || '0', 10) || 0;
           let player, enemies, warns, coins, powerups, blasts, sparks, ghosts,
               score, mult, wave, alive, started, frame, keys, rafId,
               freezeT, banner, bannerSub, bannerT, deadT, shake, newBest,
-              stone, stoneCd, stoneSeen, swordT, swingT, swingReadyAt,
+              stone, stoneCd, stoneSeen, swordT, swingT, swingReadyTick,
               meter, meterPrompted, allies, bolts, arrows, kills,
               nineActive, nineDone, wraithsLeft, waveQuota, breatherT,
               corpses, bossActive, bossRiseT, bossRiseX, bossRiseY,
@@ -102,6 +118,14 @@
           let lbScores = null, lbState = 'off', lbName = '', lbRank = -1, lbScore = 0, lbWave = 0;
 
           function init() {
+            // Seed the run. sfSeedOverride lets a future MP handshake pin a shared seed;
+            // otherwise we draw fresh entropy (Math.random/Date.now here is the ONE
+            // intentional non-deterministic input — it picks the seed, then never again).
+            sfSeed = (sfSeedOverride != null)
+              ? (sfSeedOverride >>> 0)
+              : (((Date.now() >>> 0) ^ ((Math.random() * 0x100000000) >>> 0)) >>> 0);
+            sfRng = (typeof makeRng === 'function') ? makeRng(sfSeed) : Math.random;  // fall back if lib/rng.js failed to load
+            tick = 0;
             player = { x: GW / 2, y: GH / 2, vx: 0, vy: 0, phase: 0,
                        fx: 1, fy: 0, dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0, shield: false };
             enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
@@ -110,7 +134,7 @@
             keys = {}; freezeT = 0; banner = ''; bannerSub = ''; bannerT = 0;
             deadT = 0; shake = 0; newBest = false;
             stone = null; stoneCd = 150; stoneSeen = false;
-            swordT = 0; swingT = 0; swingReadyAt = 0;
+            swordT = 0; swingT = 0; swingReadyTick = 0;
             meter = 0; meterPrompted = false; allies = []; kills = 0;
             nineActive = false; nineDone = false; wraithsLeft = 0;
             waveQuota = 11; breatherT = 0;
@@ -382,7 +406,7 @@
             bolt:  () => _chirp(1300, 'sine', 0.05, 0.05),
             saber: () => { _chirp(220, 'sawtooth', 0.3, 0.06); setTimeout(() => _chirp(180, 'sawtooth', 0.25, 0.05), 150); },
             saberHit: () => { _chirp(900, 'sawtooth', 0.08, 0.07); _chirp(450, 'square', 0.1, 0.05); },
-            ora:   () => _chirp(280 + Math.random() * 120, 'square', 0.05, 0.08),
+            ora:   () => _chirp(280 + Math.random() * 120, 'square', 0.05, 0.08),  // audio pitch jitter — kept OFF the sim RNG (local/cosmetic, may be muted per-machine)
             zawarudo: () => { _chirp(60, 'sine', 0.5, 0.14); setTimeout(() => _chirp(1200, 'sine', 0.4, 0.06), 100); },
             screech: () => { _chirp(1800, 'sawtooth', 0.35, 0.07); _chirp(1450, 'sawtooth', 0.3, 0.05); },
             blaster: () => { _chirp(1600, 'square', 0.04, 0.05); setTimeout(() => _chirp(640, 'square', 0.06, 0.05), 35); },
@@ -1170,7 +1194,7 @@
                 for (let a = 0; a < 3; a++) {
                   const ar = (frame * 0.5 + a * 2.1), rr = (4 + prog * 6);
                   ctx.beginPath(); ctx.moveTo(ox, oy);
-                  ctx.lineTo(ox + Math.cos(ar) * rr * 1.7 + (Math.random() - 0.5) * 3, oy + Math.sin(ar) * rr * 1.7 + (Math.random() - 0.5) * 3);
+                  ctx.lineTo(ox + Math.cos(ar) * rr * 1.7 + (rnd() - 0.5) * 3, oy + Math.sin(ar) * rr * 1.7 + (rnd() - 0.5) * 3);
                   ctx.stroke();
                 }
               }
@@ -1190,7 +1214,7 @@
                 for (const h of [h1, h2]) {
                   const a = frame * 0.4 + h.y;
                   ctx.beginPath(); ctx.moveTo(h.x, h.y);
-                  ctx.lineTo(h.x + Math.cos(a) * 5 + (Math.random() - 0.5) * 2, h.y + Math.sin(a) * 5 + (Math.random() - 0.5) * 2);
+                  ctx.lineTo(h.x + Math.cos(a) * 5 + (rnd() - 0.5) * 2, h.y + Math.sin(a) * 5 + (rnd() - 0.5) * 2);
                   ctx.stroke();
                 }
               }
@@ -1407,8 +1431,8 @@
               }
               // sparks flying off
               if (!reduceMotion && frame % 4 === 0) {
-                const t = targets[Math.floor(Math.random() * targets.length)];
-                sparks.push({ x: t.x + (Math.random() - 0.5) * 14, y: t.y + (Math.random() - 0.5) * 14, t: 8, color: '#d8c4ff', txt: '✦' });
+                const t = targets[Math.floor(rnd() * targets.length)];
+                sparks.push({ x: t.x + (rnd() - 0.5) * 14, y: t.y + (rnd() - 0.5) * 14, t: 8, color: '#d8c4ff', txt: '✦' });
               }
             }
           }
@@ -1445,7 +1469,7 @@
           function drawTheWorld(dir, alpha, mode) {
             const gold = '#e8c24a', lit = '#f6dd86', dk = '#6b5a1f', grn = '#5f9c52', pink = '#e84d8a';
             const muda = mode === 'muda';
-            const jt = reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : Math.random();
+            const jt = reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
             const sway = Math.sin(frame * 0.09) * 1.2;
             ctx.save(); ctx.globalAlpha = 0.82 * alpha; ctx.scale(dir, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -1469,7 +1493,7 @@
             _standArm(13, -44, 20 + reach, -29, gold, dk);
             if (muda && !reduceMotion) {
               ctx.globalAlpha = 0.28 * alpha; ctx.fillStyle = lit;
-              for (let i = 0; i < 3; i++) { const r = Math.random() * 15; ctx.beginPath(); ctx.arc(19 + r, -31 + (Math.random() * 6 - 3), 2.6, 0, Math.PI * 2); ctx.fill(); }
+              for (let i = 0; i < 3; i++) { const r = rnd() * 15; ctx.beginPath(); ctx.arc(19 + r, -31 + (rnd() * 6 - 3), 2.6, 0, Math.PI * 2); ctx.fill(); }
               ctx.globalAlpha = 0.82 * alpha;
             }
 
@@ -1494,7 +1518,7 @@
           // Star Platinum — Jotaro's violet Stand, looming over his shoulder during the DIO fight
           function drawStarPlatinum(dir, alpha, punching) {
             const pur = '#7d6fd6', lit = '#a99cf0', dk = '#352a63', cy = '#86f0e0', gold = '#e8c24a', skin = '#caa6ff';
-            const jt = reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : Math.random();
+            const jt = reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
             const sway = Math.sin(frame * 0.08) * 1.6;
             ctx.save(); ctx.globalAlpha = 0.78 * alpha; ctx.scale(dir, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -1523,7 +1547,7 @@
             _standArm(14, -44, 21 + reach, -30, pur, dk);
             if (punching && !reduceMotion) {
               ctx.globalAlpha = 0.28 * alpha; ctx.fillStyle = lit;
-              for (let i = 0; i < 3; i++) { const r = Math.random() * 17; ctx.beginPath(); ctx.arc(20 + r, -31 + (Math.random() * 6 - 3), 2.8, 0, Math.PI * 2); ctx.fill(); }
+              for (let i = 0; i < 3; i++) { const r = rnd() * 17; ctx.beginPath(); ctx.arc(20 + r, -31 + (rnd() * 6 - 3), 2.8, 0, Math.PI * 2); ctx.fill(); }
               ctx.globalAlpha = 0.78 * alpha;
             }
 
@@ -1557,7 +1581,7 @@
               // dissolve from the feet up: clip away the lower (cr) of the body, fade the rest, jitter as ash
               ctx.globalAlpha = 1 - cr * 0.55;
               ctx.beginPath(); ctx.rect(-46, -60, 92, 63 * (1 - cr)); ctx.clip();
-              if (!reduceMotion) ctx.translate((Math.random() - 0.5) * cr * 3, (Math.random() - 0.5) * cr * 2);
+              if (!reduceMotion) ctx.translate((rnd() - 0.5) * cr * 3, (rnd() - 0.5) * cr * 2);
             }
             if ((e.stand || 0) > 0.05) {   // The World rises above and behind DIO's shoulder
               ctx.save(); ctx.translate(-dir * 12, -24); ctx.scale(1.4, 1.4);
@@ -1705,7 +1729,7 @@
               stickFigure(t.x + 14, t.y, frame * 0.6, '#7e57c2');
               ctx.strokeStyle = '#b39ddb'; ctx.lineWidth = 3; ctx.lineCap = 'round';
               for (let i = 0; i < 3; i++) {
-                const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 14;
+                const a = rnd() * Math.PI * 2, r = 10 + rnd() * 14;
                 ctx.beginPath(); ctx.moveTo(t.x + 14, t.y - 20);
                 ctx.lineTo(t.x + Math.cos(a) * r, t.y - 20 + Math.sin(a) * r); ctx.stroke();
               }
@@ -1924,7 +1948,7 @@
               // the mini-boss falls hard — extra points, a meter surge, and a guaranteed powerup drop
               banner = 'the war-ogre falls!'; bannerSub = '+200'; bannerT = 130;
               score += 200; addMeter(30); shake = 14;
-              powerups.push({ x: e.x, y: e.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(Math.random() * 3)], t: 820 });
+              powerups.push({ x: e.x, y: e.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(rnd() * 3)], t: 820 });
             } else if (e.type === 'vader') {
               unlockAchievement('dark-lord');
               // the dark lord falls — but a darker master waits in the void. keep the saber.
@@ -1945,7 +1969,7 @@
               if (--wraithsLeft <= 0) {
                 // the last has fallen — but one of the bodies stirs
                 nineActive = false; bossActive = true;
-                const c = corpses[Math.floor(Math.random() * corpses.length)] || { x: player.x, y: 60 };
+                const c = corpses[Math.floor(rnd() * corpses.length)] || { x: player.x, y: 60 };
                 bossRiseX = c.x; bossRiseY = c.y; bossRiseT = 440;
                 banner = 'the Nine are fallen...'; bannerSub = 'but one will not stay dead'; bannerT = 130;
                 sfSfx.screech();
@@ -2097,19 +2121,19 @@
           /* ── spawning ── */
           function edgePoint() {
             for (let i = 0; i < 8; i++) {
-              const side = Math.floor(Math.random() * 4);
+              const side = Math.floor(rnd() * 4);
               let x, y;
-              if      (side === 0) { x = Math.random() * GW; y = 30; }
-              else if (side === 1) { x = GW - 30; y = Math.random() * GH; }
-              else if (side === 2) { x = Math.random() * GW; y = GH - 30; }
-              else                 { x = 30; y = Math.random() * GH; }
+              if      (side === 0) { x = rnd() * GW; y = 30; }
+              else if (side === 1) { x = GW - 30; y = rnd() * GH; }
+              else if (side === 2) { x = rnd() * GW; y = GH - 30; }
+              else                 { x = 30; y = rnd() * GH; }
               if (Math.hypot(x - player.x, y - player.y) > KEEP_OUT * 2) return { x, y };
             }
             return { x: 30, y: 30 };
           }
 
           function rollType() {
-            const r = Math.random();
+            const r = rnd();
             if (wave >= 4 && r < 0.15) return 'troll';
             if (wave >= 3 && r < 0.35) return 'archer';
             if (wave >= 2 && r < 0.6) return 'wolf';
@@ -2117,7 +2141,7 @@
           }
 
           function makeEnemy(type, x, y) {
-            const e = { type, x, y, vx: 0, vy: 0, phase: Math.random() * Math.PI * 2,
+            const e = { type, x, y, vx: 0, vy: 0, phase: rnd() * Math.PI * 2,
                         grz: 0, stun: 0 };
             if (type === 'goblin') { e.spd = Math.min(2.6, 1.35 + wave * 0.15); e.kr = 14; }
             if (type === 'wolf')   { e.spd = 1.15; e.kr = 13; e.mode = 'stalk'; e.st = 70; }
@@ -2176,7 +2200,7 @@
           function vaderTaunt(text, t) { banner = text; bannerSub = '— Darth Vader'; bannerT = t || 110; }
           // pick the next action when Vader reaches the player: melee slash, or a Force power
           function vaderNextAttack(e, d) {
-            const r = Math.random();
+            const r = rnd();
             if (e.disarmed) {                                  // no blade — telekinesis only, or stalk
               if (r < 0.6 && d < 160) startCast(e, 'push');
               else e.st = 22;
@@ -2240,8 +2264,8 @@
           // a leap target that circles the player — keeps him orbiting, not blinking to random corners
           function sidiousFlank(e) {
             const cur = Math.atan2(e.y - player.y, e.x - player.x);
-            const ang = cur + (Math.random() < 0.5 ? 1 : -1) * (0.7 + Math.random() * 0.6);
-            const rad = 155 + Math.random() * 55;
+            const ang = cur + (rnd() < 0.5 ? 1 : -1) * (0.7 + rnd() * 0.6);
+            const rad = 155 + rnd() * 55;
             return { x: clamp(player.x + Math.cos(ang) * rad, 30, GW - 30),
                      y: clamp(player.y + Math.sin(ang) * rad, 48, GH - 22) };
           }
@@ -2251,7 +2275,7 @@
             e.st = kind === 'sweep' ? 58 : 56; e.castDur = e.st;   // the rake telegraphs a touch longer
             if (kind === 'sweep') {
               const pa = Math.atan2(ly, lx);
-              e.sweepDir = Math.random() < 0.5 ? 1 : -1;
+              e.sweepDir = rnd() < 0.5 ? 1 : -1;
               e.sweepArc = 0.85; e.sweepCenterA = pa;            // narrower arc → a clear side to flee toward
               const startA = pa - e.sweepDir * e.sweepArc / 2;   // begin at one edge so the rake crosses the player
               e.lx = Math.cos(startA); e.ly = Math.sin(startA);
@@ -2323,7 +2347,7 @@
             sfSfx.zawarudo();
             sparks.push({ x: GW / 2, y: 50, t: 24, color: '#fff', txt: 'ZA WARUDO!' });
           }
-          function dioKnife(x, y, vx, vy, scale) { return { x, y, vx, vy, t: 360, kind: 'knife', spin: Math.random() * 6, scale: scale || 1 }; }
+          function dioKnife(x, y, vx, vy, scale) { return { x, y, vx, vy, t: 360, kind: 'knife', spin: rnd() * 6, scale: scale || 1 }; }
           function startJojo() {
             jojoActive = true; jojoCue = 0;
             enemies = []; warns = []; arrows = []; bolts = []; coins = []; powerups = []; blasts = []; corpses = [];
@@ -2333,7 +2357,7 @@
             if (allies.length) { allies.forEach(g => sparks.push({ x: g.x, y: g.y - 50, t: 30, color: '#fff', txt: '...gone.' })); allies = []; }
             player.x = GW * 0.26; player.y = GH / 2; player.vx = 0; player.vy = 0; player.choke = 0; player.stunT = 0;
             jojoBg = [];   // drifting ゴ menacing glyphs
-            for (let i = 0; i < 22; i++) jojoBg.push({ x: Math.random() * GW, y: Math.random() * GH, s: 14 + Math.random() * 34, vy: -(0.08 + Math.random() * 0.30), a: 0.05 + Math.random() * 0.09 });
+            for (let i = 0; i < 22; i++) jojoBg.push({ x: rnd() * GW, y: rnd() * GH, s: 14 + rnd() * 34, vy: -(0.08 + rnd() * 0.30), a: 0.05 + rnd() * 0.09 });
             enemies.push(makeEnemy('dio', GW * 0.78, GH / 2));
             banner = 'KONO DIO DA!'; bannerSub = '— DIO'; bannerT = 150;
             shake = 12; sfSfx.summon();
@@ -2380,7 +2404,7 @@
             for (let i = 0; i < 15; i++) {
               const edge = i / 15 * Math.PI * 2;
               const sx = px + Math.cos(edge) * 360, sy = py + Math.sin(edge) * 320;
-              const a = Math.atan2(py - sy, px - sx) + (Math.random() - 0.5) * 0.55;
+              const a = Math.atan2(py - sy, px - sx) + (rnd() - 0.5) * 0.55;
               arrows.push(dioKnife(clamp(sx, -16, GW + 16), clamp(sy, -16, GH + 16), Math.cos(a) * 3.3, Math.sin(a) * 3.3));
             }
           }
@@ -2400,7 +2424,7 @@
               r.y += 5.4;
               if (r.y >= r.zoneY) { r.y = r.zoneY; r.phase = 'impact'; r.t = 0; shake = 22; sfSfx.bomb(); }
             } else {                                   // impact — lethal a beat, MUDA spam, then gone
-              if (r.t % 3 === 0) sparks.push({ x: r.zoneX + (Math.random() - 0.5) * 80, y: r.zoneY - Math.random() * 46, t: 8, color: '#ffe082', txt: 'MUDA' });
+              if (r.t % 3 === 0) sparks.push({ x: r.zoneX + (rnd() - 0.5) * 80, y: r.zoneY - rnd() * 46, t: 8, color: '#ffe082', txt: 'MUDA' });
               if (r.t > 44) roadRoller = null;
             }
           }
@@ -2426,7 +2450,7 @@
             } else {                                              // he crumbles to dust from the feet up
               if (e) e.crumble = clamp(f.t / 120, 0, 1);
               if (!reduceMotion && f.t % 2 === 0 && e) {
-                sparks.push({ x: e.x + (Math.random() - 0.5) * 26, y: e.y - 6 - (e.crumble || 0) * 42 + (Math.random() - 0.5) * 10, t: 22 + Math.random() * 24, color: Math.random() < 0.5 ? '#d8c9a4' : '#caa6ff', txt: '·' });
+                sparks.push({ x: e.x + (rnd() - 0.5) * 26, y: e.y - 6 - (e.crumble || 0) * 42 + (rnd() - 0.5) * 10, t: 22 + rnd() * 24, color: rnd() < 0.5 ? '#d8c9a4' : '#caa6ff', txt: '·' });
               }
               if (f.t >= 132) { finishDioFinale(); return; }
             }
@@ -2457,12 +2481,12 @@
             enemies.push(makeEnemy('ian', GW * 0.7, GH / 2 + 6));
             // the creator's cozy little room: a warm starfield with drifting hearts & code glyphs
             ianBg = [];
-            for (let i = 0; i < 48; i++) ianBg.push({ kind: 'star', x: Math.random() * GW, y: Math.random() * GH * 0.9, r: Math.random() * 1.3 + 0.3 });
+            for (let i = 0; i < 48; i++) ianBg.push({ kind: 'star', x: rnd() * GW, y: rnd() * GH * 0.9, r: rnd() * 1.3 + 0.3 });
             const glyphs = ['♥', '♡', '✦', '✧', '★', '{ }', '</>', '⟨⟩', '✿', '♪'];
             const cols = ['#ffd6e7', '#cdb4ff', '#b4e1ff', '#fff0b4', '#c8ffd4', '#ffc4d6'];
-            for (let i = 0; i < 16; i++) ianBg.push({ kind: 'mote', x: Math.random() * GW, y: Math.random() * GH,
-              s: 12 + Math.random() * 16, vy: -(0.12 + Math.random() * 0.4), a: 0.12 + Math.random() * 0.18,
-              ph: Math.random() * 100, ch: glyphs[Math.floor(Math.random() * glyphs.length)], col: cols[Math.floor(Math.random() * cols.length)] });
+            for (let i = 0; i < 16; i++) ianBg.push({ kind: 'mote', x: rnd() * GW, y: rnd() * GH,
+              s: 12 + rnd() * 16, vy: -(0.12 + rnd() * 0.4), a: 0.12 + rnd() * 0.18,
+              ph: rnd() * 100, ch: glyphs[Math.floor(rnd() * glyphs.length)], col: cols[Math.floor(rnd() * cols.length)] });
             banner = ''; bannerSub = ''; bannerT = 0;
             dlg = []; dlgT = 72;        // the plea is delivered on the intro card — here, just a beat, then the choice
             shake = 6;
@@ -2496,7 +2520,7 @@
                 if (f.t >= 30) { f.phase = 'fall'; f.t = 0; if (e) { e.mode = 'dying'; e.crumble = 0; } sfSfx.die(); shake = 14; }
               } else {                                       // he fades to ash
                 if (e) e.crumble = clamp(f.t / 90, 0, 1);
-                if (!reduceMotion && f.t % 3 === 0 && e) sparks.push({ x: e.x + (Math.random() - 0.5) * 22, y: e.y - 18 - (e.crumble || 0) * 28, t: 26, color: '#9e9e9e', txt: '·' });
+                if (!reduceMotion && f.t % 3 === 0 && e) sparks.push({ x: e.x + (rnd() - 0.5) * 22, y: e.y - 18 - (e.crumble || 0) * 28, t: 26, color: '#9e9e9e', txt: '·' });
                 if (f.t >= 116) { finishIanKill(); return; }
               }
             } else {
@@ -2565,7 +2589,7 @@
             arrows = []; ltnBolts = []; ltnFlash = 26;
             heldSaber = true; saberPickup = null;           // the blue lightsaber carries into the duel
             banishAllies();                                 // face the Emperor alone
-            if (!swStars.length) { for (let i = 0; i < 70; i++) swStars.push({ x: Math.random() * GW, y: Math.random() * GH, r: Math.random() * 1.3 + 0.3 }); }
+            if (!swStars.length) { for (let i = 0; i < 70; i++) swStars.push({ x: rnd() * GW, y: rnd() * GH, r: rnd() * 1.3 + 0.3 }); }
             player.choke = 0; player.stunT = 0;
             // the Emperor stands at the far side, flanked by two Royal Guards
             const sx = GW * 0.82, sy = GH / 2;
@@ -2585,8 +2609,8 @@
 
           function farPoint(margin) {
             for (let i = 0; i < 12; i++) {
-              const x = margin + Math.random() * (GW - margin * 2);
-              const y = margin + Math.random() * (GH - margin * 2);
+              const x = margin + rnd() * (GW - margin * 2);
+              const y = margin + rnd() * (GH - margin * 2);
               if (Math.hypot(x - player.x, y - player.y) > KEEP_OUT) return { x, y };
             }
             return { x: GW / 2, y: 60 };
@@ -2603,17 +2627,17 @@
             // a world in mourning: the horde no longer hunts you — it just wanders, milling about aimlessly
             if (mournful && (e.type === 'goblin' || e.type === 'wolf' || e.type === 'archer' || e.type === 'troll')) {
               if (e.wt === undefined || --e.wt <= 0) {                 // pick a new gentle heading now and then
-                e.wang = Math.random() * Math.PI * 2;
-                e.wt = 70 + Math.random() * 150;
-                e.wsp = 0.25 + Math.random() * 0.6;
-                if (Math.random() < 0.25) e.wsp = 0;                   // sometimes just pause and rest
+                e.wang = rnd() * Math.PI * 2;
+                e.wt = 70 + rnd() * 150;
+                e.wsp = 0.25 + rnd() * 0.6;
+                if (rnd() < 0.25) e.wsp = 0;                   // sometimes just pause and rest
               }
               e.vx = Math.cos(e.wang) * (e.wsp || 0); e.vy = Math.sin(e.wang) * (e.wsp || 0);
               e.x += e.vx; e.y += e.vy;
               if (e.x < 22 || e.x > GW - 22) { e.wang = Math.PI - e.wang; e.x = clamp(e.x, 22, GW - 22); }  // turn at the walls
               if (e.y < 42 || e.y > GH - 14) { e.wang = -e.wang; e.y = clamp(e.y, 42, GH - 14); }
               e.phase += 0.05 + (e.wsp || 0) * 0.12;
-              if (!reduceMotion && Math.random() < 0.005) sparks.push({ x: e.x - 4 + Math.random() * 8, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' });
+              if (!reduceMotion && rnd() < 0.005) sparks.push({ x: e.x - 4 + rnd() * 8, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' });
               return;
             }
             const dx = player.x - e.x, dy = player.y - e.y, d = Math.hypot(dx, dy) || 1;
@@ -2641,7 +2665,7 @@
                 e.x += e.lx * 7.4; e.y += e.ly * 7.4; e.phase += 0.5;
                 if (e.x < 18 || e.x > GW - 18) { e.lx = -e.lx; e.x = clamp(e.x, 18, GW - 18); }
                 if (e.y < 44 || e.y > GH - 14) { e.ly = -e.ly; e.y = clamp(e.y, 44, GH - 14); }
-                if (e.st <= 0) { e.mode = 'stalk'; e.st = 56 + Math.random() * 34; }
+                if (e.st <= 0) { e.mode = 'stalk'; e.st = 56 + rnd() * 34; }
               }
             } else if (e.type === 'wraith') {
               // the Nine hunt as one: orbit, tighten the ring, then strike together
@@ -2666,7 +2690,7 @@
                   if (e.slot !== undefined && enemies.find(o => o.type === 'wraith' && !o.dead) === e) {
                     sfSfx.screech();
                     // recorded screech: always on the first lunge, then 20% of the time
-                    if (!wraithLunged || Math.random() < 0.2) playWraithScreech();
+                    if (!wraithLunged || rnd() < 0.2) playWraithScreech();
                     wraithLunged = true;
                   }
                 }
@@ -2689,7 +2713,7 @@
                   if (e.st <= 0) { e.mode = 'dive'; e.st = 30; e.lx = dx / d; e.ly = dy / d; sfSfx.screech(); }
                 } else { // dive
                   e.x += e.lx * 6.84; e.y += e.ly * 6.84; e.phase += 0.55;
-                  if (e.st <= 0) { e.mode = 'hover'; e.st = 80 + Math.random() * 40; }
+                  if (e.st <= 0) { e.mode = 'hover'; e.st = 80 + rnd() * 40; }
                 }
               } else {
                 // on foot: stalk, then wind up the flail and whip it round in a deadly arc
@@ -2704,7 +2728,7 @@
                 } else { // swing
                   e.flailAng += 0.5;
                   e.x += dx / d * 0.6; e.y += dy / d * 0.6;
-                  if (e.st <= 0) { e.mode = 'walk'; e.st = 50 + Math.random() * 30; }
+                  if (e.st <= 0) { e.mode = 'walk'; e.st = 50 + rnd() * 30; }
                 }
               }
             } else if (e.type === 'trooper') {
@@ -2717,14 +2741,14 @@
                 e.phase += 0.05;
                 if (swState === 'fire' && --e.fireT <= 0) {
                   // stormtroopers can't aim: wide spread keeps the volley dodgeable
-                  const spread = (Math.random() - 0.5) * 0.5;
+                  const spread = (rnd() - 0.5) * 0.5;
                   const ca = Math.cos(spread), sa = Math.sin(spread);
                   const ux = dx / d, uy = dy / d;
                   arrows.push({ x: e.x, y: e.y - 18,
                                 vx: (ux * ca - uy * sa) * 5.2, vy: (ux * sa + uy * ca) * 5.2,
                                 t: 240, kind: 'laser' });
                   sfSfx.blaster();
-                  e.fireT = 70 + Math.random() * 90;
+                  e.fireT = 70 + rnd() * 90;
                 }
               }
             } else if (e.type === 'vader') {
@@ -2747,8 +2771,8 @@
                 e.slashAng += (e.phase2 ? 2.4 : 2.0) / 22;
                 e.x += e.lx * 3.0; e.y += e.ly * 3.0; e.phase += 0.2;
                 if (e.st <= 0) {
-                  if (e.phase2 && !e.combo && Math.random() < 0.5) { e.combo = true; e.mode = 'wind'; e.st = 10; }  // quick follow-up
-                  else { e.combo = false; e.mode = 'advance'; e.st = (e.phase2 ? 18 : 34) + Math.random() * 22; }
+                  if (e.phase2 && !e.combo && rnd() < 0.5) { e.combo = true; e.mode = 'wind'; e.st = 10; }  // quick follow-up
+                  else { e.combo = false; e.mode = 'advance'; e.st = (e.phase2 ? 18 : 34) + rnd() * 22; }
                 }
               } else if (e.mode === 'cast') {                          // hand-raised Force telegraph, then unleash
                 if (e.st <= 0) {
@@ -2760,7 +2784,7 @@
               } else if (e.mode === 'choke') {                         // hold the player aloft until broken or it ends
                 if (player.choke <= 0) { e.mode = 'recover'; e.st = 28; }
               } else if (e.mode === 'recover') {
-                if (e.st <= 0) { e.mode = 'advance'; e.st = (e.phase2 ? 16 : 28) + Math.random() * 20; }
+                if (e.st <= 0) { e.mode = 'advance'; e.st = (e.phase2 ? 16 : 28) + rnd() * 20; }
               }
             } else if (e.type === 'sidious') {
               // Clone Wars Sidious: fast & acrobatic — weaving rushes, a twin-saber spin, Force lightning, telegraphed leaps
@@ -2782,7 +2806,7 @@
                 e.y += dy / d * e.spd + ( dx / d) * wv;
                 e.phase += 0.18;
                 if (e.st <= 0) {
-                  const r = Math.random();
+                  const r = rnd();
                   if (e.phase2) {
                     // lightning only: a straight bolt, a sweeping rake, or a leap — but never two rakes in a row
                     if (e.lastCast === 'sweep') {
@@ -2842,7 +2866,7 @@
                 if (e.st % 4 === 0) ltnFlash = Math.max(ltnFlash, 8);
                 if (e.st <= 0) { e.mode = 'recover'; e.st = e.phase2 ? 22 : 24; }
               } else if (e.mode === 'recover') {
-                if (e.st <= 0) { e.mode = 'stalk'; e.st = (e.phase2 ? 20 : 22) + Math.random() * 20; }
+                if (e.st <= 0) { e.mode = 'stalk'; e.st = (e.phase2 ? 20 : 22) + rnd() * 20; }
               }
               e.mvx = e.x - _px; e.mvy = e.y - _py;                    // per-tick movement → motion-blur ghosts
             } else if (e.type === 'guard') {
@@ -2859,7 +2883,7 @@
                 if (e.st <= 0) { e.mode = 'lunge'; e.st = 18; e.lx = dx / d; e.ly = dy / d; sfSfx.lunge(); }
               } else { // lunge
                 e.x += e.lx * 4.0; e.y += e.ly * 4.0; e.phase += 0.3; e.pike += 0.32;
-                if (e.st <= 0) { e.mode = 'stalk'; e.st = 34 + Math.random() * 22; }
+                if (e.st <= 0) { e.mode = 'stalk'; e.st = 34 + rnd() * 22; }
               }
             } else if (e.type === 'dio') {
               if (e.mode === 'dying') return;                        // the crumble cutscene drives him now
@@ -2877,7 +2901,7 @@
                   e.x += -dy / d * Math.sin(frame * 0.035) * 0.4; e.y += dx / d * Math.sin(frame * 0.035) * 0.4;   // a slow, readable sway
                 }
                 if (e.st <= 0 && dioStopT <= 0) {
-                  const r = Math.random();
+                  const r = rnd();
                   if (!e.rollerDone && e.hp <= e.maxhp * 0.45 && r < 0.45) { e.rollerDone = true; startRoller(e); }
                   else if (r < 0.34) { e.mode = 'knives'; e.st = 40; }    // a longer wind-up you can read
                   else if (r < 0.66) { e.mode = 'world'; e.st = 46; }
@@ -2894,14 +2918,14 @@
                 if (e.st === 16) sparks.push({ x: e.x, y: e.y - 42, t: 18, color: '#ffd24d', txt: 'THE WORLD' });
                 if (e.st <= 0) { e.mode = 'muda'; e.st = 26; sfSfx.ora(); }
               } else if (e.mode === 'muda') {                         // MUDA barrage — lethal ring around him
-                if (e.st % 3 === 0) { sfSfx.ora(); sparks.push({ x: e.x + (Math.random() - 0.5) * 64, y: e.y - 18 - Math.random() * 34, t: 8, color: '#ffe082', txt: 'MUDA' }); }
+                if (e.st % 3 === 0) { sfSfx.ora(); sparks.push({ x: e.x + (rnd() - 0.5) * 64, y: e.y - 18 - rnd() * 34, t: 8, color: '#ffe082', txt: 'MUDA' }); }
                 if (e.st <= 0) { e.mode = 'recover'; e.st = 38; }
               } else if (e.mode === 'barrage') {                      // timestop knife wall (placed in startBarrage)
                 if (dioStopT <= 0 && e.st <= 0) { e.mode = 'recover'; e.st = 34; }
               } else if (e.mode === 'roller') {                       // the road roller does the work
                 if (!roadRoller && e.st <= 0) { e.mode = 'recover'; e.st = 44; }
               } else if (e.mode === 'recover') {
-                if (e.st <= 0) { e.mode = 'idle'; e.st = 38 + Math.random() * 26; }   // a real breather between attacks
+                if (e.st <= 0) { e.mode = 'idle'; e.st = 38 + rnd() * 26; }   // a real breather between attacks
               }
             } else if (e.type === 'archer') {
               // skeleton archer: keep range, telegraph, loose an arrow
@@ -2915,7 +2939,7 @@
                 if (e.st <= 0) {
                   arrows.push({ x: e.x, y: e.y - 18, vx: dx / d * 4.6, vy: dy / d * 4.6, t: 240 });
                   sfSfx.arrow();
-                  e.mode = 'cool'; e.st = 110 + Math.random() * 60;
+                  e.mode = 'cool'; e.st = 110 + rnd() * 60;
                 }
               } else { // cool
                 if (d < 170) { e.x -= dx / d * e.spd * 0.8; e.y -= dy / d * e.spd * 0.8; e.phase += 0.14; }
@@ -2940,7 +2964,7 @@
                 e.phase += 0.55;
                 if (e.st <= 0) { e.mode = 'rest'; e.st = 26; }
               } else { // rest
-                if (e.st <= 0) { e.mode = 'stalk'; e.st = 70 + Math.random() * 50; }
+                if (e.st <= 0) { e.mode = 'stalk'; e.st = 70 + rnd() * 50; }
               }
             }
             e.x = clamp(e.x, -60, GW + 60);
@@ -3221,6 +3245,7 @@
           }
 
           function loop() {
+            tick++;                          // the deterministic sim clock — advances once per logical tick
 
             /* intro screen */
             if (!started) {
@@ -3417,7 +3442,7 @@
             }
             if (frame > 800 && frame % 660 === 0 && powerups.length < 1 && !ianActive && !mournful && !jojoActive) {
               const p = farPoint(70);
-              powerups.push({ x: p.x, y: p.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(Math.random() * 3)], t: 700 });
+              powerups.push({ x: p.x, y: p.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(rnd() * 3)], t: 700 });
             }
             for (let i = coins.length - 1; i >= 0; i--) {
               const ck = coins[i];
@@ -3490,15 +3515,15 @@
                 const grow = b.kind === 'fire' ? FIRE_R : FROST_R;
                 b.r = grow * Math.min(1, b.t / (b.kind === 'fire' ? 12 : 9));
                 if (!reduceMotion && b.t % 2 === 0) {
-                  const ang = Math.random() * Math.PI * 2, rr = b.r * (0.7 + Math.random() * 0.35);
+                  const ang = rnd() * Math.PI * 2, rr = b.r * (0.7 + rnd() * 0.35);
                   if (b.kind === 'fire')
-                    sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 16, color: Math.random() < 0.5 ? '#ffb74d' : '#ff7043', txt: '✦' });
+                    sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 16, color: rnd() < 0.5 ? '#ffb74d' : '#ff7043', txt: '✦' });
                   else
                     sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 18, color: '#b3e5fc', txt: '❄' });
                 }
               } else if (b.kind === 'chain' && !reduceMotion && b.t % 2 === 0 && b.pts.length > 1) {
-                const seg = b.pts[Math.floor(Math.random() * (b.pts.length - 1)) + 1];
-                sparks.push({ x: seg.x + (Math.random() * 16 - 8), y: seg.y + (Math.random() * 16 - 8), t: 12, color: '#cff3ff', txt: '·' });
+                const seg = b.pts[Math.floor(rnd() * (b.pts.length - 1)) + 1];
+                sparks.push({ x: seg.x + (rnd() * 16 - 8), y: seg.y + (rnd() * 16 - 8), t: 12, color: '#cff3ff', txt: '·' });
               }
               if (b.t >= b.life) blasts.splice(i, 1);
             }
@@ -3623,7 +3648,7 @@
                     t.stun = 20;
                     if (g.oraT % 3 === 0) {
                       sfSfx.ora();
-                      sparks.push({ x: t.x + (Math.random() - 0.5) * 26, y: t.y - 14 - Math.random() * 22, t: 8, color: '#b39ddb', txt: 'ORA' });
+                      sparks.push({ x: t.x + (rnd() - 0.5) * 26, y: t.y - 14 - rnd() * 22, t: 8, color: '#b39ddb', txt: 'ORA' });
                     }
                     if (g.oraT === 0) { killEnemy(t); g.target = null; }
                   }
@@ -3753,7 +3778,7 @@
             /* ── render ── */
             ctx.clearRect(0, 0, GW, GH);
             ctx.save();
-            if (shake > 0) { shake--; if (!reduceMotion) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake); }
+            if (shake > 0) { shake--; if (!reduceMotion) ctx.translate((rnd() - 0.5) * shake, (rnd() - 0.5) * shake); }
 
             if (swActive) {
               // the corridor: black void + a fixed starfield
@@ -3878,7 +3903,7 @@
               ctx.save(); ctx.textAlign = 'left'; ctx.lineJoin = 'round';
               for (const m of jojoBg) {
                 if (!reduceMotion) m.y += m.vy;
-                if (m.y < -34) { m.y = GH + 24; m.x = Math.random() * GW; }
+                if (m.y < -34) { m.y = GH + 24; m.x = rnd() * GW; }
                 ctx.globalAlpha = Math.min(0.32, m.a * 2.4);
                 ctx.font = '900 ' + m.s.toFixed(0) + 'px serif';
                 ctx.lineWidth = 2.4; ctx.strokeStyle = 'rgba(18,7,28,0.95)'; ctx.fillStyle = '#d6bcff';
@@ -3901,7 +3926,7 @@
                   ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); ctx.fill();
                 } else {
                   if (!reduceMotion) { m.y += m.vy; m.x += Math.sin((frame + m.ph) * 0.02) * 0.2; }
-                  if (m.y < -20) { m.y = GH + 16; m.x = Math.random() * GW; }
+                  if (m.y < -20) { m.y = GH + 16; m.x = rnd() * GW; }
                   ctx.globalAlpha = m.a; ctx.fillStyle = m.col;
                   ctx.font = m.s.toFixed(0) + 'px Tahoma,Arial'; ctx.textAlign = 'center';
                   ctx.fillText(m.ch, m.x, m.y);
@@ -4362,9 +4387,10 @@
           }
 
           function trySwing() {
-            const now = performance.now();
-            if (!started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || (swordT <= 0 && !heldSaber) || now < swingReadyAt) return;
-            swingReadyAt = now + up.swingMs; swingT = 10;
+            // Cooldown is gated on the sim tick (not performance.now) so it's part of the
+            // deterministic state. up.swingMs stays in ms for the upgrade defs; convert here.
+            if (!started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || (swordT <= 0 && !heldSaber) || tick < swingReadyTick) return;
+            swingReadyTick = tick + Math.round(up.swingMs * SIM_HZ / 1000); swingT = 10;
             heldSaber ? sfSfx.saberHit() : sfSfx.swing();
             const fd = Math.hypot(player.fx, player.fy) || 1;
             const fx = player.fx / fd, fy = player.fy / fd;
@@ -4400,7 +4426,7 @@
                 sparks.push({ x: a.x, y: a.y, t: 12, color: '#fff', txt: '✦' });
                 if (a.kind === 'laser') {
                   // deflect the blaster bolt off in a random direction — now yours, lethal to troopers
-                  const ang = Math.random() * Math.PI * 2;
+                  const ang = rnd() * Math.PI * 2;
                   const spd = Math.hypot(a.vx, a.vy) || 5.2;
                   a.vx = Math.cos(ang) * spd; a.vy = Math.sin(ang) * spd;
                   a.reflected = true; a.t = 240;
@@ -4472,7 +4498,7 @@
             // a fixed starfield so it doesn't flicker frame to frame
             swStars = [];
             for (let i = 0; i < 70; i++) {
-              swStars.push({ x: Math.random() * GW, y: Math.random() * GH, r: Math.random() * 1.3 + 0.3 });
+              swStars.push({ x: rnd() * GW, y: rnd() * GH, r: rnd() * 1.3 + 0.3 });
             }
             const cols = 4, rows = 4;
             // tight formation, pushed to the right of the room
@@ -4485,7 +4511,7 @@
                 // (spawn x stays within updateEnemy's GW+60 clamp so the ranks don't bunch up)
                 const e = makeEnemy('trooper', GW + 16 + (cols - 1 - c) * 14, slotY);
                 e.slotX = slotX; e.slotY = slotY;
-                e.fireT = 50 + Math.random() * 150;   // staggered so the volley isn't a single wall
+                e.fireT = 50 + rnd() * 150;   // staggered so the volley isn't a single wall
                 enemies.push(e);
               }
             }
