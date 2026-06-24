@@ -60,6 +60,7 @@
           }
 
           const KEEP_OUT   = 110;   // spawns and pickups never appear this close to the player
+          const PLAYER_R   = 9;     // the hero's own body radius — contact is body-to-body, not enemy-circle-vs-a-point
           const BREATHER   = 200;   // frames of calm between cleared waves
           const DASH_CD    = 72;    // frames between dashes
           const SWORD_T    = 840;   // frames the drawn sword lasts (~14s)
@@ -390,7 +391,7 @@
           };
 
           /* ── drawing ── */
-          function stickFigure(x, y, phase, color, scale = 1, alpha = 1, lean = 0) {
+          function stickFigure(x, y, phase, color, scale = 1, alpha = 1, lean = 0, glow = 0) {
             ctx.save();
             ctx.globalAlpha = alpha;
             ctx.translate(x, y);
@@ -399,6 +400,7 @@
             ctx.beginPath(); ctx.ellipse(0, 3, 12 * scale, 4 * scale, 0, 0, Math.PI * 2); ctx.fill();
             ctx.rotate(lean);
             ctx.scale(scale, scale);
+            if (glow) { ctx.shadowColor = glow; ctx.shadowBlur = 8; }   // soft rim so the hero reads against busy ground
             ctx.strokeStyle = color;
             ctx.lineWidth = 2.5;
             ctx.lineCap = 'round';
@@ -1778,8 +1780,8 @@
           function drawHeldSword() {
             const baseAng = Math.atan2(player.fy, player.fx);
             const a0 = baseAng - 1.9, sweep = (1 - swingT / 10) * 3.8;  // matches the ~220° cleave
-            const ang = swingT > 0 ? a0 + sweep : baseAng + 0.55;
-            const hx = player.x, hy = player.y - 20;
+            const ang = swingT > 0 ? a0 + sweep : baseAng + 0.3;
+            const hx = player.x, hy = player.y - 20;   // swing-wedge pivot (the cleave AoE stays centred on the hero)
             // blue lightsaber vs Excalibur's gold steel
             const trail = heldSaber ? '90,200,255' : '255,245,157';
             const bladeLen = heldSaber ? 46 : 40;
@@ -1798,34 +1800,71 @@
               ctx.arc(hx, hy, up.swingR * 0.88, a0, a0 + sweep);
               ctx.stroke();
             }
+            // the gripping hand sits out in front of the body at hand height — never on the chest
+            const fl = Math.hypot(player.fx, player.fy) || 1;
+            const fxn = player.fx / fl, fyn = player.fy / fl;
+            const handX = player.x + fxn * 11, handY = player.y - 13 + fyn * 5;
+            // the sword-arm: a real forearm from the shoulder down to the hand (angled apart from the blade,
+            // so the weapon clearly reads as held rather than sprouting from the torso)
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
+            ctx.beginPath(); ctx.moveTo(player.x, player.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
+            // the blade geometry now grows out of the hand
+            const ux = Math.cos(ang), uy = Math.sin(ang), px = -Math.sin(ang), py = Math.cos(ang);
+            const at = (d) => [handX + ux * d, handY + uy * d];
+
             if (heldSaber) {
-              // a glowing blue energy blade with a short metal hilt
-              const gx = hx + Math.cos(ang) * 9, gy = hy + Math.sin(ang) * 9;
-              ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 4;
-              ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
-              ctx.shadowColor = '#5ac8ff'; ctx.shadowBlur = 14;
-              ctx.strokeStyle = '#bfe7ff'; ctx.lineWidth = 4.5;
-              ctx.beginPath();
-              ctx.moveTo(gx, gy);
-              ctx.lineTo(hx + Math.cos(ang) * bladeLen, hy + Math.sin(ang) * bladeLen);
-              ctx.stroke();
+              // a brushed-metal hilt straddling the fist, then a glowing energy blade
+              const [h0x, h0y] = at(-5), [h1x, h1y] = at(9);
+              ctx.strokeStyle = '#33373c'; ctx.lineWidth = 6;            // dark grip body
+              ctx.beginPath(); ctx.moveTo(h0x, h0y); ctx.lineTo(h1x, h1y); ctx.stroke();
+              ctx.strokeStyle = '#aab2bb'; ctx.lineWidth = 2.2;          // chrome highlight down it
+              ctx.beginPath(); ctx.moveTo(h0x, h0y); ctx.lineTo(h1x, h1y); ctx.stroke();
+              const [emx, emy] = at(9);                                  // emitter shroud
+              ctx.strokeStyle = '#d0d6dc'; ctx.lineWidth = 6;
+              ctx.beginPath(); ctx.moveTo(emx - px * 3, emy - py * 3); ctx.lineTo(emx + px * 3, emy + py * 3); ctx.stroke();
+              const [b0x, b0y] = at(10), [b1x, b1y] = at(10 + bladeLen);
+              ctx.shadowColor = '#5ac8ff'; ctx.shadowBlur = 16;
+              ctx.strokeStyle = 'rgba(120,205,255,0.55)'; ctx.lineWidth = 9;   // outer plasma glow
+              ctx.beginPath(); ctx.moveTo(b0x, b0y); ctx.lineTo(b1x, b1y); ctx.stroke();
+              ctx.strokeStyle = '#eaffff'; ctx.lineWidth = 3.4;                // white-hot core
+              ctx.beginPath(); ctx.moveTo(b0x, b0y); ctx.lineTo(b1x, b1y); ctx.stroke();
               ctx.shadowBlur = 0;
+              ctx.fillStyle = '#f2f2f2';                                 // fist on the hilt
+              ctx.beginPath(); ctx.arc(handX, handY, 2.8, 0, Math.PI * 2); ctx.fill();
               ctx.restore();
               return;
             }
-            ctx.strokeStyle = '#eceff1'; ctx.lineWidth = 3.5;
-            ctx.shadowColor = '#fff59d'; ctx.shadowBlur = 10;
+
+            // Excalibur — a golden-hilted steel blade gripped in the fist
+            const [pomx, pomy] = at(-6), [cgx, cgy] = at(6);
+            ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 4;             // leather-wrapped grip through the fist
+            ctx.beginPath(); ctx.moveTo(pomx, pomy); ctx.lineTo(cgx, cgy); ctx.stroke();
+            ctx.fillStyle = '#ffd24d';                                  // pommel knob behind the hand
+            ctx.beginPath(); ctx.arc(pomx, pomy, 2.8, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#ffd24d'; ctx.lineWidth = 3;             // crossguard just past the fist
+            ctx.beginPath(); ctx.moveTo(cgx + px * 7, cgy + py * 7); ctx.lineTo(cgx - px * 7, cgy - py * 7); ctx.stroke();
+            // tapered, fullered steel blade as a filled polygon
+            const bb = 8, bt = 8 + bladeLen, hw = 3.2;
+            ctx.shadowColor = '#fff59d'; ctx.shadowBlur = 8;
+            ctx.fillStyle = '#dfe6ea';
             ctx.beginPath();
-            ctx.moveTo(hx + Math.cos(ang) * 8, hy + Math.sin(ang) * 8);
-            ctx.lineTo(hx + Math.cos(ang) * bladeLen, hy + Math.sin(ang) * bladeLen);
-            ctx.stroke();
+            ctx.moveTo(handX + ux * bb + px * hw, handY + uy * bb + py * hw);
+            ctx.lineTo(handX + ux * (bt - 9) + px * hw * 0.8, handY + uy * (bt - 9) + py * hw * 0.8);
+            ctx.lineTo(handX + ux * bt, handY + uy * bt);              // the point
+            ctx.lineTo(handX + ux * (bt - 9) - px * hw * 0.8, handY + uy * (bt - 9) - py * hw * 0.8);
+            ctx.lineTo(handX + ux * bb - px * hw, handY + uy * bb - py * hw);
+            ctx.closePath(); ctx.fill();
             ctx.shadowBlur = 0;
-            const gx = hx + Math.cos(ang) * 11, gy = hy + Math.sin(ang) * 11;
-            ctx.strokeStyle = '#ffd24d'; ctx.lineWidth = 2.5;
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1;   // central fuller highlight
+            ctx.beginPath(); ctx.moveTo(handX + ux * bb, handY + uy * bb); ctx.lineTo(handX + ux * (bt - 4), handY + uy * (bt - 4)); ctx.stroke();
+            ctx.strokeStyle = 'rgba(120,140,150,0.6)'; ctx.lineWidth = 1;   // shaded edge for depth
             ctx.beginPath();
-            ctx.moveTo(gx - Math.sin(ang) * 6, gy + Math.cos(ang) * 6);
-            ctx.lineTo(gx + Math.sin(ang) * 6, gy - Math.cos(ang) * 6);
+            ctx.moveTo(handX + ux * bb - px * hw, handY + uy * bb - py * hw);
+            ctx.lineTo(handX + ux * (bt - 9) - px * hw * 0.8, handY + uy * (bt - 9) - py * hw * 0.8);
             ctx.stroke();
+            ctx.fillStyle = '#f2f2f2';                                  // fist on the grip
+            ctx.beginPath(); ctx.arc(handX, handY, 2.8, 0, Math.PI * 2); ctx.fill();
             ctx.restore();
           }
 
@@ -3515,8 +3554,8 @@
               if (e.type === 'dio' && (e.mode === 'troll' || e.mode === 'dying')) continue;   // intro & death are harmless
               if (dioStopT > 0) continue;                // time is stopped — you cannot be touched (nor can you act)
               if (e.frozen > 0) continue;                // an iced foe is harmless — wail on it freely
-              if (d < e.kr) { slayPlayer(); return; }
-              if (d < e.kr + 17 && e.grz <= 0) {
+              if (d < e.kr + PLAYER_R) { slayPlayer(); return; }   // bodies overlap → struck
+              if (d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
                 e.grz = 50; score += 5 * mult;
                 addMeter(1);
                 sfSfx.graze();
@@ -3527,13 +3566,13 @@
                 const fdir = (player.x - e.x) >= 0 ? 1 : -1;
                 const fx = e.x + fdir * Math.cos(e.flailAng) * 64;
                 const fy = e.y - 32 + Math.sin(e.flailAng) * 64 * 0.7;
-                if (Math.hypot(player.x - fx, player.y - fy) < 26) { slayPlayer(); return; }
+                if (Math.hypot(player.x - fx, (player.y - 18) - fy) < 26) { slayPlayer(); return; }
               }
               // Vader's saber sweeps a lethal arc out front during the slash
               if (e.type === 'vader' && e.mode === 'slash' && player.dashT <= 0) {
                 const tx = e.x + Math.cos(e.slashAng) * 56;
                 const ty = (e.y - 22) + Math.sin(e.slashAng) * 56;
-                if (Math.hypot(player.x - tx, player.y - ty) < 24) { slayPlayer(); return; }
+                if (Math.hypot(player.x - tx, (player.y - 18) - ty) < 24) { slayPlayer(); return; }
               }
               // DIO's MUDA barrage — The World pummels a lethal ring around him
               if (e.type === 'dio' && e.mode === 'muda' && player.dashT <= 0 && d < 54) { slayPlayer(); return; }
@@ -3770,6 +3809,16 @@
                 ctx.restore();
               }
             }
+            if (!swActive && !jojoActive && !ianActive) {
+              // the open battlefield is the XP desktop itself — lay a soft vignette over it so the
+              // sprites read against the busy wallpaper, plus a faint warm wash low on the ground.
+              const vg = ctx.createRadialGradient(GW / 2, GH * 0.46, GH * 0.32, GW / 2, GH * 0.5, GH * 0.95);
+              vg.addColorStop(0, 'rgba(6,8,14,0)'); vg.addColorStop(1, 'rgba(6,8,14,0.4)');
+              ctx.fillStyle = vg; ctx.fillRect(0, 0, GW, GH);
+              const gw = ctx.createLinearGradient(0, GH * 0.6, 0, GH);
+              gw.addColorStop(0, 'rgba(20,14,30,0)'); gw.addColorStop(1, 'rgba(20,14,30,0.22)');
+              ctx.fillStyle = gw; ctx.fillRect(0, GH * 0.6, GW, GH * 0.4);
+            }
 
             if (stone) drawStone();
             if (saberPickup) drawSaberPickup();
@@ -3792,25 +3841,48 @@
             }
             for (const ck of coins) {
               if (ck.t < 120 && Math.floor(ck.t / 6) % 2 === 0) continue;  // blink before despawn
+              const spin = reduceMotion ? 0.82 : Math.abs(Math.cos((frame + (ck.x | 0)) * 0.07));  // edge-on coin flip
+              const w = 1.6 + 6.4 * spin;
               ctx.save(); ctx.translate(ck.x, ck.y);
-              ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2);
-              ctx.fillStyle = '#ffd24d'; ctx.fill();
-              ctx.strokeStyle = '#b8860b'; ctx.lineWidth = 2; ctx.stroke();
-              ctx.fillStyle = '#b8860b'; ctx.font = 'bold 10px Tahoma,Arial'; ctx.textAlign = 'center';
-              ctx.fillText('¢', 0, 3.5); ctx.textAlign = 'left';
+              ctx.fillStyle = 'rgba(0,0,0,0.18)';                          // contact shadow on the ground
+              ctx.beginPath(); ctx.ellipse(0, 11, 6.5, 2.2, 0, 0, Math.PI * 2); ctx.fill();
+              const fg = ctx.createLinearGradient(-w, -8, w, 8);          // struck-metal sheen across the face
+              fg.addColorStop(0, '#c8920c'); fg.addColorStop(0.5, '#ffe98a'); fg.addColorStop(1, '#d9a417');
+              ctx.fillStyle = fg;
+              ctx.beginPath(); ctx.ellipse(0, 0, w, 8, 0, 0, Math.PI * 2); ctx.fill();
+              ctx.strokeStyle = '#8a6508'; ctx.lineWidth = 1.5; ctx.stroke();
+              if (spin > 0.42) {                                          // ¢ shows only when the coin faces us
+                ctx.fillStyle = 'rgba(138,101,8,0.9)'; ctx.font = 'bold 10px Tahoma,Arial'; ctx.textAlign = 'center';
+                ctx.fillText('¢', 0, 3.5); ctx.textAlign = 'left';
+              }
               ctx.restore();
             }
             for (const pu of powerups) {
+              const accent = pu.kind === 'freeze' ? '143,216,255' : pu.kind === 'bolt' ? '128,216,255' : '255,138,101';
+              const ac = pu.kind === 'freeze' ? '#8fd8ff' : pu.kind === 'bolt' ? '#80d8ff' : '#ff8a65';
               const pulse = 1 + Math.sin(frame * 0.12) * 0.12;
-              ctx.save(); ctx.translate(pu.x, pu.y); ctx.scale(pulse, pulse);
+              ctx.save(); ctx.translate(pu.x, pu.y);
+              const halo = ctx.createRadialGradient(0, 0, 4, 0, 0, 26);    // soft breathing aura
+              const ha = (reduceMotion ? 0.3 : 0.24 + 0.12 * Math.sin(frame * 0.12));
+              halo.addColorStop(0, 'rgba(' + accent + ',' + ha.toFixed(3) + ')'); halo.addColorStop(1, 'rgba(' + accent + ',0)');
+              ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI * 2); ctx.fill();
+              ctx.scale(pulse, pulse);
               ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2);
-              ctx.fillStyle = pu.kind === 'freeze' ? 'rgba(143,216,255,0.3)' : pu.kind === 'bolt' ? 'rgba(128,216,255,0.3)' : 'rgba(255,138,101,0.3)';
-              ctx.fill();
-              ctx.strokeStyle = pu.kind === 'freeze' ? '#8fd8ff' : pu.kind === 'bolt' ? '#80d8ff' : '#ff8a65';
-              ctx.lineWidth = 2; ctx.stroke();
+              ctx.fillStyle = 'rgba(' + accent + ',0.3)'; ctx.fill();
+              ctx.strokeStyle = ac; ctx.lineWidth = 2; ctx.shadowColor = ac; ctx.shadowBlur = 8; ctx.stroke();
+              ctx.shadowBlur = 0;
               ctx.font = '14px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
               ctx.fillText(pu.kind === 'freeze' ? '❄' : pu.kind === 'bolt' ? '⚡' : '🔥', 0, 1);
               ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+              ctx.restore();
+              // three motes orbiting the rune
+              ctx.save(); ctx.translate(pu.x, pu.y); ctx.fillStyle = ac;
+              const rot = reduceMotion ? 0 : frame * 0.05;
+              for (let s = 0; s < 3; s++) {
+                const a = rot + s / 3 * Math.PI * 2;
+                ctx.globalAlpha = reduceMotion ? 0.6 : 0.4 + 0.4 * Math.abs(Math.sin(frame * 0.1 + s));
+                ctx.beginPath(); ctx.arc(Math.cos(a) * 17, Math.sin(a) * 17, 1.7, 0, Math.PI * 2); ctx.fill();
+              }
               ctx.restore();
             }
             // fire / frost blasts bloom under the enemies so they read as engulfed
@@ -3997,7 +4069,7 @@
               drawStarPlatinum(sdir, playerStand, swingT > 0);
               ctx.restore();
             }
-            stickFigure(player.x, player.y, player.phase, pcolor, 1, 1, plean);
+            stickFigure(player.x, player.y, player.phase, pcolor, 1, 1, plean, player.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
             // the Aegis: a soft hex-bubble around the hero while it holds; a bright flash as it breaks
             if (player.shield || player.iframe > 0) {
               const breaking = !player.shield && player.iframe > 0;
