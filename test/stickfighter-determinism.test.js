@@ -183,8 +183,9 @@ async function runGame({ seed, frames }) {
     activeMusic: null,
   };
   window.openStickFighter(xp, api); // runs init() (seeds the PRNG) + the first frameStep()
-  // Leave the intro and hold a direction so the sim actually advances (waves spawn,
-  // enemies pursue — all RNG-driven).
+  // Leave the intro (Enter begins the run in the highlighted mode — 1-PLAYER by default), then
+  // hold a direction so the sim actually advances (waves spawn, enemies pursue — all RNG-driven).
+  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter' }));
   window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight' }));
 
   for (let i = 0; i < frames; i++) {

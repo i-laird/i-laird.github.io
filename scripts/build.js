@@ -127,10 +127,11 @@ function build() {
     obfuscate('stickfighter', sfSrc, LIGHT)
   );
 
-  // index.html: the lib scripts are now inside app.js, so drop their tags.
+  // index.html: the lib scripts are now inside app.js, so drop their tags. (They're loaded
+  // with `defer` in the source, so match that; app.js keeps its own deferred tag.)
   let html = read('index.html');
   for (const lib of ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'lib/rng.js']) {
-    html = html.replace(new RegExp(`\\s*<script src="${lib}"></script>`), '');
+    html = html.replace(new RegExp(`\\s*<script defer src="${lib}"></script>`), '');
   }
   fs.writeFileSync(path.join(DIST, 'index.html'), html);
 

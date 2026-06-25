@@ -117,18 +117,27 @@
           let player, enemies, warns, coins, powerups, blasts, sparks, ghosts,
               score, mult, wave, alive, started, frame, keys, rafId,
               freezeT, banner, bannerSub, bannerT, deadT, shake, newBest,
-              stone, stoneCd, stoneSeen, swordT, swingT, swingReadyTick,
+              stone, stoneCd, stoneSeen,
               meter, meterPrompted, allies, bolts, arrows, kills,
               nineActive, nineDone, wraithsLeft, waveQuota, breatherT,
               corpses, bossActive, bossRiseT, bossRiseX, bossRiseY,
               awaitExit, swActive, swState, swReadyT, swFadeT, swTroopersLeft, swStars,
-              saberPickup, heldSaber, vaderActive, up, paused, upMenu, tokens, swFlash,
+              saberPickup, vaderActive, up, paused, upMenu, tokens, swFlash,
               sidiousActive, sidiousCue, sidiousIntroT, ltnBolts, ltnFlash, dlg, dlgT, sidFinale,
               jojoActive, jojoCue, jojoBg, dioStopT, dioStopFx, roadRoller, dioFinale, bossIntro, playerStand,
               ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned;
           // online leaderboard ("hall of legends"): lbState drives the death screen
           //   off=worker down/unscored · loading · enter=typing a name · submitting · view/done=show the board
           let lbScores = null, lbState = 'off', lbName = '', lbRank = -1, lbScore = 0, lbWave = 0;
+          // ── local couch co-op (chosen on the intro screen; persists across R-restarts) ──
+          //   coop=false → the classic single-player game, byte-for-byte unchanged (every co-op
+          //   branch is gated on `coop`, so the deterministic sim and its tests are untouched).
+          //   P1 = arrows (move) · Right-Shift (dash) · '/' (swing).  P2 = WASD · Left-Shift · F.
+          //   Allies/meter/upgrades are shared; a felled hero is DOWN and a partner revives them
+          //   by standing close — the run only ends when both are down.
+          let coop = false, coopSel = 0, p2 = null;
+          const P2_COL    = '#8fe388';   // P2's stick figure — a soft green, distinct from white P1 and enemy red
+          const REVIVE_T  = 150;         // frames a partner must stand by a downed hero to revive them (~2.5s)
 
           function init() {
             // Seed the run. sfSeedOverride lets a future MP handshake pin a shared seed;
@@ -140,14 +149,15 @@
             sfRng = (typeof makeRng === 'function') ? makeRng(sfSeed) : Math.random;  // fall back if lib/rng.js failed to load
             tick = 0;
             player = { x: GW / 2, y: GH / 2, vx: 0, vy: 0, phase: 0,
-                       fx: 1, fy: 0, dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0, shield: false };
+                       fx: 1, fy: 0, dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0, shield: false,
+                       swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0 };
+            p2 = null;
             enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
             bolts = []; arrows = [];
             score = 0; mult = 1; wave = 1; alive = true; started = false; frame = 0;
             keys = {}; freezeT = 0; banner = ''; bannerSub = ''; bannerT = 0;
             deadT = 0; shake = 0; newBest = false;
             stone = null; stoneCd = 150; stoneSeen = false;
-            swordT = 0; swingT = 0; swingReadyTick = 0;
             meter = 0; meterPrompted = false; allies = []; kills = 0;
             nineActive = false; nineDone = false; wraithsLeft = 0;
             waveQuota = 11; breatherT = 0;
@@ -155,7 +165,7 @@
             bossRiseT = 0; bossRiseX = 0; bossRiseY = 0;
             awaitExit = false; swActive = false; swState = '';
             swReadyT = 0; swFadeT = 0; swTroopersLeft = 0; swStars = []; swFlash = 0;
-            saberPickup = null; heldSaber = false; vaderActive = false;
+            saberPickup = null; vaderActive = false;
             sidiousActive = false; sidiousCue = 0; sidiousIntroT = 0; ltnBolts = []; ltnFlash = 0;
             dlg = []; dlgT = 0; sidFinale = null;
             jojoActive = false; jojoCue = 0; jojoBg = []; dioStopT = 0; dioStopFx = 0; roadRoller = null; dioFinale = null;
@@ -172,6 +182,45 @@
             applySavedUpgrades();              // unlocked upgrades are permanent — re-apply across runs
             player.dashCharges = up.dashMax; player.rechargeT = 0;
             player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
+            if (coop) setupCoop();             // a second hero joins; both share allies, meter & upgrades
+          }
+
+          /* ── couch co-op helpers ── */
+          // Build P2 and stand the two heroes apart at centre-screen. Called from init() (so R
+          // restarts straight into co-op) and the moment 2-PLAYER is confirmed on the intro.
+          function setupCoop() {
+            player.x = GW / 2 - 48; player.y = GH / 2;
+            p2 = { x: GW / 2 + 48, y: GH / 2, vx: 0, vy: 0, phase: 0, fx: -1, fy: 0,
+                   dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
+                   shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
+                   swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0 };
+          }
+          // each hero arms independently — the blade (Excalibur / lightsaber) lives on the hero,
+          // not the run. helpers for the scripted interlude transitions that arm/disarm everyone.
+          function armSaberAll(v) { for (const h of heroesAll()) h.heldSaber = v; }
+          function clearBlades() { for (const h of heroesAll()) { h.swordT = 0; h.swingT = 0; h.heldSaber = false; } }
+          // the active heroes; in single-player this is just [player], so co-op code stays a no-op
+          function heroesAll()  { return (coop && p2) ? [player, p2] : [player]; }
+          function heroesLive() { return heroesAll().filter(h => !h.down); }
+          // nearest hero still standing (for horde aggro & pickups); falls back to P1
+          function nearestLiveHero(x, y) {
+            let best = null, bd = Infinity;
+            for (const h of heroesLive()) { const d = Math.hypot(h.x - x, h.y - y); if (d < bd) { bd = d; best = h; } }
+            return best || player;
+          }
+          // a live hero within r of a point — used by every pickup so either player can grab it
+          function nearHero(x, y, r) {
+            for (const h of heroesLive()) if (Math.hypot(h.x - x, h.y - y) < r) return h;
+            return null;
+          }
+          // who a horde grunt chases. The scripted boss/set-piece foes stay locked on P1 (their
+          // duels are cinematic 1-on-1s); the open-field horde splits aggro to the nearest hero.
+          function hordeTarget(e) {
+            if (!coop || bossActive || nineActive) return player;
+            const t = e.type;
+            if (t === 'wraith' || t === 'witchking' || t === 'vader' || t === 'sidious' ||
+                t === 'dio' || t === 'guard' || t === 'trooper' || t === 'ian') return player;
+            return nearestLiveHero(e.x, e.y);
           }
 
           /* unlocked upgrades persist (like achievements): saved by id in localStorage and
@@ -1818,43 +1867,43 @@
             ctx.restore();
           }
 
-          function drawHeldSword() {
-            const baseAng = Math.atan2(player.fy, player.fx);
-            const a0 = baseAng - 1.9, sweep = (1 - swingT / 10) * 3.8;  // matches the ~220° cleave
-            const ang = swingT > 0 ? a0 + sweep : baseAng + 0.3;
-            const hx = player.x, hy = player.y - 20;   // swing-wedge pivot (the cleave AoE stays centred on the hero)
+          function drawHeldSword(h) {
+            const baseAng = Math.atan2(h.fy, h.fx);
+            const a0 = baseAng - 1.9, sweep = (1 - h.swingT / 10) * 3.8;  // matches the ~220° cleave
+            const ang = h.swingT > 0 ? a0 + sweep : baseAng + 0.3;
+            const hx = h.x, hy = h.y - 20;   // swing-wedge pivot (the cleave AoE stays centred on the hero)
             // blue lightsaber vs Excalibur's gold steel
-            const trail = heldSaber ? '90,200,255' : '255,245,157';
-            const bladeLen = heldSaber ? 46 : 40;
+            const trail = h.heldSaber ? '90,200,255' : '255,245,157';
+            const bladeLen = h.heldSaber ? 46 : 40;
             ctx.save();
-            if (!heldSaber && !api.reduceMotion && swordT < 180 && Math.floor(frame / 6) % 2 === 0) ctx.globalAlpha = 0.45;  // Excalibur expiring
+            if (!h.heldSaber && !api.reduceMotion && h.swordT < 180 && Math.floor(frame / 6) % 2 === 0) ctx.globalAlpha = 0.45;  // Excalibur expiring
             ctx.lineCap = 'round';
-            if (swingT > 0) {  // cleave wedge + sweep trail
-              ctx.fillStyle = 'rgba(' + trail + ',' + (swingT / 34).toFixed(2) + ')';
+            if (h.swingT > 0) {  // cleave wedge + sweep trail
+              ctx.fillStyle = 'rgba(' + trail + ',' + (h.swingT / 34).toFixed(2) + ')';
               ctx.beginPath();
               ctx.moveTo(hx, hy);
               ctx.arc(hx, hy, up.swingR * 0.88, a0, a0 + sweep);
               ctx.closePath(); ctx.fill();
-              ctx.strokeStyle = 'rgba(' + trail + ',' + (swingT / 12).toFixed(2) + ')';
+              ctx.strokeStyle = 'rgba(' + trail + ',' + (h.swingT / 12).toFixed(2) + ')';
               ctx.lineWidth = 5;
               ctx.beginPath();
               ctx.arc(hx, hy, up.swingR * 0.88, a0, a0 + sweep);
               ctx.stroke();
             }
             // the gripping hand sits out in front of the body at hand height — never on the chest
-            const fl = Math.hypot(player.fx, player.fy) || 1;
-            const fxn = player.fx / fl, fyn = player.fy / fl;
-            const handX = player.x + fxn * 11, handY = player.y - 13 + fyn * 5;
+            const fl = Math.hypot(h.fx, h.fy) || 1;
+            const fxn = h.fx / fl, fyn = h.fy / fl;
+            const handX = h.x + fxn * 11, handY = h.y - 13 + fyn * 5;
             // the sword-arm: a real forearm from the shoulder down to the hand (angled apart from the blade,
             // so the weapon clearly reads as held rather than sprouting from the torso)
             ctx.lineJoin = 'round';
             ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
-            ctx.beginPath(); ctx.moveTo(player.x, player.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
             // the blade geometry now grows out of the hand
             const ux = Math.cos(ang), uy = Math.sin(ang), px = -Math.sin(ang), py = Math.cos(ang);
             const at = (d) => [handX + ux * d, handY + uy * d];
 
-            if (heldSaber) {
+            if (h.heldSaber) {
               // a brushed-metal hilt straddling the fist, then a glowing energy blade
               const [h0x, h0y] = at(-5), [h1x, h1y] = at(9);
               ctx.strokeStyle = '#33373c'; ctx.lineWidth = 6;            // dark grip body
@@ -1907,6 +1956,47 @@
             ctx.fillStyle = '#f2f2f2';                                  // fist on the grip
             ctx.beginPath(); ctx.arc(handX, handY, 2.8, 0, Math.PI * 2); ctx.fill();
             ctx.restore();
+          }
+
+          // draw one hero (figure + Aegis bubble + held blade). baseColor distinguishes P1
+          // (white) from P2 (green). A downed hero is drawn fallen with a revive ring instead.
+          function drawHero(h, baseColor) {
+            if (h.down) { drawDownedHero(h); return; }
+            const lean = clamp(h.vx * 0.04, -0.3, 0.3);
+            const col = h.dashT > 0 ? '#80deea' : baseColor;
+            stickFigure(h.x, h.y, h.phase, col, 1, 1, lean, h.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
+            // the Aegis: a soft hex-bubble around the hero while it holds; a bright flash as it breaks
+            if (h.shield || h.iframe > 0) {
+              const breaking = !h.shield && h.iframe > 0;
+              const a = breaking ? h.iframe / 44 : (api.reduceMotion ? 0.5 : 0.42 + 0.18 * Math.sin(frame * 0.14));
+              ctx.save(); ctx.translate(h.x, h.y - 14);
+              ctx.strokeStyle = breaking ? 'rgba(200,240,255,' + a + ')' : 'rgba(127,216,255,' + a + ')';
+              ctx.lineWidth = breaking ? 3.5 : 2.4;
+              ctx.shadowColor = '#7fd8ff'; ctx.shadowBlur = breaking ? 16 : 8;
+              const rad = 26 + (breaking ? (1 - h.iframe / 44) * 14 : 0);
+              ctx.beginPath();
+              for (let s = 0; s <= 6; s++) { const aa = s / 6 * Math.PI * 2 - Math.PI / 2; const fn = s ? 'lineTo' : 'moveTo'; ctx[fn](Math.cos(aa) * rad, Math.sin(aa) * rad * 1.18); }
+              ctx.closePath(); ctx.stroke();
+              ctx.shadowBlur = 0; ctx.restore();
+            }
+            if (h.swordT > 0 || h.heldSaber) drawHeldSword(h);
+          }
+          // a fallen co-op hero: a prone figure with a revive ring that fills as a partner stands by
+          function drawDownedHero(h) {
+            stickFigure(h.x, h.y, 0, '#7a7a7a', 1, 0.7, Math.PI / 2, 'rgba(160,160,160,0.4)');
+            const p = clamp(h.reviveT / REVIVE_T, 0, 1);
+            ctx.save();
+            ctx.translate(h.x, h.y - 18);
+            ctx.strokeStyle = 'rgba(120,120,120,0.55)'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.stroke();
+            if (p > 0) {
+              ctx.strokeStyle = P2_COL; ctx.shadowColor = P2_COL; ctx.shadowBlur = 8;
+              ctx.beginPath(); ctx.arc(0, 0, 15, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
+            }
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#ff8a80'; ctx.font = 'bold 14px Tahoma,Arial'; ctx.textAlign = 'center';
+            ctx.fillText('✚', 0, -20);
+            ctx.restore(); ctx.textAlign = 'left';
           }
 
           function knockback(cx, cy, killR, push, stun) {
@@ -1990,21 +2080,45 @@
             }
           }
 
-          function slayPlayer() {
-            if (player.iframe > 0) return;                 // briefly invulnerable (e.g. just broke a shield)
-            if (player.shield) {
+          // a blow lands on hero h: the Aegis eats it if charged, otherwise the hero falls.
+          // In single-player a fall ends the run outright; in co-op the hero is DOWN and the
+          // run only ends once both heroes are down (see downHero/endRun).
+          function strike(h) {
+            if (!h || h.down || h.dashT > 0 || h.iframe > 0) return;  // mid-dash i-frames / just-shielded
+            if (h.shield) {
               // the Aegis takes the blow — shatters, buys a beat of safety, and shoves attackers off
-              player.shield = false; player.iframe = 44;
-              shake = 12; sfSfx.shieldBreak();
-              sparks.push({ x: player.x, y: player.y - 32, t: 30, color: '#7fd8ff', txt: 'SHIELD BROKEN' });
-              knockback(player.x, player.y, 0, 130, 16);
+              h.shield = false; h.iframe = 44;
+              shake = Math.max(shake, 12); sfSfx.shieldBreak();
+              sparks.push({ x: h.x, y: h.y - 32, t: 30, color: '#7fd8ff', txt: 'SHIELD BROKEN' });
+              knockback(h.x, h.y, 0, 130, 16);
               return;
             }
+            downHero(h);
+          }
+          function downHero(h) {
+            if (!coop) { endRun(); return; }               // solo: a hit is simply the end
+            h.down = true; h.downT = 0; h.reviveT = 0; h.vx = 0; h.vy = 0; h.dashT = 0; h.stunT = 0;
+            sfSfx.die(); shake = Math.max(shake, 12);
+            sparks.push({ x: h.x, y: h.y - 30, t: 34, color: '#ff5252', txt: 'DOWN!' });
+            if (heroesLive().length === 0) endRun();        // both fallen — the horde wins
+            else { banner = (h === player ? 'PLAYER 1 DOWN' : 'PLAYER 2 DOWN'); bannerSub = 'a partner can revive — stand close'; bannerT = 90; }
+          }
+          // the run is over (solo death, or both heroes down in co-op)
+          function endRun() {
             alive = false;
             if (score > best) { best = score; newBest = true; localStorage.setItem('ilaird_sf_best', String(best)); }
             sfSfx.die(); shake = 14;
             lbBegin();
           }
+          function reviveHero(h) {
+            h.down = false; h.reviveT = 0; h.iframe = 70;   // up again, with a beat of mercy invulnerability
+            h.shield = up.shield; h.vx = 0; h.vy = 0;
+            sfSfx.summon();
+            sparks.push({ x: h.x, y: h.y - 32, t: 34, color: P2_COL, txt: 'REVIVED!' });
+            banner = (h === player ? 'PLAYER 1' : 'PLAYER 2') + ' REVIVED'; bannerSub = ''; bannerT = 70;
+          }
+          // legacy name kept for the Force-choke death path (a guaranteed kill of P1)
+          function slayPlayer() { strike(player); }
 
           /* ── online leaderboard (the "hall of legends") ──
              Backed by the same hal-worker service as the LLM-HAL game (GET /scores,
@@ -2345,7 +2459,7 @@
             sidFinale = null;
             swActive = false; sidiousActive = false; swState = ''; swStars = [];
             sidiousIntroT = 0; sidiousCue = 0; dlg = []; dlgT = 0;
-            heldSaber = false; swordT = 0; saberPickup = null;
+            clearBlades(); saberPickup = null;
             arrows = []; ltnBolts = []; ltnFlash = 0; player.choke = 0; player.stunT = 0; swFlash = 0;
             banner = 'the Emperor is no more'; bannerSub = '+3000  ·  borne into the dark'; bannerT = 190;
             score += 3000; addMeter(50); shake = 16;
@@ -2365,7 +2479,7 @@
             jojoActive = true; jojoCue = 0;
             enemies = []; warns = []; arrows = []; bolts = []; coins = []; powerups = []; blasts = []; corpses = [];
             swActive = false; swState = ''; swStars = []; vaderActive = false; sidiousActive = false; sidFinale = null;
-            stone = null; swordT = 0; swingT = 0; saberPickup = null; heldSaber = true;   // the player keeps the lightsaber
+            stone = null; clearBlades(); saberPickup = null; armSaberAll(true);   // every hero keeps a lightsaber into the duel
             dioStopT = 0; roadRoller = null; ltnFlash = 0; dlg = []; dlgT = 0; playerStand = 0; freezeT = 0;
             if (allies.length) { allies.forEach(g => sparks.push({ x: g.x, y: g.y - 50, t: 30, color: '#fff', txt: '...gone.' })); allies = []; }
             player.x = GW * 0.26; player.y = GH / 2; player.vx = 0; player.vy = 0; player.choke = 0; player.stunT = 0;
@@ -2474,7 +2588,7 @@
             const e = enemies.find(en => en.type === 'dio'); if (e) e.dead = true;
             dioFinale = null; jojoActive = false; dioStopT = 0; dioStopFx = 0; roadRoller = null;
             arrows = []; dlg = []; dlgT = 0; player.stunT = 0;
-            heldSaber = false; swordT = 0;                        // the lightsaber stays behind, back to the horde
+            clearBlades();                        // the lightsaber stays behind, back to the horde
             banner = 'DIO is no more'; bannerSub = '+3000  ·  the bizarre night ends'; bannerT = 190;
             score += 3000; addMeter(50); shake = 14;
             grantLevelToken(8);
@@ -2488,7 +2602,7 @@
             enemies = []; warns = []; arrows = []; bolts = []; coins = []; powerups = []; blasts = []; corpses = [];
             swActive = false; swState = ''; swStars = []; jojoActive = false; vaderActive = false; sidiousActive = false;
             dioStopT = 0; dioStopFx = 0; roadRoller = null; ltnFlash = 0; sidFinale = null; dioFinale = null;
-            stone = null; swordT = 0; swingT = 0; saberPickup = null; heldSaber = false;
+            stone = null; clearBlades(); saberPickup = null;
             banishAllies();
             player.x = GW * 0.32; player.y = GH / 2 + 8; player.vx = 0; player.vy = 0; player.choke = 0; player.stunT = 0;
             enemies.push(makeEnemy('ian', GW * 0.7, GH / 2 + 6));
@@ -2550,7 +2664,7 @@
             ianActive = false; ianFinale = null; ianChoice = null;
             mournful = true; endless = false;
             arrows = []; warns = []; dlg = []; dlgT = 0;
-            heldSaber = false; swordT = 0; stone = null; stoneCd = 150;   // Excalibur returns to the quiet world
+            clearBlades(); stone = null; stoneCd = 150;   // Excalibur returns to the quiet world
             banner = 'the world goes quiet'; bannerSub = 'nothing here will raise a hand to you now'; bannerT = 230;
             shake = 6;
             breatherT = BREATHER;
@@ -2600,7 +2714,7 @@
             swActive = true; sidiousActive = true; vaderActive = false; swState = 'sidious';
             sidiousCue = 0; sidiousIntroT = 300;            // ~5s reveal before he strikes
             arrows = []; ltnBolts = []; ltnFlash = 26;
-            heldSaber = true; saberPickup = null;           // the blue lightsaber carries into the duel
+            armSaberAll(true); saberPickup = null;           // the blue lightsaber carries into the duel
             banishAllies();                                 // face the Emperor alone
             if (!swStars.length) { for (let i = 0; i < 70; i++) swStars.push({ x: rnd() * GW, y: rnd() * GH, r: rnd() * 1.3 + 0.3 }); }
             player.choke = 0; player.stunT = 0;
@@ -2653,7 +2767,8 @@
               if (!api.reduceMotion && rnd() < 0.005) sparks.push({ x: e.x - 4 + rnd() * 8, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' });
               return;
             }
-            const dx = player.x - e.x, dy = player.y - e.y, d = Math.hypot(dx, dy) || 1;
+            const tgt = hordeTarget(e);   // P1 for bosses/set-pieces; nearest standing hero for the open-field horde
+            const dx = tgt.x - e.x, dy = tgt.y - e.y, d = Math.hypot(dx, dy) || 1;
 
             if (e.type === 'goblin') {
               // steering with momentum so they swing wide on sharp turns
@@ -3260,20 +3375,30 @@
           function loop() {
             tick++;                          // the deterministic sim clock — advances once per logical tick
 
-            /* intro screen */
+            /* intro screen — also the 1P / 2P chooser (see the onKey intro handler) */
             if (!started) {
               ctx.clearRect(0, 0, GW, GH);
               stickFigure(player.x, player.y, frame * 0.06, 'white');
+              if (coopSel === 1) stickFigure(player.x + 46, player.y, frame * 0.06, P2_COL);   // a green partner joins the preview
+              const modeRow = coopSel === 0
+                ? ['▶ 1 PLAYER ◀      2 player', 'bold 18px Tahoma,Arial', '#ffd24d']
+                : ['1 player      ▶ 2 PLAYER ◀', 'bold 18px Tahoma,Arial', P2_COL];
+              const controlRows = coopSel === 0
+                ? [['move: WASD / arrows   ·   dash: Space / Shift   ·   swing: X / F', '13px Tahoma,Arial', '#ccc']]
+                : [['Player 1 (white):  arrows move  ·  Right-Shift dash  ·  /  swing', '13px Tahoma,Arial', '#fff'],
+                   ['Player 2 (green):  WASD move  ·  Left-Shift dash  ·  F  swing', '13px Tahoma,Arial', P2_COL],
+                   ['allies & upgrades are shared — revive a downed partner by standing close', '12px Tahoma,Arial', '#9fb0c0']];
               panel([
                 ['STICK FIGHTER 2000', 'bold 36px Tahoma,Arial', 'white'],
-                ['⚔  the horde approaches.  RUN.  (and fight)  ⚔', '16px Tahoma,Arial', '#ffd24d'],
-                ['WASD / arrows — move      X — swing the sword', '13px Tahoma,Arial', '#ccc'],
-                ['run over the stone to seize the sword — X cleaves the horde', '13px Tahoma,Arial', '#ccc'],
-                ['clear waves to earn tokens — unlock dash, allies, blade & more', '13px Tahoma,Arial', '#ffd24d'],
-                ['coins raise your multiplier  ·  graze foes for bonus', '13px Tahoma,Arial', '#ccc'],
-                ['press any movement key to begin', '14px Tahoma,Arial', 'white'],
+                ['⚔  the horde approaches.  RUN.  (and fight)  ⚔', '15px Tahoma,Arial', '#ffd24d'],
+                modeRow,
+                ['◀ ▶ choose  (or 1 / 2)', '12px Tahoma,Arial', '#9fb0c0'],
+                ...controlRows,
+                ['run over the stone to seize the sword  ·  clear waves to earn upgrade tokens', '12px Tahoma,Arial', '#ccc'],
+                ['coins raise your multiplier  ·  graze foes for bonus', '12px Tahoma,Arial', '#ccc'],
+                ['▶  Z / Enter to begin  ◀', '14px Tahoma,Arial', 'white'],
               ]);
-              hud.innerHTML = 'BEST: ' + best + '<br>double-click icon to quit';
+              hud.innerHTML = 'BEST: ' + best + ' · ' + (coopSel === 1 ? '2-PLAYER' : '1-PLAYER') + '<br>double-click icon to quit';
               frame++;
               return;
             }
@@ -3286,6 +3411,7 @@
               for (const e of enemies) drawEnemy(e);
               const fall = Math.min(1, deadT / 28);
               stickFigure(player.x, player.y, 0, 'white', 1, 1 - fall * 0.4, fall * Math.PI / 2);
+              if (coop && p2) stickFigure(p2.x, p2.y, 0, P2_COL, 1, 1 - fall * 0.4, fall * Math.PI / 2);
               if (deadT > 34) {
                 drawDeathScreen();
                 hud.innerHTML = lbState === 'enter'      ? 'type your name · ENTER to submit'
@@ -3308,16 +3434,19 @@
 
             frame++;
 
-            /* input → acceleration + friction */
+            /* input → acceleration + friction (P1) */
             let ix = 0, iy = 0;
-            if (keys['ArrowLeft']  || keys['a'] || keys['A']) ix = -1;
-            if (keys['ArrowRight'] || keys['d'] || keys['D']) ix =  1;
-            if (keys['ArrowUp']    || keys['w'] || keys['W']) iy = -1;
-            if (keys['ArrowDown']  || keys['s'] || keys['S']) iy =  1;
+            // P1 always reads the arrow keys; in single-player WASD also drives P1 (the classic
+            // dual binding), but in co-op WASD is P2's, so it's excluded from P1 here.
+            if (keys['ArrowLeft']  || (!coop && (keys['a'] || keys['A']))) ix = -1;
+            if (keys['ArrowRight'] || (!coop && (keys['d'] || keys['D']))) ix =  1;
+            if (keys['ArrowUp']    || (!coop && (keys['w'] || keys['W']))) iy = -1;
+            if (keys['ArrowDown']  || (!coop && (keys['s'] || keys['S']))) iy =  1;
             if (ix && iy) { ix *= 0.707; iy *= 0.707; }
             if (ix || iy) { player.fx = ix; player.fy = iy; }
             if (sidFinale || dioFinale || ianActive) { ix = 0; iy = 0; } // input locked — watch the cutscene
             if (dioStopT > 0) { ix = 0; iy = 0; }           // time stopped — you cannot move
+            if (player.down) { ix = 0; iy = 0; }            // a fallen hero lies still until revived
             // Force choke: held aloft, input locked — break free by struggling (handled in onKey)
             if (player.choke > 0) {
               ix = 0; iy = 0; player.choke--;
@@ -3330,22 +3459,30 @@
               } else if (player.choke <= 0) { slayPlayer(); return; }  // never broke loose
               else { player.vy -= 0.35; }                   // lifted off the deck
             } else if (player.stunT > 0) { ix = 0; iy = 0; player.stunT--; }  // Force-push recoil
-            player.vx = player.vx * 0.86 + ix * 0.62;
-            player.vy = player.vy * 0.86 + iy * 0.62;
-            const pv = Math.hypot(player.vx, player.vy);
-            // the speed cap lifts during a dash and while reeling from a Force push, so the shove carries
-            if (player.dashT <= 0 && player.stunT <= 0 && player.choke <= 0 && pv > 4.3) { player.vx *= 4.3 / pv; player.vy *= 4.3 / pv; }
-            player.x = clamp(player.x + player.vx, 14, GW - 14);
-            player.y = clamp(player.y + player.vy, 40, GH - 10);
-            if (pv > 0.4) player.phase += 0.06 + pv * 0.045;
-            if (player.dashT > 0) {
-              player.dashT--;
-              ghosts.push({ x: player.x, y: player.y, phase: player.phase, t: 16 });
+            moveHero(player, ix, iy);
+
+            /* P2 (co-op only): WASD move, sharing the same physics. P2 has no boss-only states
+               (choke/stun), but the cutscene/time-stop locks freeze them too. */
+            if (coop && p2 && !p2.down) {
+              let jx = 0, jy = 0;
+              if (keys['a'] || keys['A']) jx = -1;
+              if (keys['d'] || keys['D']) jx =  1;
+              if (keys['w'] || keys['W']) jy = -1;
+              if (keys['s'] || keys['S']) jy =  1;
+              if (jx && jy) { jx *= 0.707; jy *= 0.707; }
+              if (jx || jy) { p2.fx = jx; p2.fy = jy; }
+              if (sidFinale || dioFinale || ianActive || dioStopT > 0) { jx = 0; jy = 0; }
+              moveHero(p2, jx, jy);
             }
-            if (player.iframe > 0) player.iframe--;   // post-shield invulnerability beat
-            if (player.dashCharges < up.dashMax && player.rechargeT > 0 && --player.rechargeT <= 0) {
-              player.dashCharges++;
-              if (player.dashCharges < up.dashMax) player.rechargeT = up.dashCd;  // chain refills
+
+            /* reviving a downed partner: stand close to one and a ring fills; let go and it drains */
+            if (coop && p2) {
+              for (const h of heroesAll()) {
+                if (!h.down) continue;
+                const helper = heroesLive().find(o => Math.hypot(o.x - h.x, o.y - h.y) < 34);
+                if (helper) { if (++h.reviveT >= REVIVE_T) reviveHero(h); }
+                else h.reviveT = Math.max(0, h.reviveT - 1);
+              }
             }
 
             /* waves: the next one only begins once the field is cleared */
@@ -3353,7 +3490,7 @@
               if (--breatherT === 0) {
                 wave++;
                 waveQuota = Math.min(30, 8 + wave * 3);
-                if (up.shield) player.shield = true;          // the Aegis recharges at the dawn of each wave
+                if (up.shield) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave
                 banner = 'WAVE ' + wave;
                 bannerSub = { 2: 'the wolves are loosed', 3: 'skeleton archers nock their arrows', 4: 'the trolls have come' }[wave] || '';
                 bannerT = 90;
@@ -3460,7 +3597,7 @@
             for (let i = coins.length - 1; i >= 0; i--) {
               const ck = coins[i];
               if (--ck.t <= 0) { coins.splice(i, 1); continue; }
-              if (Math.hypot(ck.x - player.x, ck.y - player.y) < 22) {
+              if (nearHero(ck.x, ck.y, 22)) {
                 coins.splice(i, 1);
                 mult = Math.min(6, mult + 1);
                 score += 40;
@@ -3472,31 +3609,32 @@
             for (let i = powerups.length - 1; i >= 0; i--) {
               const pu = powerups[i];
               if (--pu.t <= 0) { powerups.splice(i, 1); continue; }
-              if (Math.hypot(pu.x - player.x, pu.y - player.y) < 24) {
+              const ph = nearHero(pu.x, pu.y, 24);   // the hero who grabbed it — blasts erupt from them
+              if (ph) {
                 powerups.splice(i, 1);
                 if (pu.kind === 'freeze') {
                   // frost nova — a ring of ice snaps out and encases only the foes it reaches
                   sfSfx.freeze();
-                  blasts.push({ kind: 'frost', x: player.x, y: player.y, r: 0, t: 0, life: 26 });
+                  blasts.push({ kind: 'frost', x: ph.x, y: ph.y, r: 0, t: 0, life: 26 });
                   let n = 0;
                   for (const e of enemies) {
                     // the great bosses shrug off the cold; everything else freezes solid
                     if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
-                    if (Math.hypot(e.x - player.x, e.y - player.y) < FROST_R) { e.frozen = FROST_DUR; e.vx = 0; e.vy = 0; n++; }
+                    if (Math.hypot(e.x - ph.x, e.y - ph.y) < FROST_R) { e.frozen = FROST_DUR; e.vx = 0; e.vy = 0; n++; }
                   }
                   sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#8fd8ff', txt: n ? 'FROZEN x' + n : 'frost nova' });
                 } else if (pu.kind === 'fire') {
                   // fireball — a billowing wall of flame erupts and engulfs the nearby mob
                   sfSfx.bomb(); shake = 16;
-                  blasts.push({ kind: 'fire', x: player.x, y: player.y, r: 0, t: 0, life: 30 });
-                  knockback(player.x, player.y, FIRE_R, 220, 50);
+                  blasts.push({ kind: 'fire', x: ph.x, y: ph.y, r: 0, t: 0, life: 30 });
+                  knockback(ph.x, ph.y, FIRE_R, 220, 50);
                   sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#ff8a65', txt: 'FWOOSH' });
                 } else {
                   // chain lightning — a bolt leaps from foe to foe, frying the whole chain
                   sfSfx.zap(); shake = 10;
-                  const pts = [{ x: player.x, y: player.y - 16 }];
+                  const pts = [{ x: ph.x, y: ph.y - 16 }];
                   const hit = new Set();
-                  let from = { x: player.x, y: player.y }, hops = 0;
+                  let from = { x: ph.x, y: ph.y }, hops = 0;
                   for (let j = 0; j < 6; j++) {                 // up to 6 jumps, each reaching ~260px
                     let best = null, bestD = 260;
                     for (const e of enemies) {
@@ -3543,7 +3681,7 @@
             if (freezeT > 0) freezeT--;
 
             /* the sword in the stone (never during the Star Wars / JoJo interludes) */
-            if (!swActive && !jojoActive && jojoCue <= 0 && !awaitExit && swFadeT <= 0 && !ianActive && ianCue <= 0 && !stone && swordT <= 0 && --stoneCd <= 0) {
+            if (!swActive && !jojoActive && jojoCue <= 0 && !awaitExit && swFadeT <= 0 && !ianActive && ianCue <= 0 && !stone && heroesLive().some(h => h.swordT <= 0 && !h.heldSaber) && --stoneCd <= 0) {
               const p = farPoint(80);
               stone = { x: p.x, y: p.y };
               if (!stoneSeen) {
@@ -3553,25 +3691,31 @@
                 sparks.push({ x: p.x, y: p.y - 40, t: 30, color: '#eceff1', txt: 'the sword returns' });
               }
             }
-            if (stone && !heldSaber && Math.hypot(player.x - stone.x, player.y - stone.y) < PULL_R) {
-              stone = null;
+            // only a hero who isn't already holding a blade can pull the sword (it's theirs alone)
+            const stoneGrabber = stone ? heroesLive().find(h => !h.heldSaber && h.swordT <= 0 && Math.hypot(h.x - stone.x, h.y - stone.y) < PULL_R) : null;
+            if (stoneGrabber) {
+              stone = null; stoneCd = 150;   // a beat before the next stone (lets a co-op partner arm too, but not instantly)
               unlockAchievement('excalibur');
-              swordT = SWORD_T;
+              stoneGrabber.swordT = SWORD_T;
               banner = '⚔ EXCALIBUR ⚔'; bannerSub = 'X — swing the blade'; bannerT = 100;
               sfSfx.sword(); shake = 8;
-              knockback(player.x, player.y, 0, 0, 30);  // a stunned beat — nobody moves, nobody is shoved
+              knockback(stoneGrabber.x, stoneGrabber.y, 0, 0, 30);  // a stunned beat — nobody moves, nobody is shoved
             }
-            if (swordT > 0 && --swordT === 0) {
-              stoneCd = 300;
-              sparks.push({ x: player.x, y: player.y - 46, t: 30, color: '#eceff1', txt: 'the blade fades...' });
+            // each hero's Excalibur counts down on its own; when one fades, queue a fresh stone
+            for (const h of heroesAll()) {
+              if (h.swordT > 0 && --h.swordT === 0) {
+                stoneCd = 300;
+                sparks.push({ x: h.x, y: h.y - 46, t: 30, color: '#eceff1', txt: 'the blade fades...' });
+              }
             }
-            /* the blue lightsaber on the corridor deck */
-            if (saberPickup && Math.hypot(player.x - saberPickup.x, player.y - saberPickup.y) < PULL_R) {
-              saberPickup = null; heldSaber = true;
+            /* the blue lightsaber on the corridor deck — claimed by whichever hero reaches it */
+            const saberGrabber = saberPickup ? heroesLive().find(h => !h.heldSaber && Math.hypot(h.x - saberPickup.x, h.y - saberPickup.y) < PULL_R) : null;
+            if (saberGrabber) {
+              saberPickup = null; saberGrabber.heldSaber = true;
               banner = 'A LIGHTSABER'; bannerSub = 'X — strike them down'; bannerT = 110;
               sfSfx.saber(); shake = 6;
             }
-            if (swingT > 0) swingT--;
+            for (const h of heroesAll()) if (h.swingT > 0) h.swingT--;
 
             /* the champion */
             if (frame % 90 === 0) addMeter(1);
@@ -3697,43 +3841,47 @@
             for (const e of enemies) {
               updateEnemy(e);
               if (e.type === 'ian' || mournful) continue;  // the creator & a grieving world cannot harm you
-              const d = Math.hypot(player.x - e.x, player.y - e.y);
-              if (player.dashT > 0) continue;            // i-frames: untouchable mid-dash
+              // shared "this foe is harmless right now" gates (independent of which hero)
               if ((e.type === 'sidious' || e.type === 'guard') && sidiousIntroT > 0) continue;  // harmless during the reveal
               if (e.type === 'vader' && e.intro > 0) continue;   // harmless as he steps from the shadows
               if (e.type === 'dio' && (e.mode === 'troll' || e.mode === 'dying')) continue;   // intro & death are harmless
               if (dioStopT > 0) continue;                // time is stopped — you cannot be touched (nor can you act)
               if (e.frozen > 0) continue;                // an iced foe is harmless — wail on it freely
-              if (d < e.kr + PLAYER_R) { slayPlayer(); return; }   // bodies overlap → struck
-              if (d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
-                e.grz = 50; score += 5 * mult;
-                addMeter(1);
-                sfSfx.graze();
-                sparks.push({ x: (player.x + e.x) / 2, y: (player.y + e.y) / 2 - 14, t: 14, color: 'white', txt: '+' + (5 * mult) });
-              }
-              // the Witch-king's flail reaches well past his body mid-swing
-              if (e.type === 'witchking' && !e.mounted && e.mode === 'swing' && player.dashT <= 0) {
-                const fdir = (player.x - e.x) >= 0 ? 1 : -1;
-                const fx = e.x + fdir * Math.cos(e.flailAng) * 64;
-                const fy = e.y - 32 + Math.sin(e.flailAng) * 64 * 0.7;
-                if (Math.hypot(player.x - fx, (player.y - 18) - fy) < 26) { slayPlayer(); return; }
-              }
-              // Vader's saber sweeps a lethal arc out front during the slash
-              if (e.type === 'vader' && e.mode === 'slash' && player.dashT <= 0) {
-                const tx = e.x + Math.cos(e.slashAng) * 56;
-                const ty = (e.y - 22) + Math.sin(e.slashAng) * 56;
-                if (Math.hypot(player.x - tx, (player.y - 18) - ty) < 24) { slayPlayer(); return; }
-              }
-              // DIO's MUDA barrage — The World pummels a lethal ring around him
-              if (e.type === 'dio' && e.mode === 'muda' && player.dashT <= 0 && d < 54) { slayPlayer(); return; }
-              // Sidious' twin sabers carve a lethal ring while he spins
-              if (e.type === 'sidious' && e.mode === 'spin' && player.dashT <= 0 && d < 46) { slayPlayer(); return; }
-              // Force lightning: a lethal corridor along the aim while it crackles
-              if (e.type === 'sidious' && e.mode === 'lightning' && player.dashT <= 0) {
-                const ox = e.x, oy = e.y - 24;
-                const px = player.x - ox, py = (player.y - 18) - oy;
-                const proj = px * e.lx + py * e.ly;
-                if (proj > 18 && proj < 470 && Math.abs(px * -e.ly + py * e.lx) < (e.lethalW || 18)) { slayPlayer(); return; }
+              // every standing hero is tested against this foe (in co-op the boss arcs can fell either)
+              for (const h of heroesLive()) {
+                if (h.dashT > 0) continue;               // i-frames: untouchable mid-dash
+                const d = Math.hypot(h.x - e.x, h.y - e.y);
+                if (d < e.kr + PLAYER_R) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
+                if (d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
+                  e.grz = 50; score += 5 * mult;
+                  addMeter(1);
+                  sfSfx.graze();
+                  sparks.push({ x: (h.x + e.x) / 2, y: (h.y + e.y) / 2 - 14, t: 14, color: 'white', txt: '+' + (5 * mult) });
+                }
+                // the Witch-king's flail reaches well past his body mid-swing
+                if (e.type === 'witchking' && !e.mounted && e.mode === 'swing') {
+                  const fdir = (h.x - e.x) >= 0 ? 1 : -1;
+                  const fx = e.x + fdir * Math.cos(e.flailAng) * 64;
+                  const fy = e.y - 32 + Math.sin(e.flailAng) * 64 * 0.7;
+                  if (Math.hypot(h.x - fx, (h.y - 18) - fy) < 26) { strike(h); if (!alive) return; continue; }
+                }
+                // Vader's saber sweeps a lethal arc out front during the slash
+                if (e.type === 'vader' && e.mode === 'slash') {
+                  const tx = e.x + Math.cos(e.slashAng) * 56;
+                  const ty = (e.y - 22) + Math.sin(e.slashAng) * 56;
+                  if (Math.hypot(h.x - tx, (h.y - 18) - ty) < 24) { strike(h); if (!alive) return; continue; }
+                }
+                // DIO's MUDA barrage — The World pummels a lethal ring around him
+                if (e.type === 'dio' && e.mode === 'muda' && d < 54) { strike(h); if (!alive) return; continue; }
+                // Sidious' twin sabers carve a lethal ring while he spins
+                if (e.type === 'sidious' && e.mode === 'spin' && d < 46) { strike(h); if (!alive) return; continue; }
+                // Force lightning: a lethal corridor along the aim while it crackles
+                if (e.type === 'sidious' && e.mode === 'lightning') {
+                  const ox = e.x, oy = e.y - 24;
+                  const px = h.x - ox, py = (h.y - 18) - oy;
+                  const proj = px * e.lx + py * e.ly;
+                  if (proj > 18 && proj < 470 && Math.abs(px * -e.ly + py * e.lx) < (e.lethalW || 18)) { strike(h); if (!alive) return; continue; }
+                }
               }
             }
 
@@ -3741,8 +3889,11 @@
             if (roadRoller) {
               updateRoadRoller();
               const rr = roadRoller;   // lethal only as it lands (not the whole fall), and only inside the telegraphed ellipse
-              if (rr && rr.phase === 'impact' && rr.t < 16 && player.dashT <= 0
-                  && ((player.x - rr.zoneX) / 46) ** 2 + ((player.y - rr.zoneY) / 17) ** 2 < 1) { slayPlayer(); return; }
+              if (rr && rr.phase === 'impact' && rr.t < 16) {
+                for (const h of heroesLive()) {
+                  if (h.dashT <= 0 && ((h.x - rr.zoneX) / 46) ** 2 + ((h.y - rr.zoneY) / 17) ** 2 < 1) { strike(h); if (!alive) return; }
+                }
+              }
             }
 
             /* arrows */
@@ -3776,10 +3927,10 @@
                   a.vx = hx / hd * 7.5; a.vy = hy / hd * 7.5;
                   if (hd < 18) { arrows.splice(i, 1); continue; }  // caught — Vader re-arms
                 }
-                if (player.dashT <= 0 && Math.hypot(a.x - player.x, a.y - (player.y - 18)) < 14) { slayPlayer(); return; }
+                for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 14) { strike(h); if (!alive) return; } }
                 continue;
               }
-              if (player.dashT <= 0 && Math.hypot(a.x - player.x, a.y - (player.y - 18)) < 10) { slayPlayer(); return; }
+              for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 10) { strike(h); if (!alive) return; break; } }
             }
 
             /* passive score */
@@ -4209,32 +4360,16 @@
               ctx.restore();
             }
             for (const g of allies) drawChamp(g);
-            const plean = clamp(player.vx * 0.04, -0.3, 0.3);
-            const pcolor = player.dashT > 0 ? '#80deea' : 'white';
             if (jojoActive && playerStand > 0.05) {   // Star Platinum rises above and behind the hero's shoulder
               const dio = enemies.find(en => en.type === 'dio');
               const sdir = dio && dio.x < player.x ? -1 : 1;
               ctx.save();
               ctx.translate(player.x - sdir * 12, player.y - 24); ctx.scale(1.4, 1.4);
-              drawStarPlatinum(sdir, playerStand, swingT > 0);
+              drawStarPlatinum(sdir, playerStand, player.swingT > 0);
               ctx.restore();
             }
-            stickFigure(player.x, player.y, player.phase, pcolor, 1, 1, plean, player.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
-            // the Aegis: a soft hex-bubble around the hero while it holds; a bright flash as it breaks
-            if (player.shield || player.iframe > 0) {
-              const breaking = !player.shield && player.iframe > 0;
-              const a = breaking ? player.iframe / 44 : (api.reduceMotion ? 0.5 : 0.42 + 0.18 * Math.sin(frame * 0.14));
-              ctx.save(); ctx.translate(player.x, player.y - 14);
-              ctx.strokeStyle = breaking ? 'rgba(200,240,255,' + a + ')' : 'rgba(127,216,255,' + a + ')';
-              ctx.lineWidth = breaking ? 3.5 : 2.4;
-              ctx.shadowColor = '#7fd8ff'; ctx.shadowBlur = breaking ? 16 : 8;
-              const rad = 26 + (breaking ? (1 - player.iframe / 44) * 14 : 0);
-              ctx.beginPath();
-              for (let s = 0; s <= 6; s++) { const aa = s / 6 * Math.PI * 2 - Math.PI / 2; const fn = s ? 'lineTo' : 'moveTo'; ctx[fn](Math.cos(aa) * rad, Math.sin(aa) * rad * 1.18); }
-              ctx.closePath(); ctx.stroke();
-              ctx.shadowBlur = 0; ctx.restore();
-            }
-            if (swordT > 0 || heldSaber) drawHeldSword();
+            if (coop && p2) drawHero(p2, P2_COL);   // P2 first so P1 reads on top when they overlap
+            drawHero(player, 'white');
             if (sidFinale) drawSidiousFinale();             // the death cutscene plays over the scene
             if (roadRoller) drawRoadRoller(roadRoller);     // the road roller, on top of everything
             // stopped-time wash: a sepia overlay + a clock motif while DIO acts in frozen time
@@ -4328,11 +4463,11 @@
               (up.shield ? (player.shield
                 ? '  ·  <span style="color:#7fd8ff">🛡️ AEGIS</span>'
                 : '  ·  <span style="color:#5a6168">🛡️ broken · refreshes next wave</span>') : '') + '<br>' +
-              (heldSaber
+              (player.heldSaber
                 ? '<span style="color:#5ac8ff">⚔ lightsaber · X strikes</span>'
                 : saberPickup ? '<span style="color:#5ac8ff">⚔ a lightsaber waits ahead</span>'
-                : swordT > 0
-                ? '<span style="color:#fff59d">⚔ ' + Math.ceil(swordT / 60) + 's · X swings</span>'
+                : player.swordT > 0
+                ? '<span style="color:#fff59d">⚔ ' + Math.ceil(player.swordT / 60) + 's · X swings</span>'
                 : stone ? '<span style="color:#fff59d">⚔ a sword waits in the stone</span>' : '<span style="color:#888">⚔ —</span>') + '<br>' +
               (!champUnlocked()
                 ? '<span style="color:#888">🧙 no allies unlocked yet</span>'
@@ -4347,6 +4482,20 @@
                         : charges > 0 ? 'summon 1·2·3' : 'charging';
                       return '<span style="color:#bbdefb">🧙 ' + pips + '  ·  ' + tail + '</span>';
                     })());
+            if (coop && p2) {
+              // a per-hero status line: dash charges, Aegis, and the downed/reviving state
+              const hero = (h, label, col) => {
+                if (h.down) {
+                  const pct = Math.round(clamp(h.reviveT / REVIVE_T, 0, 1) * 100);
+                  return '<span style="color:#ff5252">' + label + ' DOWN' + (pct ? ' · reviving ' + pct + '%' : ' · stand close to revive') + '</span>';
+                }
+                const dash = up.dashMax === 0 ? '' : ' ◆' + h.dashCharges;
+                const aeg = up.shield ? (h.shield ? ' 🛡️' : ' 🛡️✕') : '';
+                const blade = h.heldSaber ? ' ⚔' : h.swordT > 0 ? ' ⚔' + Math.ceil(h.swordT / 60) + 's' : '';
+                return '<span style="color:' + col + '">' + label + dash + aeg + blade + '</span>';
+              };
+              hud.innerHTML += '<br>' + hero(player, 'P1', '#fff') + '   ' + hero(p2, 'P2', P2_COL);
+            }
             if (player.choke > 0) hud.innerHTML = '<span style="color:#ff5252;font-weight:bold">✊ FORCE CHOKE — mash X / SPACE to break free!</span><br>' + hud.innerHTML;
             if (ianActive) hud.innerHTML = ianFinale
               ? 'the creator\'s fate is sealed...'
@@ -4388,31 +4537,56 @@
             return '#1b5e20';
           }
 
-          function tryDash() {
-            if (!started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || player.dashT > 0 || player.dashCharges <= 0) return;
-            const d = Math.hypot(player.fx, player.fy) || 1;
-            player.vx = player.fx / d * 11;
-            player.vy = player.fy / d * 11;
-            player.dashT = up.dashLen;
-            player.dashCharges--;
-            if (player.rechargeT <= 0) player.rechargeT = up.dashCd;  // start refilling
+          // shared per-hero movement physics (friction, speed cap, dash trail, charge recharge).
+          // Called once per hero per tick; in single-player it's only ever player, so behaviour
+          // (and RNG consumption — there is none here) is identical to the old inline block.
+          function moveHero(h, ix, iy) {
+            h.vx = h.vx * 0.86 + ix * 0.62;
+            h.vy = h.vy * 0.86 + iy * 0.62;
+            const pv = Math.hypot(h.vx, h.vy);
+            // the speed cap lifts during a dash and while reeling from a Force push, so the shove carries
+            if (h.dashT <= 0 && h.stunT <= 0 && (h.choke || 0) <= 0 && pv > 4.3) { h.vx *= 4.3 / pv; h.vy *= 4.3 / pv; }
+            h.x = clamp(h.x + h.vx, 14, GW - 14);
+            h.y = clamp(h.y + h.vy, 40, GH - 10);
+            if (pv > 0.4) h.phase += 0.06 + pv * 0.045;
+            if (h.dashT > 0) {
+              h.dashT--;
+              ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16 });
+            }
+            if (h.iframe > 0) h.iframe--;   // post-shield invulnerability beat
+            if (h.dashCharges < up.dashMax && h.rechargeT > 0 && --h.rechargeT <= 0) {
+              h.dashCharges++;
+              if (h.dashCharges < up.dashMax) h.rechargeT = up.dashCd;  // chain refills
+            }
+          }
+
+          function tryDash(h) {
+            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || (h.choke || 0) > 0 || h.dashT > 0 || h.dashCharges <= 0) return;
+            const d = Math.hypot(h.fx, h.fy) || 1;
+            h.vx = h.fx / d * 11;
+            h.vy = h.fy / d * 11;
+            h.dashT = up.dashLen;
+            h.dashCharges--;
+            if (h.rechargeT <= 0) h.rechargeT = up.dashCd;  // start refilling
             sfSfx.dash();
           }
 
-          function trySwing() {
+          function trySwing(h) {
             // Cooldown is gated on the sim tick (not performance.now) so it's part of the
             // deterministic state. up.swingMs stays in ms for the upgrade defs; convert here.
-            if (!started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || (swordT <= 0 && !heldSaber) || tick < swingReadyTick) return;
-            swingReadyTick = tick + Math.round(up.swingMs * SIM_HZ / 1000); swingT = 10;
-            heldSaber ? sfSfx.saberHit() : sfSfx.swing();
-            const fd = Math.hypot(player.fx, player.fy) || 1;
-            const fx = player.fx / fd, fy = player.fy / fd;
+            // The blade (Excalibur / lightsaber) is the run's shared resource — in co-op either
+            // hero may wield it, each on their own swing timer (h.swingT / h.swingReadyTick).
+            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || (h.swordT <= 0 && !h.heldSaber) || tick < h.swingReadyTick) return;
+            h.swingReadyTick = tick + Math.round(up.swingMs * SIM_HZ / 1000); h.swingT = 10;
+            h.heldSaber ? sfSfx.saberHit() : sfSfx.swing();
+            const fd = Math.hypot(h.fx, h.fy) || 1;
+            const fx = h.fx / fd, fy = h.fy / fd;
             const kills0 = kills;
             for (const e of enemies) {
               // bosses are untouchable while they run a scripted, non-aggressive intro — no cheesing them first
               if (e.type === 'dio' && (e.mode === 'troll' || e.mode === 'dying')) continue;
               if ((e.type === 'sidious' || e.type === 'guard') && sidiousIntroT > 0) continue;
-              const dx = e.x - player.x, dy = e.y - player.y, d = Math.hypot(dx, dy) || 1;
+              const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
               if (d > up.swingR + (e.type === 'troll' ? 14 : e.type === 'ogre' ? 20 : 0)) continue;
               if ((dx / d) * fx + (dy / d) * fy < -0.2) continue;  // ~220° cleave in front
               if (e.hp && --e.hp > 0) {
@@ -4434,7 +4608,7 @@
             if (slain > 0) shake = Math.max(shake, Math.min(10, 2 + slain * 2));
             for (let i = arrows.length - 1; i >= 0; i--) {  // the blade meets the bolts
               const a = arrows[i];
-              const dx = a.x - player.x, dy = a.y - player.y, d = Math.hypot(dx, dy) || 1;
+              const dx = a.x - h.x, dy = a.y - h.y, d = Math.hypot(dx, dy) || 1;
               if (d < up.swingR + 20 && (dx / d) * fx + (dy / d) * fy > -0.2) {
                 sparks.push({ x: a.x, y: a.y, t: 12, color: '#fff', txt: '✦' });
                 if (a.kind === 'laser') {
@@ -4504,7 +4678,7 @@
             swActive = true; swState = 'march'; swReadyT = 0; vaderActive = false;
             enemies = []; warns = []; arrows = []; bolts = []; coins = []; powerups = []; blasts = []; corpses = [];
             // no medieval steel beyond the door — Excalibur stays behind
-            stone = null; swordT = 0; swingT = 0; heldSaber = false;
+            stone = null; clearBlades();
             saberPickup = { x: GW * 0.30, y: GH / 2 };  // a lightsaber waits on the deck
             // player has just charged through the doorway — slam them against the west wall
             player.x = 34; player.y = GH / 2; player.vx = 0; player.vy = 0;
@@ -4583,7 +4757,7 @@
             wave = 5; nineDone = true; waveQuota = 0;
             startStarWars();                          // build the corridor (starfield, west-wall spawn)
             enemies = []; arrows = []; swTroopersLeft = 0;  // skip the trooper squad entirely
-            heldSaber = true; saberPickup = null;     // hand the player the lightsaber outright
+            armSaberAll(true); saberPickup = null;     // hand the heroes the lightsaber outright
             vaderActive = true; swState = 'vader';
             beginBossIntro('vader', () => {
               banishAllies();                          // the duel is his alone
@@ -4629,6 +4803,24 @@
               if (e.key === 'Enter') lbSubmit();
               else if (e.key === 'Backspace') lbName = lbName.slice(0, -1);
               else if (e.key.length === 1 && lbName.length < 10 && /[A-Za-z0-9._-]/.test(e.key)) lbName += e.key;
+              e.preventDefault();
+              return;
+            }
+            // ── intro screen: pick 1-PLAYER / 2-PLAYER, then begin ──
+            // ←/→ (or 1/2, or ↑/↓ to flip) move the highlight; the controls for the choice are shown
+            // on the panel; Z / Enter / Space begins the run in the chosen mode. (The headless
+            // determinism test starts by dispatching Enter, then holds ArrowRight to move.)
+            if (!started) {
+              if (e.key === 'ArrowLeft' || e.key === '1') { coopSel = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === 'ArrowRight' || e.key === '2') { coopSel = 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { coopSel = coopSel ? 0 : 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (['z', 'Z', 'Enter', ' '].includes(e.key)) {
+                coop = coopSel === 1;
+                if (coop) setupCoop();
+                started = true; frame = 0;
+                banner = coop ? 'CO-OP · WAVE 1' : 'WAVE 1'; bannerT = 90;
+                startSfMusic();
+              }
               e.preventDefault();
               return;
             }
@@ -4690,24 +4882,32 @@
             // Force choke: the only escape is to struggle — mash attack/dash; nothing else responds
             if (player.choke > 0) {
               if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) {
-                player.chokeBreak++; swingT = 6; sfSfx.saberHit();
+                player.chokeBreak++; player.swingT = 6; sfSfx.saberHit();
               }
               if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
               return;
             }
-            const moveKey = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key);
-            if (!started && moveKey) { started = true; frame = 0; banner = 'WAVE 1'; bannerT = 90; startSfMusic(); }
-            if (e.key === ' ' || e.key === 'Shift') tryDash();
-            if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') trySwing();
+            // combat keys. Solo: Space/Shift dash, X/F swing (unchanged). Co-op splits them by
+            // hand — P1 = Right-Shift dash + '/' swing, P2 = Left-Shift dash + F swing (the two
+            // Shifts are told apart by e.code). Summons/champion-prompt are shared either way.
+            if (!coop) {
+              if (e.key === ' ' || e.key === 'Shift') tryDash(player);
+              if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') trySwing(player);
+            } else {
+              if (e.code === 'ShiftRight') tryDash(player);
+              if (e.code === 'Slash') trySwing(player);
+              if (e.code === 'ShiftLeft') tryDash(p2);
+              if (e.key === 'f' || e.key === 'F') trySwing(p2);
+            }
             if (e.key === 'g' || e.key === 'G') championPrompt();
             if (e.key === '1') trySummon('gandalf');
             if (e.key === '2') trySummon('luke');
             if (e.key === '3') trySummon('jotaro');
             if ((e.key === 'r' || e.key === 'R') && !alive) {
               init();
-              started = true; banner = 'WAVE 1'; bannerT = 90; startSfMusic();
+              started = true; banner = coop ? 'CO-OP · WAVE 1' : 'WAVE 1'; bannerT = 90; startSfMusic();
             }
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
           }
           function offKey(e) { keys[e.key] = false; }
           document.addEventListener('keydown', onKey);

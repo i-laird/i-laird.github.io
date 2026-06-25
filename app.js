@@ -3105,6 +3105,18 @@
   }
 
   async function boot() {
+    // Fast path: the home screen (banner + connect cards + help line) is pre-rendered as static
+    // HTML in index.html, so it paints instantly — before this (large, obfuscated) bundle finishes
+    // downloading/parsing. When it's present, don't re-render; just bring the terminal to life and
+    // wire the one card whose action needs JS (Projects). The plain <a> links already work.
+    if (out.querySelector('#home-cards')) {
+      inputRow.style.display = 'flex';
+      cmd.focus();
+      hydrateHomeCards();
+      return;
+    }
+
+    // Fallback: a stripped index.html with an empty #out — render the home screen the old way.
     appendNode((() => {
       const pre = document.createElement('pre');
       pre.className = 'ascii';
@@ -3122,6 +3134,17 @@
     renderConnectCards();
     line('Type <span class="blue">help</span> to see available commands.', 'white');
     blank();
+  }
+
+  // Wire the static home-screen Projects card — the only card whose action needs JS (it runs the
+  // projects command inline; the rest are plain links that work without the bundle). Idempotent,
+  // since boot() can run more than once (e.g. the mobile auto-launch path / tests).
+  function hydrateHomeCards() {
+    const proj = document.getElementById('home-projects');
+    if (proj && !proj.dataset.wired) {
+      proj.dataset.wired = '1';
+      proj.addEventListener('click', e => { e.preventDefault(); COMMANDS.projects(); scroll(); });
+    }
   }
 
   /* ── Prompt echo ── */
