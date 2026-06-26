@@ -213,13 +213,23 @@
             for (const h of heroesLive()) if (Math.hypot(h.x - x, h.y - y) < r) return h;
             return null;
           }
-          // who a horde grunt chases. The scripted boss/set-piece foes stay locked on P1 (their
-          // duels are cinematic 1-on-1s); the open-field horde splits aggro to the nearest hero.
+          // the hero a boss / set-piece foe focuses on: P1 while standing (the duel is cinematic
+          // 1-on-1), but the survivor if P1 has fallen — otherwise the boss would keep attacking
+          // P1's downed body while the other hero runs free.
+          function bossTarget() {
+            if (!coop) return player;
+            if (!player.down) return player;
+            if (p2 && !p2.down) return p2;
+            return player;                 // both down — the run is ending anyway
+          }
+          // who a horde grunt chases. The scripted boss/set-piece foes lock onto bossTarget()
+          // (P1, or the survivor); the open-field horde splits aggro to the nearest standing hero.
           function hordeTarget(e) {
-            if (!coop || bossActive || nineActive) return player;
+            if (!coop) return player;
+            if (bossActive || nineActive) return bossTarget();
             const t = e.type;
             if (t === 'wraith' || t === 'witchking' || t === 'vader' || t === 'sidious' ||
-                t === 'dio' || t === 'guard' || t === 'trooper' || t === 'ian') return player;
+                t === 'dio' || t === 'guard' || t === 'trooper' || t === 'ian') return bossTarget();
             return nearestLiveHero(e.x, e.y);
           }
 
@@ -2333,7 +2343,7 @@
               else e.st = 22;
               return;
             }
-            if (e.phase2 && r < 0.30)                startCast(e, 'choke');  // Force choke reaches across the room
+            if (e.phase2 && r < 0.30 && bossTarget() === player)  startCast(e, 'choke');  // Force choke is P1-only (the struggle/escape is keyed to player)
             else if (r < (e.phase2 ? 0.52 : 0.34))   startCast(e, 'throw');
             else if (r < (e.phase2 ? 0.74 : 0.58))   startCast(e, 'push');
             else { e.mode = 'wind'; e.st = e.phase2 ? 18 : 26; }  // melee slash
@@ -2344,18 +2354,20 @@
             sparks.push({ x: e.x, y: e.y - 42, t: 14, color: '#b39ddb',
                           txt: power === 'throw' ? 'SABER THROW' : power === 'choke' ? 'FORCE CHOKE' : 'THE FORCE' });
           }
-          // shove the player away from Vader and lock their footing briefly so the push carries
+          // shove the focused hero away from Vader and lock their footing briefly so the push carries
           function forcePush(e, mag) {
-            const ddx = player.x - e.x, ddy = player.y - e.y, dd = Math.hypot(ddx, ddy) || 1;
-            player.vx = ddx / dd * 15 * mag; player.vy = ddy / dd * 15 * mag;
-            player.stunT = Math.round(14 * mag); player.choke = 0;
+            const t = bossTarget();
+            const ddx = t.x - e.x, ddy = t.y - e.y, dd = Math.hypot(ddx, ddy) || 1;
+            t.vx = ddx / dd * 15 * mag; t.vy = ddy / dd * 15 * mag;
+            t.stunT = Math.round(14 * mag); t.choke = 0;
             swFlash = Math.max(swFlash, 14);
             sfSfx.thud();
-            sparks.push({ x: player.x, y: player.y - 24, t: 16, color: '#9ec8ff', txt: 'FORCE PUSH' });
+            sparks.push({ x: t.x, y: t.y - 24, t: 16, color: '#9ec8ff', txt: 'FORCE PUSH' });
           }
           // hurl the lightsaber: a spinning blade that crosses the room then homes back to Vader (boomerang)
           function vaderThrow(e) {
-            const ang = Math.atan2(player.y - (e.y - 22), player.x - e.x), sp = 6.4;
+            const t = bossTarget();
+            const ang = Math.atan2(t.y - (e.y - 22), t.x - e.x), sp = 6.4;
             arrows.push({ x: e.x + Math.cos(ang) * 14, y: (e.y - 22) + Math.sin(ang) * 14,
                           vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
                           t: 400, kind: 'vsaber', range: 340, travelled: 0, returning: false, spin: 0 });
@@ -2388,13 +2400,14 @@
             shake = Math.max(shake, 10);
             sfSfx.zap();
           }
-          // a leap target that circles the player — keeps him orbiting, not blinking to random corners
+          // a leap target that circles the focused hero — keeps him orbiting, not blinking to corners
           function sidiousFlank(e) {
-            const cur = Math.atan2(e.y - player.y, e.x - player.x);
+            const t = bossTarget();
+            const cur = Math.atan2(e.y - t.y, e.x - t.x);
             const ang = cur + (rnd() < 0.5 ? 1 : -1) * (0.7 + rnd() * 0.6);
             const rad = 155 + rnd() * 55;
-            return { x: clamp(player.x + Math.cos(ang) * rad, 30, GW - 30),
-                     y: clamp(player.y + Math.sin(ang) * rad, 48, GH - 22) };
+            return { x: clamp(t.x + Math.cos(ang) * rad, 30, GW - 30),
+                     y: clamp(t.y + Math.sin(ang) * rad, 48, GH - 22) };
           }
           // begin a lightning windup — 'bolt' locks a straight corridor; 'sweep' rakes a wide arc across the player
           function startSidiousCast(e, kind, lx, ly) {
@@ -2527,7 +2540,7 @@
           function startBarrage(e) {
             e.mode = 'barrage'; e.st = 56;
             startDioStop(88);   // the synced "ZA WARUDO!" spark is the callout — no queued line to lag behind the action
-            const px = player.x, py = player.y;   // knives ring the frozen hero, with spread so there are gaps to weave
+            const _t = bossTarget(), px = _t.x, py = _t.y;   // knives ring the frozen hero, with spread so there are gaps to weave
             for (let i = 0; i < 15; i++) {
               const edge = i / 15 * Math.PI * 2;
               const sx = px + Math.cos(edge) * 360, sy = py + Math.sin(edge) * 320;
@@ -2539,7 +2552,7 @@
             e.mode = 'roller'; e.st = 78;
             startDioStop(66);
             dlg = []; dlgT = 0; banner = 'ROAD ROLLER DA!'; bannerSub = '— DIO'; bannerT = 95;   // fire the callout in sync with the attack, bypassing the queue
-            roadRoller = { zoneX: clamp(player.x, 40, GW - 40), zoneY: clamp(player.y, 60, GH - 16), x: clamp(player.x, 40, GW - 40), y: -80, phase: 'hover', t: 0, toy: false };
+            { const t = bossTarget(); roadRoller = { zoneX: clamp(t.x, 40, GW - 40), zoneY: clamp(t.y, 60, GH - 16), x: clamp(t.x, 40, GW - 40), y: -80, phase: 'hover', t: 0, toy: false }; }
             shake = 10;
           }
           function updateRoadRoller() {
@@ -2802,8 +2815,8 @@
               if (cyc < 280) {
                 e.mode = 'circle';
                 const a = e.slot + frame * 0.004;
-                const tx = clamp(player.x + Math.cos(a) * e.ring, 10, GW - 10);
-                const ty = clamp(player.y + Math.sin(a) * e.ring, 36, GH - 6);
+                const tx = clamp(tgt.x + Math.cos(a) * e.ring, 10, GW - 10);
+                const ty = clamp(tgt.y + Math.sin(a) * e.ring, 36, GH - 6);
                 const ddx = tx - e.x, ddy = ty - e.y, dd = Math.hypot(ddx, ddy) || 1;
                 if (dd > 4) { e.x += ddx / dd * Math.min(e.spd, dd); e.y += ddy / dd * Math.min(e.spd, dd); }
                 e.phase += 0.12;
@@ -2831,9 +2844,9 @@
                 // the fell beast: wheel at range, telegraph, then a screaming dive
                 e.phase += 0.16;
                 if (e.mode === 'hover') {
-                  const ang = Math.atan2(e.y - player.y, e.x - player.x) + 0.013;
-                  const tx = clamp(player.x + Math.cos(ang) * 210, 40, GW - 40);
-                  const ty = clamp(player.y + Math.sin(ang) * 175, 50, GH - 40);
+                  const ang = Math.atan2(e.y - tgt.y, e.x - tgt.x) + 0.013;
+                  const tx = clamp(tgt.x + Math.cos(ang) * 210, 40, GW - 40);
+                  const ty = clamp(tgt.y + Math.sin(ang) * 175, 50, GH - 40);
                   const ddx = tx - e.x, ddy = ty - e.y, dd = Math.hypot(ddx, ddy) || 1;
                   e.x += ddx / dd * Math.min(e.spd, dd); e.y += ddy / dd * Math.min(e.spd, dd);
                   if (e.st <= 0) { e.mode = 'aim'; e.st = 34; }
@@ -3461,8 +3474,9 @@
             } else if (player.stunT > 0) { ix = 0; iy = 0; player.stunT--; }  // Force-push recoil
             moveHero(player, ix, iy);
 
-            /* P2 (co-op only): WASD move, sharing the same physics. P2 has no boss-only states
-               (choke/stun), but the cutscene/time-stop locks freeze them too. */
+            /* P2 (co-op only): WASD move, sharing the same physics. P2 is never Force-choked (that's
+               P1-only), but a boss can Force-push it (when it's the focused target), and the
+               cutscene/time-stop locks freeze it too. */
             if (coop && p2 && !p2.down) {
               let jx = 0, jy = 0;
               if (keys['a'] || keys['A']) jx = -1;
@@ -3472,6 +3486,7 @@
               if (jx && jy) { jx *= 0.707; jy *= 0.707; }
               if (jx || jy) { p2.fx = jx; p2.fy = jy; }
               if (sidFinale || dioFinale || ianActive || dioStopT > 0) { jx = 0; jy = 0; }
+              if (p2.stunT > 0) { jx = 0; jy = 0; p2.stunT--; }   // Force-push recoil carries
               moveHero(p2, jx, jy);
             }
 
@@ -4682,6 +4697,14 @@
             saberPickup = { x: GW * 0.30, y: GH / 2 };  // a lightsaber waits on the deck
             // player has just charged through the doorway — slam them against the west wall
             player.x = 34; player.y = GH / 2; player.vx = 0; player.vy = 0;
+            // co-op: P2 lands beside P1, and both arm up — a single floor saber can't equip two,
+            // and both heroes need a blade to deflect bolts and duel Vader. (Skip the lone pickup.)
+            // A fresh set-piece also revives a fallen partner so nobody's stuck down through the duel.
+            if (coop && p2) {
+              for (const h of heroesAll()) { h.down = false; h.reviveT = 0; h.shield = up.shield; }
+              p2.x = 34; p2.y = GH / 2 + 42; p2.vx = 0; p2.vy = 0;
+              saberPickup = null; armSaberAll(true);
+            }
             // a fixed starfield so it doesn't flicker frame to frame
             swStars = [];
             for (let i = 0; i < 70; i++) {
@@ -4714,6 +4737,7 @@
             if (rafId) cancelAnimationFrame(rafId);
             document.removeEventListener('keydown', onKey);
             document.removeEventListener('keyup',   offKey);
+            window.removeEventListener('blur', dropKeys);
             canvas.remove(); hud.remove(); xp._sfCleanup = null;
           }
 
@@ -4795,8 +4819,14 @@
             enemies = []; arrows = []; warns = []; mournful = false; endless = false;
             beginBossIntro('ian', startIan);
           }
+          // The key map is keyed by a Shift-invariant name: single characters are lowercased so a
+          // letter released while Shift is held (keyup fires as 'D', not 'd') still clears the same
+          // entry that keydown set. Without this, P2's WASD keys stick when dashing (Left-Shift) —
+          // e.g. holding 'd' to run right + tapping Shift leaves keys['d'] true forever. (Arrow keys
+          // aren't case-sensitive, which is why only P2's letter movement was affected.)
+          const keyName = (k) => (k.length === 1 ? k.toLowerCase() : k);
           function onKey(e) {
-            keys[e.key] = true;
+            keys[keyName(e.key)] = true;
             // entering a name for the leaderboard after death — capture typing, swallow
             // everything else (so letters/digits go into the name, not cheats or the R-restart)
             if (!alive && lbState === 'enter') {
@@ -4909,9 +4939,14 @@
             }
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
           }
-          function offKey(e) { keys[e.key] = false; }
+          function offKey(e) { keys[keyName(e.key)] = false; }
+          function dropKeys() { keys = {}; }   // release everything (focus loss → missed keyups)
           document.addEventListener('keydown', onKey);
           document.addEventListener('keyup',   offKey);
+          // Safety net for stuck movement: if the window loses focus (alt-tab, a click into the
+          // devtools, etc.) the keyup may never arrive, leaving a key "held". Drop all held keys on
+          // blur so a hero can't run off on its own.
+          window.addEventListener('blur', dropKeys);
 
           init(); frameStep();
           xp._sfCleanup = stopGame;
