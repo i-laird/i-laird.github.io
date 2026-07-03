@@ -29,18 +29,22 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | ----------------- | ---------------------------------------------------------------- |
 | `index.html`      | Bare markup (~100 lines); all behavior is loaded scripts.        |
 | `style.css`       | The whole stylesheet. Theme colors are CSS variables on `:root`. |
-| `app.js`          | The terminal: commands, HAL mode, sans mode, the game shells.    |
-| `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~280 KB).     |
+| `app.js`          | The terminal: commands, HAL mode, dispatch, chess.               |
+| `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~300 KB).     |
+| `games.js`        | The four shell games (racecar/snake/pong/2048), lazy-loaded.     |
+| `sans.js`         | The sans easter egg (command set + battle), lazy-loaded.         |
 | `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text).       |
 | `test/`           | Node test-runner suites for `lib/`.                              |
 | `assets/`         | Audio, images, and the Open Graph card.                          |
 
 ### A note on architecture
 
-`app.js` and `stickfighter.js` are **classic scripts that share one global
-scope** — not ES modules, not wrapped in an IIFE. This is deliberate: inline
-`onclick` handlers in `index.html` call top-level functions as globals, and the
-lazily-loaded game reads `app.js`'s globals directly with no import wiring.
+`app.js` and the lazy chunks (`stickfighter.js` / `games.js` / `sans.js`) are
+**classic scripts** — not ES modules, not wrapped in an IIFE. This is
+deliberate: inline `onclick` handlers in `index.html` call top-level functions
+as globals, and each lazily-loaded chunk hands app.js a single global entry
+point (everything else it needs arrives through an explicit `api` bridge, so
+the chunks can be bundled and obfuscated independently).
 
 The `lib/` files preserve that contract. Each is a classic `<script>` whose
 top-level functions become browser globals (loaded before `app.js`), **and**
@@ -61,11 +65,11 @@ npm run format        # Prettier write
 npm run format:check  # Prettier check (CI gate)
 ```
 
-The two large runtime files are intentionally exempt from Prettier and from
-strict linting (they are a single hand-formatted global scope; `stickfighter.js`
-also relies on load-bearing template-literal indentation). New logic that _can_
-be pure should live in `lib/` with tests — that is the part the linter and the
-test runner guard.
+The large runtime files (`app.js` + the lazy chunks) are intentionally exempt
+from Prettier and from strict linting (they are hand-formatted and rely on
+load-bearing template-literal indentation). New logic that _can_ be pure should
+live in `lib/` with tests — that is the part the linter and the test runner
+guard.
 
 ## Deployment
 

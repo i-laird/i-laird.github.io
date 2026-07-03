@@ -5,8 +5,9 @@
 // The achievement set is coupled to two things that live outside app.js and drift
 // silently when it changes:
 //   1. generate_og_image.sh hardcodes the count ("N easter eggs") into the share image.
-//   2. unlockAchievement('id') is called from ~50 sites across app.js / stickfighter.js /
-//      index.html; a typo'd id never unlocks and fails silently.
+//   2. unlockAchievement('id') is called from ~50 sites across app.js and the lazy
+//      chunks (stickfighter.js / games.js / sans.js) plus index.html; a typo'd id
+//      never unlocks and fails silently.
 // CLAUDE.md also notes the finale's `foundEggs.size === ACHIEVEMENTS.length` math is tied
 // to this count. These assertions fail loudly the moment any of that diverges.
 
@@ -30,7 +31,7 @@ function achievementIds() {
 // (unlockAchievement(data.ach), unlockAchievement(item.ach)) are resolved at runtime from
 // backend / item data and can't be checked statically, so they're intentionally excluded.
 function referencedIds() {
-  const files = ['app.js', 'stickfighter.js', 'index.html'];
+  const files = ['app.js', 'stickfighter.js', 'games.js', 'sans.js', 'index.html'];
   const ids = [];
   for (const f of files) {
     for (const m of read(f).matchAll(/unlockAchievement\(\s*'([a-z0-9-]+)'\s*\)/g)) {

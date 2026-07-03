@@ -23,6 +23,12 @@
  *                          + plain string-array relocation, which is ~free at runtime.
  *                          It reaches app.js only through the explicit `api` bridge, so
  *                          it can be a separate chunk.
+ *   - dist/games.js      = the four shell games (racecar/snake/pong/2048), same
+ *                          treatment: own IIFE, LIGHT (they run 20Hz–60fps loops),
+ *                          reached only through app.js's gamesBridge().
+ *   - dist/sans.js       = the sans easter egg (command set + battle), same
+ *                          treatment: own IIFE, LIGHT (20fps battle loop), reached
+ *                          only through app.js's sansBridge().
  *   - dist/index.html    = the five lib+app <script> tags collapsed to one app.js.
  *   - static files copied through.
  *
@@ -30,8 +36,9 @@
  *   - renameProperties / transformObjectKeys OFF — worker JSON fields, DOM props,
  *     the api.* bridge keys, and the window.<publicFn> exports are all literal
  *     property names.
- *   - openStickFighter reserved on both sides — the lazy-load handshake crosses the
- *     chunk boundary by that name (app.js looks it up; stickfighter.js sets it on window).
+ *   - the chunk entry names (openStickFighter, initGames, initSansMode) reserved on
+ *     both sides — each lazy-load handshake crosses its chunk boundary by that name
+ *     (app.js looks it up; the chunk sets it on window).
  *   - no source maps (they'd hand back the clean source).
  */
 
@@ -49,13 +56,13 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const iife = (code) => `(function(){\n${code}\n})();\n`;
 
 // Shared: never rename properties (breaks JSON/DOM/api access), keep the cross-chunk
-// entry name, never emit source maps.
+// entry names, never emit source maps.
 const COMMON = {
   renameProperties: false,
   transformObjectKeys: false,
   renameGlobals: false,
   sourceMap: false,
-  reservedNames: ['^openStickFighter$'],
+  reservedNames: ['^openStickFighter$', '^initGames$', '^initSansMode$'],
 };
 
 // HEAVY — the main bundle. Not perf-critical, so throw the book at it.
@@ -120,12 +127,14 @@ function build() {
   const bundleSrc = iife(BUNDLE.map(read).join('\n;\n'));
   fs.writeFileSync(path.join(DIST, 'app.js'), obfuscate('app bundle', bundleSrc, HEAVY));
 
-  // Game chunk: wrap, obfuscate light.
-  const sfSrc = iife(read('stickfighter.js'));
-  fs.writeFileSync(
-    path.join(DIST, 'stickfighter.js'),
-    obfuscate('stickfighter', sfSrc, LIGHT)
-  );
+  // Lazy chunks: wrap each in its own IIFE, obfuscate light (they all run
+  // game loops; each exports only its window.<entry> — see reservedNames).
+  for (const chunk of ['stickfighter.js', 'games.js', 'sans.js']) {
+    fs.writeFileSync(
+      path.join(DIST, chunk),
+      obfuscate(chunk.replace('.js', ''), iife(read(chunk)), LIGHT)
+    );
+  }
 
   // index.html: the lib scripts are now inside app.js, so drop their tags. (They're loaded
   // with `defer` in the source, so match that; app.js keeps its own deferred tag.)

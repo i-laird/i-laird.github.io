@@ -10,6 +10,9 @@
  *      it against the clean source — confirming the light config kept the 60fps
  *      loop's JS overhead negligible (this is the whole point of the heavy/light
  *      split).
+ *   3. Execute the other lazy chunks (dist/games.js, dist/sans.js) and assert
+ *      each still exports its window.<entry> and returns the handler keys app.js
+ *      calls — the cross-chunk contract obfuscation must not break.
  *
  * Run after `npm run build`. Exits non-zero on failure so CI can gate on it.
  */
@@ -188,9 +191,40 @@ function verifyGamePerf() {
   );
 }
 
+// ── 3. The other lazy chunks keep their entry globals + handler contracts ─────
+function verifyLazyChunks() {
+  const stubApi = new Proxy(
+    {},
+    { get: () => () => {}, set: () => true } // every bridge key: callable no-op / writable
+  );
+  for (const [file, entry, keys] of [
+    ['games.js', 'initGames', ['racecar', 'snake', 'pong', '2048']],
+    ['sans.js', 'initSansMode', ['activate', 'command', 'battleCommand']],
+  ]) {
+    const { dom, window } = makeDom('<!doctype html><html><body></body></html>');
+    inject(window, read(path.join(DIST, file)));
+    assert.equal(
+      typeof window[entry],
+      'function',
+      `${file}: window.${entry} must survive obfuscation (reserved name)`
+    );
+    const handlers = window[entry](stubApi);
+    for (const k of keys) {
+      assert.equal(
+        typeof handlers[k],
+        'function',
+        `${file}: ${entry}() must return a '${k}' handler (literal key — renameProperties must stay off)`
+      );
+    }
+    dom.window.close();
+    console.log(`✓ ${file}: ${entry}() exports intact (${keys.join(', ')})`);
+  }
+}
+
 (async () => {
   await verifyBoot();
   verifyGamePerf();
+  verifyLazyChunks();
   console.log('\nBuild verified.');
 })().catch((e) => {
   console.error('\n✗ build verification FAILED:\n', e.message);

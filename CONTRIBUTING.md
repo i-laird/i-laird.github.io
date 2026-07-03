@@ -15,11 +15,13 @@ CI (`.github/workflows/ci.yml`) gates `main` and every PR on those three steps.
 
 ## The one hard rule: classic scripts stay classic
 
-`app.js` and `stickfighter.js` are **not** ES modules and are **not** wrapped in
-an IIFE. They share a single global scope on purpose — inline `onclick`
-handlers in `index.html` and the lazily-loaded game both depend on top-level
-declarations being globals. Do not convert them to modules, add `import` /
-`export`, or wrap them in an IIFE. See `CLAUDE.md` for the full rationale.
+`app.js` and the lazy chunks (`stickfighter.js`, `games.js`, `sans.js`) are
+**not** ES modules and are **not** wrapped in an IIFE. This is on purpose —
+inline `onclick` handlers in `index.html` depend on top-level declarations
+being globals, and each lazily-loaded chunk exposes one global entry that
+app.js calls (all other dependencies cross the boundary through an explicit
+`api` bridge). Do not convert them to modules, add `import` / `export`, or wrap
+them in an IIFE. See `CLAUDE.md` for the full rationale.
 
 ## Where new code goes
 
@@ -30,6 +32,10 @@ declarations being globals. Do not convert them to modules, add `import` /
 - **DOM / terminal behavior** → `app.js`.
 - **Stick Fighter 2000** → `stickfighter.js` (keep its 8-space indentation; it
   has load-bearing multi-line template literals).
+- **The shell games** (racecar/snake/pong/2048) → `games.js`; **sans mode** →
+  `sans.js`. Both are lazy chunks: reference nothing from `app.js` by free
+  global name — take dependencies through the `api` bridge (`gamesBridge()` /
+  `sansBridge()` in `app.js`; the isolation tests enforce this).
 
 ## Style
 

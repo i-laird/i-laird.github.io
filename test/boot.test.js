@@ -2,8 +2,8 @@
 
 // Boot smoke test.
 //
-// The lib/ helpers have unit tests, but app.js (~6,700 lines) and stickfighter.js
-// have none — and because app.js is a single classic script with no IIFE (all ~180
+// The lib/ helpers have unit tests, but app.js (~4,600 lines) and the lazy chunks
+// have none — and because app.js is a single classic script with no IIFE (its
 // top-level declarations share one global lexical scope), a typo or a stray reference
 // anywhere in the file is a load-time ReferenceError that linting cannot catch. This
 // test loads the real index.html + the real script chain in a jsdom DOM, runs boot(),

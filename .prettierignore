@@ -1,9 +1,12 @@
 # The browser runtime is hand-formatted and must stay byte-stable:
-#  - app.js / stickfighter.js share a global scope and use multi-line template
-#    literals whose indentation is load-bearing (see CLAUDE.md). Reformatting
-#    them would create an enormous, risky diff for no benefit.
+#  - app.js and the lazy chunks (stickfighter.js / games.js / sans.js) use
+#    multi-line template literals whose indentation is load-bearing (see
+#    CLAUDE.md). Reformatting them would create an enormous, risky diff for
+#    no benefit.
 app.js
 stickfighter.js
+games.js
+sans.js
 index.html
 404.html
 style.css
