@@ -38,9 +38,9 @@
  *   - renameProperties / transformObjectKeys OFF — worker JSON fields, DOM props,
  *     the api.* bridge keys, and the window.<publicFn> exports are all literal
  *     property names.
- *   - the chunk entry names (openStickFighter, initGames, initSansMode) reserved on
- *     both sides — each lazy-load handshake crosses its chunk boundary by that name
- *     (app.js looks it up; the chunk sets it on window).
+ *   - the chunk entry names (openStickFighter, initGames, initSansMode, initChess)
+ *     reserved on both sides — each lazy-load handshake crosses its chunk boundary
+ *     by that name (app.js looks it up; the chunk sets it on window).
  *   - no source maps (they'd hand back the clean source).
  */
 
@@ -107,8 +107,18 @@ const LIGHT = {
 // (app.js reads _djb2/_xorDecode/_alignTimings/_halNorm/makeRng from it).
 const BUNDLE = ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'lib/rng.js', 'app.js'];
 
-// Static files served as-is.
-const STATIC = ['404.html', 'style.css', 'robots.txt', 'sitemap.xml', 'CNAME', '.nojekyll'];
+// Static files served as-is. sw.js is deliberately NOT obfuscated — it holds
+// no secrets, and it must stay reviewable (a broken service worker is the one
+// file that can wedge returning visitors).
+const STATIC = [
+  '404.html',
+  'style.css',
+  'robots.txt',
+  'sitemap.xml',
+  'CNAME',
+  '.nojekyll',
+  'sw.js',
+];
 
 function obfuscate(label, code, options) {
   const t0 = Date.now();

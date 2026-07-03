@@ -222,10 +222,20 @@ function verifyLazyChunks() {
   }
 }
 
+// ── 4. The service worker ships with the build ────────────────────────────────
+function verifyServiceWorker() {
+  assert.ok(
+    fs.existsSync(path.join(DIST, 'sw.js')),
+    'dist/sw.js missing — the repeat-visit cache silently disappears without it'
+  );
+  console.log('✓ sw.js copied into dist');
+}
+
 (async () => {
   await verifyBoot();
   verifyGamePerf();
   verifyLazyChunks();
+  verifyServiceWorker();
   console.log('\nBuild verified.');
 })().catch((e) => {
   console.error('\n✗ build verification FAILED:\n', e.message);

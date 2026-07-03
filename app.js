@@ -93,9 +93,13 @@
   if (motionQuery && motionQuery.addEventListener) {
     motionQuery.addEventListener('change', e => {
       reduceMotion = e.matches;
-      // if the rainbow is mid-cycle when the user opts out, freeze it on a static palette
-      if (reduceMotion && typeof rainbowId === 'number') {
-        clearInterval(rainbowId); rainbowId = 'static'; applyGodmodeTint();
+      // if the rainbow is mid-cycle when the user opts out, freeze it on a static
+      // palette (the prefers-reduced-motion block in style.css also halts the
+      // animation on its own; this swap keeps the distinct godmode look)
+      if (reduceMotion && rainbowId === 'css') {
+        const win = document.querySelector('.window');
+        if (win) win.classList.remove('godmode-rainbow');
+        rainbowId = 'static'; applyGodmodeTint();
       }
     });
   }
@@ -1251,18 +1255,15 @@
     goldPopup('⚡ <b>GODMODE UNLOCKED</b><br>new command: <b>override</b><br>the games have changed. so have some files.');
     godmodeUnlocked = true;
     if (reduceMotion) { rainbowId = 'static'; applyGodmodeTint(); return; }  // no strobing hue cycle
-    let hue = 0;
-    rainbowId = setInterval(() => {
-      const r = document.documentElement;
-      r.style.setProperty('--green',        `hsl(${hue}, 100%, 50%)`);
-      r.style.setProperty('--green-dim',    `hsl(${hue}, 80%,  30%)`);
-      r.style.setProperty('--green-bright', `hsl(${hue}, 100%, 70%)`);
-      r.style.setProperty('--blue',         `hsl(${(hue + 120) % 360}, 100%, 65%)`);
-      r.style.setProperty('--border',       `hsl(${hue}, 80%,  20%)`);
-      r.style.setProperty('--bar',          `hsl(${hue}, 80%,   8%)`);
-      r.style.setProperty('--bg',           `hsl(${hue}, 100%,  3%)`);
-      hue = (hue + 1) % 360;
-    }, 30);
+    // Compositor-animated CSS hue sweep on .window (see .godmode-rainbow in
+    // style.css) — replaces the old 30ms interval that rewrote seven :root
+    // variables (a full-document style recalc, 33×/s, for the rest of the
+    // session). Mode themes keep working underneath: applyTheme() still sets
+    // the variables; the filter only rotates the rendered hue (and leaves
+    // achromatic palettes like sans's white-on-black visually untouched).
+    const win = document.querySelector('.window');
+    if (win) { win.classList.add('godmode-rainbow'); rainbowId = 'css'; }
+    else     { rainbowId = 'static'; applyGodmodeTint(); }  // stripped DOM: settle for the tint
   }
 
   function showConfirmOverlay(onConfirm, onCancel) {
@@ -4483,6 +4484,21 @@ Of a bicycle built for two.`;
   // safety net: 26/26 reached but the finale never fired (e.g. closed mid-unlock)
   if (!endingSeen && foundEggs.size === ACHIEVEMENTS.length) setTimeout(armFinale, 3000);
   showEggNudge();
+
+  // ── Service worker: repeat-visit caching (sw.js) ──
+  // GitHub Pages serves everything with Cache-Control: max-age=600, so without
+  // this every visit >10 min apart re-downloads the whole bundle and re-fetches
+  // played HAL clips. Registered after 'load' so it never competes with boot,
+  // and skipped during local dev (a caching SW while hand-editing files is
+  // misery; matches the SF_SPEED localhost convention). To invalidate all
+  // caches on a breaking deploy, bump VERSION in sw.js.
+  if ('serviceWorker' in navigator &&
+      location.protocol === 'https:' &&
+      !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {}); // best-effort: the site works identically without it
+    });
+  }
 
   // ── Public API for index.html's inline on* handlers ──
   // These are the only app.js names referenced from outside the file (the inline

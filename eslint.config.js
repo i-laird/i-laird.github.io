@@ -61,6 +61,24 @@ module.exports = [
     },
   },
 
+  // The service worker runs in its own worker scope — small and standalone,
+  // so it gets the strict ruleset.
+  {
+    files: ['sw.js'],
+    ...js.configs.recommended,
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'script',
+      globals: { ...globals.serviceworker },
+    },
+    rules: {
+      ...js.configs.recommended.rules,
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      eqeqeq: ['error', 'smart'],
+      'prefer-const': 'error',
+    },
+  },
+
   // The browser runtime. Lenient on purpose: these files are one shared global
   // scope by design, so flag real mistakes (syntax, unreachable code) but not
   // the intentional cross-file globals.

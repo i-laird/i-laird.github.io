@@ -34,6 +34,7 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | `games.js`        | The four shell games (racecar/snake/pong/2048), lazy-loaded.     |
 | `sans.js`         | The sans easter egg (command set + battle), lazy-loaded.         |
 | `chess.js`        | Chess (Stockfish-backed), lazy-loaded.                           |
+| `sw.js`           | Service worker: repeat-visit caching (GH Pages caps max-age).    |
 | `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text).       |
 | `test/`           | Node test-runner suites for `lib/`.                              |
 | `assets/`         | Audio, images, and the Open Graph card.                          |

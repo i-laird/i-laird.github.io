@@ -226,6 +226,22 @@ body::after {
 }
 .gold-pop-close:hover { color: #ffd24d; }
 
+/* ── Godmode rainbow ── one paint-once, compositor-animated hue sweep instead
+   of the old JS interval that rewrote seven :root variables every 30ms (a
+   full-document style recalc, 33×/s, for the rest of the session). Applied to
+   .window so the body-level overlays (gold popups, achievements, the XP
+   desktop, matrix) keep their own colors — and because filter turns .window
+   into the containing block for position:fixed descendants, nothing inside it
+   may use position:fixed (body-level overlays are already the pattern).
+   11s ≈ the old 30ms × 360-step cycle. */
+.window.godmode-rainbow {
+  animation: godmode-hue 11s linear infinite;
+}
+@keyframes godmode-hue {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(360deg); }
+}
+
 pre.ascii {
   color: var(--green);
   font-size: 16px;
@@ -322,7 +338,8 @@ pre.ascii {
   #egg-nudge-arrow,
   #egg-nudge-box,
   .gold-pop,
-  .card-primary {
+  .card-primary,
+  .window.godmode-rainbow {
     animation: none !important;
   }
   * {
