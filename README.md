@@ -29,17 +29,18 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | ----------------- | ---------------------------------------------------------------- |
 | `index.html`      | Bare markup (~100 lines); all behavior is loaded scripts.        |
 | `style.css`       | The whole stylesheet. Theme colors are CSS variables on `:root`. |
-| `app.js`          | The terminal: commands, HAL mode, dispatch, chess.               |
+| `app.js`          | The terminal: commands, HAL mode, dispatch.                      |
 | `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~300 KB).     |
 | `games.js`        | The four shell games (racecar/snake/pong/2048), lazy-loaded.     |
 | `sans.js`         | The sans easter egg (command set + battle), lazy-loaded.         |
+| `chess.js`        | Chess (Stockfish-backed), lazy-loaded.                           |
 | `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text).       |
 | `test/`           | Node test-runner suites for `lib/`.                              |
 | `assets/`         | Audio, images, and the Open Graph card.                          |
 
 ### A note on architecture
 
-`app.js` and the lazy chunks (`stickfighter.js` / `games.js` / `sans.js`) are
+`app.js` and the lazy chunks (`stickfighter.js` / `games.js` / `sans.js` / `chess.js`) are
 **classic scripts** — not ES modules, not wrapped in an IIFE. This is
 deliberate: inline `onclick` handlers in `index.html` call top-level functions
 as globals, and each lazily-loaded chunk hands app.js a single global entry

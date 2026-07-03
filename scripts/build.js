@@ -29,6 +29,8 @@
  *   - dist/sans.js       = the sans easter egg (command set + battle), same
  *                          treatment: own IIFE, LIGHT (20fps battle loop), reached
  *                          only through app.js's sansBridge().
+ *   - dist/chess.js      = the chess game, same treatment: own IIFE, LIGHT,
+ *                          reached only through app.js's chessBridge().
  *   - dist/index.html    = the five lib+app <script> tags collapsed to one app.js.
  *   - static files copied through.
  *
@@ -62,7 +64,7 @@ const COMMON = {
   transformObjectKeys: false,
   renameGlobals: false,
   sourceMap: false,
-  reservedNames: ['^openStickFighter$', '^initGames$', '^initSansMode$'],
+  reservedNames: ['^openStickFighter$', '^initGames$', '^initSansMode$', '^initChess$'],
 };
 
 // HEAVY — the main bundle. Not perf-critical, so throw the book at it.
@@ -129,7 +131,7 @@ function build() {
 
   // Lazy chunks: wrap each in its own IIFE, obfuscate light (they all run
   // game loops; each exports only its window.<entry> — see reservedNames).
-  for (const chunk of ['stickfighter.js', 'games.js', 'sans.js']) {
+  for (const chunk of ['stickfighter.js', 'games.js', 'sans.js', 'chess.js']) {
     fs.writeFileSync(
       path.join(DIST, chunk),
       obfuscate(chunk.replace('.js', ''), iife(read(chunk)), LIGHT)

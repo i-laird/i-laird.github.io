@@ -65,7 +65,7 @@ module.exports = [
   // scope by design, so flag real mistakes (syntax, unreachable code) but not
   // the intentional cross-file globals.
   {
-    files: ['app.js', 'stickfighter.js', 'games.js', 'sans.js'],
+    files: ['app.js', 'stickfighter.js', 'games.js', 'sans.js', 'chess.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'script',

@@ -31,7 +31,7 @@ function achievementIds() {
 // (unlockAchievement(data.ach), unlockAchievement(item.ach)) are resolved at runtime from
 // backend / item data and can't be checked statically, so they're intentionally excluded.
 function referencedIds() {
-  const files = ['app.js', 'stickfighter.js', 'games.js', 'sans.js', 'index.html'];
+  const files = ['app.js', 'stickfighter.js', 'games.js', 'sans.js', 'chess.js', 'index.html'];
   const ids = [];
   for (const f of files) {
     for (const m of read(f).matchAll(/unlockAchievement\(\s*'([a-z0-9-]+)'\s*\)/g)) {

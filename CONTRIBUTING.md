@@ -15,7 +15,7 @@ CI (`.github/workflows/ci.yml`) gates `main` and every PR on those three steps.
 
 ## The one hard rule: classic scripts stay classic
 
-`app.js` and the lazy chunks (`stickfighter.js`, `games.js`, `sans.js`) are
+`app.js` and the lazy chunks (`stickfighter.js`, `games.js`, `sans.js`, `chess.js`) are
 **not** ES modules and are **not** wrapped in an IIFE. This is on purpose —
 inline `onclick` handlers in `index.html` depend on top-level declarations
 being globals, and each lazily-loaded chunk exposes one global entry that
@@ -33,9 +33,10 @@ them in an IIFE. See `CLAUDE.md` for the full rationale.
 - **Stick Fighter 2000** → `stickfighter.js` (keep its 8-space indentation; it
   has load-bearing multi-line template literals).
 - **The shell games** (racecar/snake/pong/2048) → `games.js`; **sans mode** →
-  `sans.js`. Both are lazy chunks: reference nothing from `app.js` by free
-  global name — take dependencies through the `api` bridge (`gamesBridge()` /
-  `sansBridge()` in `app.js`; the isolation tests enforce this).
+  `sans.js`; **chess** → `chess.js`. All are lazy chunks: reference nothing
+  from `app.js` by free global name — take dependencies through the `api`
+  bridge (`gamesBridge()` / `sansBridge()` / `chessBridge()` in `app.js`; the
+  isolation tests enforce this).
 
 ## Style
 
