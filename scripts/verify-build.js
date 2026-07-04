@@ -201,6 +201,9 @@ function verifyLazyChunks() {
     ['games.js', 'initGames', ['racecar', 'snake', 'pong', '2048']],
     ['sans.js', 'initSansMode', ['activate', 'command', 'battleCommand']],
     ['chess.js', 'initChess', ['chess']],
+    ['halllm.js', 'initHalLLM', ['showInfoPage', 'handleInput']],
+    ['desktop.js', 'initDesktop', ['open']],
+    ['achui.js', 'initAchUI', ['toggle']],
   ]) {
     const { dom, window } = makeDom('<!doctype html><html><body></body></html>');
     inject(window, read(path.join(DIST, file)));

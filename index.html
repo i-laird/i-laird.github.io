@@ -27,7 +27,7 @@
   <link rel="dns-prefetch" href="https://nlflqwapol.execute-api.us-east-1.amazonaws.com">
   <link rel="preconnect" href="https://nlflqwapol.execute-api.us-east-1.amazonaws.com" crossorigin>
   <link rel="dns-prefetch" href="https://challenges.cloudflare.com">
-  <!-- Cloudflare Turnstile (bot gate for the opt-in LLM HAL backend) is injected on demand by app.js (loadTurnstile) the first time a player wakes the experimental HAL — not loaded for every visitor. -->
+  <!-- Cloudflare Turnstile (bot gate for the opt-in LLM HAL backend) is injected on demand by the lazy halllm.js chunk (loadTurnstile) the first time a player wakes the experimental HAL — not loaded for every visitor. -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -121,6 +121,7 @@
 <script defer src="lib/timing.js"></script>
 <script defer src="lib/text.js"></script>
 <script defer src="lib/rng.js"></script>
+<script defer src="lib/shell.js"></script>
 <script defer src="app.js"></script>
 </body>
 </html>

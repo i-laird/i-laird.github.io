@@ -64,7 +64,15 @@ const COMMON = {
   transformObjectKeys: false,
   renameGlobals: false,
   sourceMap: false,
-  reservedNames: ['^openStickFighter$', '^initGames$', '^initSansMode$', '^initChess$'],
+  reservedNames: [
+    '^openStickFighter$',
+    '^initGames$',
+    '^initSansMode$',
+    '^initChess$',
+    '^initHalLLM$',
+    '^initDesktop$',
+    '^initAchUI$',
+  ],
 };
 
 // HEAVY — the main bundle. Not perf-critical, so throw the book at it.
@@ -105,7 +113,14 @@ const LIGHT = {
 
 // The page-load bundle, in index.html order. lib MUST be bundled with app.js
 // (app.js reads _djb2/_xorDecode/_alignTimings/_halNorm/makeRng from it).
-const BUNDLE = ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'lib/rng.js', 'app.js'];
+const BUNDLE = [
+  'lib/codec.js',
+  'lib/timing.js',
+  'lib/text.js',
+  'lib/rng.js',
+  'lib/shell.js',
+  'app.js',
+];
 
 // Static files served as-is. sw.js is deliberately NOT obfuscated — it holds
 // no secrets, and it must stay reviewable (a broken service worker is the one
@@ -141,7 +156,15 @@ function build() {
 
   // Lazy chunks: wrap each in its own IIFE, obfuscate light (they all run
   // game loops; each exports only its window.<entry> — see reservedNames).
-  for (const chunk of ['stickfighter.js', 'games.js', 'sans.js', 'chess.js']) {
+  for (const chunk of [
+    'stickfighter.js',
+    'games.js',
+    'sans.js',
+    'chess.js',
+    'halllm.js',
+    'desktop.js',
+    'achui.js',
+  ]) {
     fs.writeFileSync(
       path.join(DIST, chunk),
       obfuscate(chunk.replace('.js', ''), iife(read(chunk)), LIGHT)
@@ -151,7 +174,13 @@ function build() {
   // index.html: the lib scripts are now inside app.js, so drop their tags. (They're loaded
   // with `defer` in the source, so match that; app.js keeps its own deferred tag.)
   let html = read('index.html');
-  for (const lib of ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'lib/rng.js']) {
+  for (const lib of [
+    'lib/codec.js',
+    'lib/timing.js',
+    'lib/text.js',
+    'lib/rng.js',
+    'lib/shell.js',
+  ]) {
     html = html.replace(new RegExp(`\\s*<script defer src="${lib}"></script>`), '');
   }
   fs.writeFileSync(path.join(DIST, 'index.html'), html);

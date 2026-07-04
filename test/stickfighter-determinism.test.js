@@ -31,7 +31,14 @@ const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 
 // The page's script chain, in index.html order (lib/rng.js feeds the game's PRNG).
-const SCRIPTS = ['lib/codec.js', 'lib/timing.js', 'lib/text.js', 'lib/rng.js', 'app.js'];
+const SCRIPTS = [
+  'lib/codec.js',
+  'lib/timing.js',
+  'lib/text.js',
+  'lib/rng.js',
+  'lib/shell.js',
+  'app.js',
+];
 
 // Same minimal browser-API shims the boot test uses (jsdom lacks them; app.js and the
 // game feature-guard AudioContext/matchMedia, so leaving those undefined is correct).

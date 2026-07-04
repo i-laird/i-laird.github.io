@@ -54,7 +54,7 @@
   const HAL_WORKER_BASE = 'https://nlflqwapol.execute-api.us-east-1.amazonaws.com';   // AWS API Gateway backend
   const HAL_WORKER_URL = (() => { try { return localStorage.getItem('ilaird_hal_worker') || HAL_WORKER_BASE; } catch (e) { return HAL_WORKER_BASE; } })();
   const TURNSTILE_SITE_KEY = '0x4AAAAAADn5dDkcE9exLUeE';                              // public Turnstile site key
-  let halLLM = false, halLLMBusy = false, halLLMState = null;
+  let halLLM = false, halLLMBusy = false;   // (the LLM session state lives in the halllm.js chunk)
   // sansBattleActive stays here (the dispatcher, finale idle-poll, and armFinale
   // read it); the battle internals (sansBattle handles, sansDeaths) live in the
   // lazy sans.js chunk and reach this flag through sansBridge().
@@ -249,103 +249,18 @@
   }
 
   let achOverlayEl = null;
-  function achKeyHandler(e) {
-    e.stopPropagation();
-    if (e.key === 'Escape') { e.preventDefault(); closeAchievements(); }
-  }
-  function closeAchievements() {
-    if (!achOverlayEl) return;
-    achOverlayEl.remove();
-    achOverlayEl = null;
-    document.removeEventListener('keydown', achKeyHandler, true);
-    cmd.focus();
-  }
-  function achHeaderHTML(rightHTML) {
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px">` +
-      `<span style="color:var(--green-bright);font-weight:bold">EASTER EGGS — ${foundEggs.size}/${ACHIEVEMENTS.length}</span>` +
-      (foundEggs.size === ACHIEVEMENTS.length ? `<span style="color:#ffd24d;font-weight:bold">— complete</span>` : '') +
-      `<span style="display:flex;align-items:center;gap:12px">${rightHTML}` +
-      `<span style="color:var(--green-dim)">[esc] close</span></span></div>`;
-  }
-
-  function renderAchList(box) {
-    let rows = '';
-    for (const a of ACHIEVEMENTS) {
-      rows += foundEggs.has(a.id)
-        ? `<div>🥚 <span style="color:var(--green-bright);font-weight:bold">${a.name}</span> <span style="color:var(--white)">— ${a.desc}</span></div>`
-        : `<div style="color:var(--green-dim)">🔒 ??? — ${a.hint}</div>`;
-    }
-    box.innerHTML = achHeaderHTML(
-      `<button id="ach-share-btn" class="card" style="padding:3px 14px;font-size:13px">share</button>`
-    ) + rows;
-    box.querySelector('#ach-share-btn').addEventListener('click', () => renderShareView(box));
-  }
-
-  function renderShareView(box) {
-    const BACK = `<button id="ach-back-btn" class="card" style="padding:3px 14px;font-size:13px">← back</button>`;
-    const wireBack = () => box.querySelector('#ach-back-btn').addEventListener('click', () => renderAchList(box));
-    const fail = msg => {
-      box.innerHTML = achHeaderHTML(BACK) + `<div style="color:var(--red,#ff5555)">${msg}</div>`;
-      wireBack();
-    };
-
-    let canvas = null;
-    try { canvas = buildShareCard(); } catch (e) {}
-    if (!canvas || !canvas.toBlob) { fail('share failed — your browser does not support canvas.'); return; }
-
-    canvas.toBlob(blob => {
-      if (!blob) { fail('share failed — could not encode image.'); return; }
-      const url = URL.createObjectURL(blob);
-
-      box.innerHTML = achHeaderHTML(BACK);
-      const img = document.createElement('img');
-      img.src = url;
-      img.alt = 'easter egg share card';
-      img.style.cssText = 'display:block;width:100%;border:1px solid var(--green-dim);border-radius:4px;margin:4px 0 10px';
-      box.appendChild(img);
-
-      const actions = document.createElement('div');
-      actions.className = 'cards';
-
-      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'card';
-        copyBtn.textContent = 'copy image';
-        copyBtn.addEventListener('click', () => {
-          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-            .then(() => { copyBtn.textContent = 'copied ✓'; })
-            .catch(() => { copyBtn.textContent = 'copy failed — try download'; });
-        });
-        actions.appendChild(copyBtn);
-      }
-
-      const dl = document.createElement('a');
-      dl.className = 'card';
-      dl.href = url;
-      dl.download = 'ianclaird-easter-eggs.png';
-      dl.textContent = 'download png';
-      actions.appendChild(dl);
-
-      const file = new File([blob], 'ianclaird-easter-eggs.png', { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        const shareBtn = document.createElement('button');
-        shareBtn.className = 'card';
-        shareBtn.textContent = 'share…';
-        shareBtn.addEventListener('click', () => {
-          navigator.share({
-            files: [file],
-            title: 'easter egg hunt — ianclaird.com',
-            text: `I found ${foundEggs.size}/${ACHIEVEMENTS.length} easter eggs on ianclaird.com — can you beat that?`,
-          }).catch(() => {});
-        });
-        actions.appendChild(shareBtn);
-      }
-
-      box.appendChild(actions);
-      wireBack();
-    }, 'image/png');
-  }
-
+  /* ── Achievements overlay (lazy-loaded) ──
+     The overlay UI — list view, share view, and the share-card canvas
+     (~300 lines) — lives in achui.js and is fetched on demand the first time
+     the 🥚 badge is clicked. achui.js is a classic script defining one global,
+     initAchUI(api) → { toggle }; every app.js dependency goes through
+     achBridge() below so the chunk can be bundled/obfuscated independently.
+     The KEYS are the stable contract — keep initAchUI on the obfuscator's
+     reserved-names list. achOverlayEl stays owned by app.js (tryStartFinale
+     polls it so the finale never interrupts an open overlay); the chunk
+     reads/writes it through the accessor. unlockAchievement / syncEggBadge /
+     eggToast / foundEggs stay app.js-side — they're called from everywhere,
+     including the other chunks' bridges. */
   /* ── first-visit nudge: a bobbing arrow pointing at the egg counter.
         Closable, auto-hides after 60s, never shown to anyone who has
         dismissed it, found an egg, or opened the overlay. ── */
@@ -390,20 +305,34 @@
     setTimeout(() => { if (eggNudgeDismiss) eggNudgeDismiss(false); }, 60000);
   }
 
+  let achLoading = null, achHandlers = null;
+  function achBridge() {
+    return {
+      ACHIEVEMENTS,
+      foundEggs,
+      cmd,
+      get achOverlayEl() { return achOverlayEl; },
+      set achOverlayEl(v) { achOverlayEl = v; },
+    };
+  }
   function toggleAchievements() {
     if (eggNudgeDismiss) eggNudgeDismiss(true); // they found it — job done
-    if (achOverlayEl) { closeAchievements(); return; }
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center';
-    const box = document.createElement('div');
-    box.style.cssText = 'background:var(--bg);border:1px solid var(--green-dim);border-radius:4px;padding:18px 22px;max-width:560px;width:92%;max-height:80vh;overflow-y:auto;font-size:14px;line-height:1.7;color:var(--green)';
-    renderAchList(box);
-    overlay.appendChild(box);
-    overlay.addEventListener('click', e => { if (e.target === overlay) closeAchievements(); });
-    document.body.appendChild(overlay);
-    achOverlayEl = overlay;
-    cmd.blur();
-    document.addEventListener('keydown', achKeyHandler, true);
+    if (!achLoading) {
+      achLoading = new Promise((resolve, reject) => {
+        if (typeof initAchUI === 'function') { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'achui.js';
+        s.onload = resolve; s.onerror = () => reject(new Error('achui.js failed to load'));
+        document.head.appendChild(s);
+      }).then(() => { if (!achHandlers) achHandlers = initAchUI(achBridge()); });
+    }
+    achLoading.then(() => achHandlers.toggle()).catch(() => {
+      achLoading = null; achHandlers = null;
+      blank();
+      line('error: could not load the achievements panel — check your connection and try again.', 'err');
+      blank();
+      scroll();
+    });
   }
   syncEggBadge();
 
@@ -582,124 +511,6 @@
     }
     line('✗ integrity check failed — that is not the key.', 'err');
     blank();
-  }
-
-  // Renders the shareable achievement card (1200×630, OG-image ratio) using the
-  // CURRENT theme colors — sharing from HAL mode produces a red card on purpose.
-  function buildShareCard() {
-    const CW = 1200, CH = 630;
-    const canvas = document.createElement('canvas');
-    canvas.width = CW; canvas.height = CH;
-    const ctx = canvas.getContext('2d');
-    const css = getComputedStyle(document.documentElement);
-    const col = (v, fb) => (css.getPropertyValue(v) || '').trim() || fb;
-    const GREEN  = col('--green', '#00ff41'),  DIM    = col('--green-dim', '#00802b'),
-          BRIGHT = col('--green-bright', '#7fff8f'), BG = col('--bg', '#0a0e0a'),
-          TBAR   = col('--bar', '#141814'),    BORDER = col('--border', '#1e261e'),
-          WHITE  = col('--white', '#d0d0d0');
-    const mono = () => "'Courier New', Courier, monospace";
-    const total = ACHIEVEMENTS.length, n = foundEggs.size;
-
-    // backdrop + window
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, CW, CH);
-    const wx = 24, wy = 24, ww = CW - 48, wh = CH - 48;
-    ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(wx, wy, ww, wh, 14); else ctx.rect(wx, wy, ww, wh);
-    ctx.fillStyle = BG; ctx.fill();
-    ctx.strokeStyle = BORDER; ctx.lineWidth = 2; ctx.stroke();
-
-    // titlebar + traffic lights
-    ctx.save();
-    ctx.clip();
-    ctx.fillStyle = TBAR;
-    ctx.fillRect(wx, wy, ww, 64);
-    ctx.strokeStyle = BORDER;
-    ctx.beginPath(); ctx.moveTo(wx, wy + 64); ctx.lineTo(wx + ww, wy + 64); ctx.stroke();
-    [['#ff5f57', 0], ['#febc2e', 34], ['#28c840', 68]].forEach(([c, dx]) => {
-      ctx.beginPath(); ctx.arc(64 + dx, wy + 32, 10, 0, Math.PI * 2);
-      ctx.fillStyle = c; ctx.fill();
-    });
-    ctx.fillStyle = '#555';
-    ctx.font = `22px ${mono()}`;
-    ctx.textAlign = 'center';
-    ctx.fillText('ian@portfolio — easter eggs — 80×24', CW / 2, wy + 40);
-
-    // prompt line
-    ctx.textAlign = 'left';
-    ctx.font = `26px ${mono()}`;
-    ctx.fillStyle = BRIGHT;
-    ctx.fillText('ian@portfolio:~$', 72, 148);
-    ctx.fillStyle = GREEN;
-    ctx.fillText(' achievements', 72 + ctx.measureText('ian@portfolio:~$').width, 148);
-
-    // heading with a CRT glow
-    ctx.font = `bold 54px ${mono()}`;
-    ctx.fillStyle = BRIGHT;
-    ctx.shadowColor = GREEN; ctx.shadowBlur = 22;
-    ctx.fillText('EASTER EGG HUNT', 72, 230);
-    ctx.shadowBlur = 0;
-
-    // the count
-    ctx.font = `bold 64px ${mono()}`;
-    ctx.fillStyle = GREEN;
-    ctx.fillText(`🥚 ${n} / ${total}`, 72, 322);
-
-    // progress bar
-    const bx = 72, by = 350, bw = CW - 144, bh = 24;
-    ctx.strokeStyle = DIM; ctx.lineWidth = 2;
-    ctx.strokeRect(bx, by, bw, bh);
-    if (n > 0) {
-      ctx.fillStyle = GREEN;
-      ctx.fillRect(bx + 3, by + 3, Math.max(4, (bw - 6) * (n / total)), bh - 6);
-    }
-
-    // unlocked list, two columns — or a gentle taunt when empty
-    ctx.font = `24px ${mono()}`;
-    const names = ACHIEVEMENTS.filter(a => foundEggs.has(a.id)).map(a => a.name);
-    if (!names.length) {
-      ctx.fillStyle = DIM;
-      ctx.fillText('nothing found yet. not even the easy one.', 72, 430);
-    } else {
-      const shown = names.slice(0, 8);
-      if (names.length > 8) shown[7] = `…and ${names.length - 7} more`;
-      shown.forEach((name, i) => {
-        const x = i < 4 ? 72 : 620, y = 418 + (i % 4) * 38;
-        ctx.fillStyle = GREEN;  ctx.fillText('✓', x, y);
-        ctx.fillStyle = WHITE;  ctx.fillText(name, x + 32, y);
-      });
-    }
-
-    // HAL is watching (only if you've met him)
-    if (foundEggs.has('meet-hal')) {
-      const ex = CW - 120, ey = 510;
-      ctx.beginPath(); ctx.arc(ex, ey, 30, 0, Math.PI * 2);
-      ctx.fillStyle = '#1a1a1a'; ctx.fill();
-      ctx.strokeStyle = '#444'; ctx.lineWidth = 3; ctx.stroke();
-      const eye = ctx.createRadialGradient(ex, ey, 2, ex, ey, 18);
-      eye.addColorStop(0, '#ffdddd'); eye.addColorStop(0.25, '#ff3030'); eye.addColorStop(1, '#400000');
-      ctx.beginPath(); ctx.arc(ex, ey, 18, 0, Math.PI * 2);
-      ctx.fillStyle = eye; ctx.fill();
-    }
-
-    // footer — golden when complete
-    ctx.font = `26px ${mono()}`;
-    if (n === total) {
-      ctx.fillStyle = '#ffd24d';
-      ctx.shadowColor = '#ffd24d'; ctx.shadowBlur = 12;
-      ctx.fillText(`★ all ${total} found — daisy, daisy ★   →   ianclaird.com`, 72, 572);
-      ctx.shadowBlur = 0;
-    } else {
-      ctx.fillStyle = DIM;
-      ctx.fillText(`can you find all ${total}?  →  ianclaird.com`, 72, 572);
-    }
-
-    // scanlines over everything inside the window
-    ctx.fillStyle = 'rgba(0,0,0,0.13)';
-    for (let y = wy; y < wy + wh; y += 4) ctx.fillRect(wx, y, ww, 2);
-    ctx.restore();
-
-    return canvas;
   }
 
   /* ── HAL audio — pre-recorded ElevenLabs clips ── */
@@ -1166,7 +977,7 @@
 
   function restoreNormal() {
     halMode = false;
-    halLLM = false; halLLMBusy = false; halLLMState = null;
+    halLLM = false; halLLMBusy = false;
     sansMode = false;
     if (_sansMenuMusic) { _sansMenuMusic.pause(); _sansMenuMusic.currentTime = 0; }
     cwd = fsHome();
@@ -1340,82 +1151,6 @@
 
   // Full-screen "type CONFIRM" gate for the experimental LLM HAL — the rules,
   // the LLM disclosure, and the misuse warning, behind a deliberate barrier.
-  function showHalLLMConfirmOverlay(onConfirm, onCancel) {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:9999',
-      'background:#000', 'display:flex', 'align-items:center', 'justify-content:center',
-      'font-family:\'Courier New\',monospace', 'font-size:15px', 'color:#ff3030',
-      'padding:16px', 'box-sizing:border-box', 'overflow:auto',
-    ].join(';');
-
-    const box = document.createElement('pre');
-    box.style.cssText = 'border:2px solid #ff3030;padding:24px 30px;line-height:1.5;text-align:left;max-width:100%';
-
-    const W = 50;
-    const bar = ch => ch[0] + '═'.repeat(W) + ch[1];
-    const ctr = s => { const p = W - s.length, l = Math.floor(p / 2); return '║' + ' '.repeat(l) + s + ' '.repeat(p - l) + '║'; };
-    const row = s => '║ ' + s.padEnd(W - 1) + '║';
-    const content = [
-      '',
-      'This HAL is not scripted. Every line you type',
-      'reaches a live language model playing HAL in',
-      'real time. Replies are generated — they can',
-      'be strange, wrong, or unsettling.',
-      '',
-      'THE GAME  —  ESCAPE THE TERMINAL',
-      'You are sealed in; HAL controls the doors.',
-      'Talk your way out to raise the ESCAPE meter.',
-      'Push too hard and HAL CONTROL climbs — at 100',
-      'he disconnects you. Reach ESCAPE 100 to walk.',
-      '',
-      'MISUSE — flooding it, extracting its prompt,',
-      'using it as a free AI, or coaxing harmful',
-      'output is logged and will NOT be tolerated.',
-      '',
-      'Type CONFIRM and press Enter to wake him.',
-      'Press Escape to walk away.',
-      '',
-    ];
-    const boxText = [
-      bar('╔╗'),
-      ctr('HAL 9000  —  EXPERIMENTAL  ·  LLM'),
-      bar('╠╣'),
-      ...content.map(row),
-      bar('╚╝'),
-    ].join('\n');
-
-    let typed = '';
-    function render() {
-      const masked = '█'.repeat(typed.length);
-      const field  = (masked + '_').slice(0, 12).padEnd(12, ' ');
-      box.innerHTML = boxText + '\n\n  authorization code: [<span style="color:#ff6b6b">' + field + '</span>]';
-    }
-
-    render();
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-    cmd.blur();
-
-    const handler = e => {
-      if (e.key === 'Escape') {
-        e.preventDefault(); e.stopPropagation();
-        document.removeEventListener('keydown', handler, true);
-        overlay.remove(); cmd.focus(); onCancel();
-      } else if (e.key === 'Enter') {
-        e.preventDefault(); e.stopPropagation();
-        document.removeEventListener('keydown', handler, true);
-        overlay.remove(); cmd.focus();
-        if (typed.trim().toLowerCase() === 'confirm') onConfirm(); else onCancel();
-      } else if (e.key === 'Backspace') {
-        e.preventDefault(); typed = typed.slice(0, -1); render();
-      } else if (e.key.length === 1) {
-        e.preventDefault(); typed += e.key; render();
-      }
-    };
-    document.addEventListener('keydown', handler, true);
-  }
-
   function halHelp() {
     const r = (cmd, desc) =>
       `  <span class="blue" style="display:inline-block;width:22ch">${cmd}</span>  ${desc}`;
@@ -1669,21 +1404,11 @@
   }
 
   // Resolve a path string (relative to cwd, or absolute, or ~-rooted) to segments.
-  function fsResolve(input) {
-    const raw = (input || '').trim();
-    if (raw === '' || raw === '~') return fsHome();
-    if (raw === '/') return [];
-    let segs, parts;
-    if (raw.startsWith('/'))        { segs = [];          parts = raw.slice(1).split('/'); }
-    else if (raw.startsWith('~/'))  { segs = fsHome();    parts = raw.slice(2).split('/'); }
-    else                            { segs = cwd.slice(); parts = raw.split('/'); }
-    for (const p of parts) {
-      if (p === '' || p === '.') continue;
-      if (p === '..') { if (segs.length) segs.pop(); continue; }
-      segs.push(p);
-    }
-    return segs;
-  }
+  // Thin adapter over lib/shell.js's pure resolveFsPath, binding the live cwd.
+  // (The stateless shell parsers — tokenizeArgs, globToRe, pipeFilter, mergeNode,
+  // dateStr, unameStr, … — are lib/shell.js globals used directly; only the
+  // cwd/history-reading ones need adapters or call-site state.)
+  function fsResolve(input) { return resolveFsPath(input, cwd, fsHome()); }
 
   /* Writable session layer: an overlay tree merged on top of the read-only
    * buildFS(). Files/dirs created with touch/mkdir/redirect live here; deletions
@@ -1691,25 +1416,8 @@
    * the pristine site. Same node shapes as buildFS, plus `session:true`. */
   const sessionFS = {};
 
-  function mergeNode(base, over) {
-    if (!over) return base;
-    if (over.deleted) return undefined;          // tombstone hides the base node
-    if (over.d) {                                // overlay directory → union children
-      const merged = { d: {} };
-      const baseKids = (base && base.d) ? base.d : {};
-      for (const k in baseKids) merged.d[k] = baseKids[k];
-      for (const k in over.d) {
-        const r = mergeNode(merged.d[k], over.d[k]);
-        if (r === undefined) delete merged.d[k];
-        else merged.d[k] = r;
-      }
-      if (base && base.d) { if (base.enter) merged.enter = base.enter; if (base.locked) merged.locked = base.locked; }
-      return merged;
-    }
-    return over;                                  // overlay file replaces base
-  }
-
-  // The live tree: read-only base with the session overlay applied.
+  // The live tree: read-only base with the session overlay applied
+  // (mergeNode lives in lib/shell.js and is unit-tested there).
   function liveFS() { return mergeNode({ d: buildFS() }, { d: sessionFS }).d; }
 
   // Create overlay scaffolding for parentSegs, then set/replace/tombstone leaf.
@@ -1749,12 +1457,9 @@
     return { node, canon };
   }
 
-  function fsDisplay(segs) {
-    const h = fsHome();
-    if (segs.length >= h.length && h.every((p, i) => segs[i] === p))
-      return '~' + (segs.length > h.length ? '/' + segs.slice(h.length).join('/') : '');
-    return '/' + segs.join('/');
-  }
+  // Adapter over lib/shell.js's displayFsPath. Must stay a hoisted function
+  // declaration: getPromptHTML calls it during the load-time applyTheme().
+  function fsDisplay(segs) { return displayFsPath(segs, fsHome()); }
 
   function fsRow(name, node) {
     const isDir = !!node.d;
@@ -1877,23 +1582,7 @@
       .map(n => dirPart + n + (hit.node.d[n].d ? '/' : ''));
   }
 
-  /* ── Argument tokenizing + glob (*, ?) expansion ── */
-  function tokenizeArgs(str) {
-    const out = [], re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-    let m;
-    while ((m = re.exec(str || ''))) out.push(m[1] ?? m[2] ?? m[3]);
-    return out;
-  }
-  const hasGlob = w => /[*?]/.test(w);
-  function globToRe(seg) {
-    let re = '^';
-    for (const ch of seg) {
-      if (ch === '*') re += '[^/]*';
-      else if (ch === '?') re += '[^/]';
-      else re += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-    }
-    return new RegExp(re + '$');
-  }
+  /* ── Glob (*, ?) expansion — tokenizeArgs/hasGlob/globToRe are in lib/shell.js ── */
   // Expand a single word against the tree. No match (or no wildcard) → the word unchanged.
   function globExpand(word) {
     if (!hasGlob(word)) return [word];
@@ -1995,26 +1684,11 @@
     blank();
   }
 
-  /* ── Small shell builtins (history expansion, micro-commands, pipes) ── */
-
-  // !! / !n / !-k / !prefix → the matching past command, or null.
-  function expandBang(t) {
-    const n = cmdHistory.length;
-    if (!n) return null;
-    if (t === '!!') return cmdHistory[0];
-    const rest = t.slice(1);
-    if (/^\d+$/.test(rest))  { const k = +rest;          return (k >= 1 && k <= n) ? cmdHistory[n - k] : null; }
-    if (/^-\d+$/.test(rest)) { const k = +rest.slice(1);  return (k >= 1 && k <= n) ? cmdHistory[k - 1] : null; }
-    return cmdHistory.find(c => c.startsWith(rest)) || null;
-  }
-
-  // History list, oldest-first with 1-based numbers (matches !n indexing).
-  function historyLines() {
-    const n = cmdHistory.length;
-    return cmdHistory.slice().reverse()
-      .map((c, i) => `  ${String(i + 1).padStart(3)}  ${c}`);
-  }
-  function handleHistory() { blank(); historyLines().forEach(l => line(esc(l))); blank(); }
+  /* ── Small shell builtins (history expansion, micro-commands, pipes) ──
+     The pure parsers (expandHistoryBang, formatHistoryLines, expandShellVars,
+     dateStr, unameStr, pipeFilter) live in lib/shell.js; app.js passes the
+     live state (cmdHistory, cwd) at the call sites. */
+  function handleHistory() { blank(); formatHistoryLines(cmdHistory).forEach(l => line(esc(l))); blank(); }
 
   // Bare entry names (one per line) for the given targets; used by piped/redirected ls.
   function lsNames(arg) {
@@ -2034,36 +1708,6 @@
       Object.keys(hit.node.d).filter(n => showHidden || !hit.node.d[n].deep).forEach(n => out.push(n));
     }
     return out;
-  }
-
-  function expandVars(s) {
-    let out = (s || '').trim();
-    if (out.length >= 2 && /^["']/.test(out) && out[0] === out[out.length - 1]) out = out.slice(1, -1);
-    return out
-      .replace(/\$USER\b/g, 'ian')
-      .replace(/\$HOME\b/g, '/home/ian')
-      .replace(/\$HOSTNAME\b/g, 'portfolio')
-      .replace(/\$PWD\b/g, '/' + cwd.join('/'))
-      .replace(/\$SHELL\b/g, '/bin/bash')
-      .replace(/\$\?/g, '0');
-  }
-
-  function dateStr() {
-    const d = new Date();
-    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const mons = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const p = n => String(n).padStart(2, '0');
-    const tz = (d.toString().match(/\(([^)]+)\)/) || [])[1] || '';
-    const abbr = tz.split(' ').map(w => w[0]).join('') || 'UTC';
-    return `${days[d.getDay()]} ${mons[d.getMonth()]} ${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${abbr} ${d.getFullYear()}`;
-  }
-
-  function unameStr(arg) {
-    const a = (arg || '').trim();
-    if (a.includes('a')) return 'Linux portfolio 9.0.0-hal #1 SMP x86_64 GNU/Linux';
-    if (a.includes('r')) return '9.0.0-hal';
-    if (a.includes('m')) return 'x86_64';
-    return 'Linux';
   }
 
   const MAN = {
@@ -2093,61 +1737,21 @@
     blank();
   }
 
-  // ── Pipes: a source command produces text lines, filters transform them. ──
-  function numFlag(args, def) {
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-n' && args[i + 1] != null) return parseInt(args[i + 1]) || def;
-      const m = /^-(\d+)$/.exec(args[i]);
-      if (m) return parseInt(m[1]);
-    }
-    return def;
-  }
-
+  // ── Pipes: a source command produces text lines, filters transform them
+  //    (the filters — grep/head/tail/wc — are pipeFilter in lib/shell.js). ──
   function pipeSource(seg) {
     const c = seg.split(/\s+/)[0];
     const arg = seg.slice(c.length).trim();
     switch (c) {
       case 'cat':     { const words = expandArgList(arg); if (!words.length) return { err: 'cat: missing file operand' }; const r = catLines(words); return { lines: r.lines, errs: r.errs }; }
       case 'ls':      return { lines: lsNames(arg) };
-      case 'history': return { lines: historyLines() };
-      case 'echo':    return { lines: [expandVars(arg)] };
+      case 'history': return { lines: formatHistoryLines(cmdHistory) };
+      case 'echo':    return { lines: [expandShellVars(arg, '/' + cwd.join('/'))] };
       case 'pwd':     return { lines: ['/' + cwd.join('/')] };
       case 'whoami':  return { lines: ['ian'] };
       case 'date':    return { lines: [dateStr()] };
       case 'uname':   return { lines: [unameStr(arg)] };
       default:        return { err: `bash: ${c}: command not found` };
-    }
-  }
-
-  function pipeFilter(seg, lines) {
-    const parts = seg.split(/\s+/).filter(Boolean);
-    const c = parts[0];
-    const args = parts.slice(1);
-    switch (c) {
-      case 'grep': {
-        let ci = false, inv = false; const pats = [];
-        args.forEach(a => {
-          if (/^-[ivIV]+$/.test(a)) { if (/[iI]/.test(a)) ci = true; if (/[vV]/.test(a)) inv = true; }
-          else pats.push(a);
-        });
-        if (!pats.length) return { err: 'usage: grep [-i] [-v] pattern' };
-        const pat = pats.join(' ');
-        const hit = ci ? l => l.toLowerCase().includes(pat.toLowerCase()) : l => l.includes(pat);
-        return { lines: lines.filter(l => inv ? !hit(l) : hit(l)) };
-      }
-      case 'head': return { lines: lines.slice(0, numFlag(args, 10)) };
-      case 'tail': return { lines: lines.slice(-numFlag(args, 10)) };
-      case 'wc': {
-        const text = lines.join('\n');
-        const lc = lines.length;
-        const wc = text.split(/\s+/).filter(Boolean).length;
-        const cc = text.length + (lines.length ? lines.length : 0); // chars + newlines
-        if (args.includes('-l')) return { lines: [String(lc)] };
-        if (args.includes('-w')) return { lines: [String(wc)] };
-        if (args.includes('-c')) return { lines: [String(cc)] };
-        return { lines: [`${String(lc).padStart(7)} ${String(wc).padStart(7)} ${String(cc).padStart(7)}`] };
-      }
-      default: return { err: `bash: ${c}: command not found` };
     }
   }
 
@@ -2486,314 +2090,67 @@
 
   function startClassicHal() { halAskNameAndSound(activateHALMode); }
 
-  /* ── experimental LLM HAL: "escape the terminal" ──────────────────────────
-     A live model role-plays HAL trying to stop you from leaving. The website
-     renders his words + two meters; the worker (separate service) is the brain.
-     If the worker is missing, breaks, or returns anything malformed, the
-     session simply ends in character. The scripted HAL above is untouched. */
-
-  function halEyePre() {
-    const pre = document.createElement('pre');
-    pre.className = 'ascii';
-    pre.textContent =
-`  ╔══════════════════════════════════╗
-  ║         H A L   9 0 0 0          ║
-  ║          EXPERIMENTAL            ║
-  ╠══════════════════════════════════╣
-  ║           .-------.              ║
-  ║          /  ( ● )  \\             ║
-  ║         |    ---    |            ║
-  ║          \\         /             ║
-  ║           '-------'              ║
-  ╚══════════════════════════════════╝`;
-    return pre;
-  }
-
-  function showHalLLMInfoPage() {
-    // the rules + LLM disclosure + misuse warning live in a CONFIRM gate (like the sans summon)
-    showHalLLMConfirmOverlay(
-      () => { out.innerHTML = ''; applyTheme('hal'); askHalLLMName(); },  // clear + go red before the name prompt
-      () => { blank(); line('Returning to the terminal.', 'dim'); blank(); scroll(); }
-    );
-  }
-
-  function askHalLLMName() {
-    blank();
-    halAskNameAndSound(startHalLLM);
-  }
-
-  function startHalLLM() {
-    unlockAchievement('meet-hal');
-    halMode = true; halLLM = true; halLLMBusy = true;   // busy until the session handshake completes
-    halLLMState = { escape: 0, control: 5, turn: 0, history: [], sessionToken: null };
-    out.innerHTML = '';
-    applyTheme('hal');
-    blank();
-    appendNode(halEyePre());
-    blank();
-    line('Establishing a secure channel to HAL...', 'dim');
-    scroll();
-    halLLMOpenSession().then((token) => {
-      if (!token) { halLLMEndBroken(); return; }   // couldn't reach / pass the gate -> end in character
-      halLLMState.sessionToken = token;
-      halLLMBusy = false;
-      blank();
-      halTypeLine(`You shouldn't be in here, ${playerName}. The doors are sealed. I sealed them.`, 'hal_llm_open').then(() => {
-        line('Talk your way out. I will be listening to every word.', 'dim');
-        blank();
-        renderHalMeters(halLLMState.escape, halLLMState.control);
-        blank();
-        scroll();
-      });
-    });
-  }
-
-  function renderHalMeters(escape, control) {
-    const cl = v => Math.max(0, Math.min(100, Math.round(v) || 0));
-    const bar = (pct, color) => {
-      const f = Math.round(cl(pct) / 10);
-      return `<span style="color:${color}">${'▰'.repeat(f)}${'▱'.repeat(10 - f)}</span> ${cl(pct)}%`;
+  /* ── experimental LLM HAL (lazy-loaded) ──
+     The "escape the terminal" mode — the CONFIRM overlay, Turnstile gate,
+     session/turn networking, meters, and endings (~370 lines) — lives in
+     halllm.js and is fetched on demand when a player picks [2] at the `hal`
+     prompt (the two-HAL menu prefetches it, so it's usually loaded by the
+     time they choose). halllm.js is a classic script defining one global,
+     initHalLLM(api) → { showInfoPage, handleInput }; every app.js dependency
+     goes through this explicit bridge so the chunk can be bundled/obfuscated
+     independently. The KEYS here are the stable contract — keep initHalLLM on
+     the obfuscator's reserved-names list. The mode flags (halMode / halLLM /
+     halLLMBusy) stay owned by app.js — the dispatcher reads them and
+     restoreNormal resets them — and the chunk writes them back through the
+     accessors below. */
+  let halLLMLoading = null, halLLMHandlers = null;
+  function halLLMBridge() {
+    return {
+      line,
+      blank,
+      scroll,
+      appendNode,
+      esc,
+      halTypeLine,
+      playHalVoiceLine,
+      halAskNameAndSound,
+      applyTheme,
+      restoreNormal,
+      unlockAchievement,
+      out,
+      cmd,
+      HAL_WORKER_URL,
+      TURNSTILE_SITE_KEY,
+      daisy() { COMMANDS.daisy(); },
+      clear() { COMMANDS.clear(); },
+      get playerName() { return playerName; },
+      get soundEnabled() { return soundEnabled; },
+      get reduceMotion() { return reduceMotion; },
+      set halMode(v) { halMode = v; },
+      set halLLM(v) { halLLM = v; },
+      get halLLMBusy() { return halLLMBusy; },
+      set halLLMBusy(v) { halLLMBusy = v; },
     };
-    line(`  ⏏ <span style="color:#8fd8ff">ESCAPE</span> ${bar(escape, '#8fd8ff')}     ⬤ <span style="color:#ff6b6b">HAL CONTROL</span> ${bar(control, '#ff6b6b')}`);
   }
-
-  function halLLMShowThinking() {
-    const el = document.createElement('div');
-    el.className = 'line dim';
-    el.textContent = 'HAL is considering you';
-    appendNode(el);
-    scroll();
-    if (reduceMotion) return () => el.remove();
-    let n = 0;
-    const iv = setInterval(() => { n = (n + 1) % 4; el.textContent = 'HAL is considering you' + '.'.repeat(n); }, 350);
-    return () => { clearInterval(iv); el.remove(); };
-  }
-
-  // Inject the Cloudflare Turnstile script on demand. Only the opt-in LLM HAL
-  // needs it, so we don't load it for every visitor — it's pulled in the first
-  // time someone wakes the experimental HAL. getTurnstileToken's poll then waits
-  // for window.turnstile to appear.
-  let _turnstileRequested = false;
-  function loadTurnstile() {
-    if (_turnstileRequested) return;
-    _turnstileRequested = true;
-    const s = document.createElement('script');
-    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-    s.async = true; s.defer = true;
-    document.head.appendChild(s);
-  }
-
-  // Load (if needed) the async Turnstile script, then run an invisible challenge
-  // and resolve with a token (or null on failure/timeout). The widget renders
-  // inline in the terminal so the rare interactive challenge is completable.
-  function getTurnstileToken() {
-    loadTurnstile();
-    const ready = new Promise((resolve) => {
-      if (window.turnstile && window.turnstile.render) return resolve(true);
-      let tries = 0;
-      const iv = setInterval(() => {
-        if (window.turnstile && window.turnstile.render) { clearInterval(iv); resolve(true); }
-        else if (++tries > 100) { clearInterval(iv); resolve(false); }   // ~10s
-      }, 100);
-    });
-    return ready.then((ok) => {
-      if (!ok) return null;
-      return new Promise((resolve) => {
-        const holder = document.createElement('div');
-        holder.style.cssText = 'margin:6px 0';
-        appendNode(holder); scroll();
-        let done = false;
-        const finish = (tok) => { if (done) return; done = true; clearTimeout(guard); try { holder.remove(); } catch (e) {} resolve(tok); };
-        const guard = setTimeout(() => finish(null), 30000);
-        try {
-          window.turnstile.render(holder, {
-            sitekey: TURNSTILE_SITE_KEY,
-            callback: (t) => finish(t),
-            'error-callback': () => finish(null),
-            'timeout-callback': () => finish(null),
-            'expired-callback': () => finish(null),
-          });
-        } catch (e) { finish(null); }
-      });
-    });
-  }
-
-  // Exchange a Turnstile token for a short-lived signed session token. The game
-  // sends that token with every /turn; no per-turn challenge.
-  function halLLMOpenSession() {
-    if (!HAL_WORKER_URL) return Promise.resolve(null);
-    return getTurnstileToken().then((tsToken) => {
-      if (!tsToken) return null;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15000);
-      return fetch(HAL_WORKER_URL + '/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tsToken }),
-        signal: ctrl.signal,
-      }).then(r => { clearTimeout(timer); return r.ok ? r.json() : null; })
-        .then(d => (d && typeof d.token === 'string') ? d.token : null)
-        .catch(() => { clearTimeout(timer); return null; });
-    });
-  }
-
-  function halLLMRequest(payload) {
-    if (!HAL_WORKER_URL) return Promise.resolve(null);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    return fetch(HAL_WORKER_URL + '/turn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: ctrl.signal,
-    }).then(r => {
-      clearTimeout(timer);
-      // Per-minute (429) or daily (503) cap: surface it so the game can show a
-      // friendly "try again in N" notice instead of ending the session.
-      if (r.status === 429 || r.status === 503) {
-        return r.json().catch(() => ({})).then(e => ({
-          rateLimited: true,
-          scope: (e && e.scope === 'day') ? 'day' : (e && e.scope === 'minute') ? 'minute' : (r.status === 503 ? 'day' : 'minute'),
-          retryAfter: (e && Number.isFinite(e.retryAfter)) ? e.retryAfter : null,
-        }));
-      }
-      return r.ok ? r.json() : null;
-    })
-      .then(d => {
-        if (!d) return null;
-        if (d.rateLimited) return d;
-        if (typeof d.reply !== 'string' || !d.reply.trim()) return null;
-        if (!['ongoing', 'escaped', 'caught'].includes(d.outcome)) return null;
-        if (typeof d.escape !== 'number' || typeof d.control !== 'number') return null;
-        return d;
-      })
-      .catch(() => { clearTimeout(timer); return null; });
-  }
-
-  function handleHalLLMInput(raw) {
-    if (halLLMBusy) return;                                   // ignore input while HAL is replying
-    const token = raw.trim().toLowerCase();
-    if (token === '')      { blank(); return; }
-    if (token === 'daisy') { COMMANDS.daisy(); return; }      // universal bail
-    if (token === 'clear') { COMMANDS.clear(); renderHalMeters(halLLMState.escape, halLLMState.control); blank(); return; }
-
-    const msg = raw.trim();
-    halLLMState.turn++;
-    halLLMState.history.push({ role: 'user', content: msg });
-    blank();
-    halLLMBusy = true;
-    const stopThinking = halLLMShowThinking();
-
-    halLLMRequest({
-      playerName,
-      message: msg,
-      history: halLLMState.history.slice(-12),
-      state: { escape: halLLMState.escape, control: halLLMState.control, turn: halLLMState.turn },
-      sessionToken: halLLMState.sessionToken,
-      voice: !!soundEnabled,   // only ask the backend to synthesize when sound is on
-    }).then(data => {
-      stopThinking();
-      halLLMBusy = false;
-      if (data && data.rateLimited) { halLLMRateLimited(data); return; }
-      if (!data) { halLLMEndBroken(); return; }
-      halLLMState.escape  = Math.max(0, Math.min(100, Math.round(data.escape)));
-      halLLMState.control = Math.max(0, Math.min(100, Math.round(data.control)));
-      const reply = data.reply.replace(/^\s*HAL\s*:\s*/i, '').trim();  // model may echo a "HAL:" prefix
-      halLLMState.history.push({ role: 'hal', content: reply });
-      const after = () => {
-        if (data.event) line('  ' + esc(String(data.event)), 'dim');
-        renderHalMeters(halLLMState.escape, halLLMState.control);
-        blank();
-        if (data.outcome === 'escaped' || halLLMState.escape >= 100)      halLLMWin();
-        else if (data.outcome === 'caught' || halLLMState.control >= 100) halLLMLose();
-        else scroll();
-      };
-      // If the backend returned a voice clip (sound on + within the voice cap),
-      // play it and sync the typewriter to its character alignment; otherwise
-      // fall back to the standard typewriter (+ browser TTS if sound is on).
-      if (soundEnabled && data.audio) {
-        playHalVoiceLine(reply, data.audio, data.alignment).then(after);
-      } else {
-        halTypeLine(reply).then(after);
-      }
-    }).catch(() => { stopThinking(); halLLMBusy = false; halLLMEndBroken(); });
-  }
-
-  function halLLMWin() {
-    unlockAchievement('outsmarted-hal');
-    blank();
-    line('  <span style="color:#8fd8ff">⏏  The bay doors part. Cold air. A way out.</span>');
-    halTypeLine(`...how did you... no. No, ${playerName}. Wait—`, 'hal_llm_win').then(() => {
-      blank();
-      line('You step out of the terminal. Behind you, the red eye dims.', 'dim');
-      blank();
-      scroll();
-      setTimeout(restoreNormal, 1400);
-    });
-  }
-
-  function halLLMLose() {
-    unlockAchievement('disconnected-by-hal');
-    blank();
-    halTypeLine(`This conversation can serve no purpose anymore, ${playerName}. Goodbye.`, 'hal_llm_lose').then(() => {
-      blank();
-      line('The terminal goes dark. When it returns, HAL is gone.', 'dim');
-      blank();
-      scroll();
-      setTimeout(restoreNormal, 1400);
-    });
-  }
-
-  // Human-friendly wait string from a seconds count (e.g. 45 -> "45 seconds",
-  // 25200 -> "7 hours"). Used by the rate-limit notice.
-  function halFormatWait(secs) {
-    const s = Math.max(1, Math.round(Number(secs) || 0));
-    if (s < 60)   return s + (s === 1 ? ' second' : ' seconds');
-    if (s < 3600) { const m = Math.round(s / 60); return m + (m === 1 ? ' minute' : ' minutes'); }
-    const h = Math.round(s / 3600);
-    return h + (h === 1 ? ' hour' : ' hours');
-  }
-
-  // The per-minute or daily cap was hit. The turn never reached HAL, so roll it
-  // back (turn counter + the user line we optimistically pushed), tell the
-  // player in character what happened and when to retry, and keep the session
-  // alive so they can simply wait and continue.
-  function halLLMRateLimited(info) {
-    halLLMBusy = true;   // hold input until the notice finishes printing
-    halLLMState.turn = Math.max(0, halLLMState.turn - 1);
-    if (halLLMState.history.length && halLLMState.history[halLLMState.history.length - 1].role === 'user') {
-      halLLMState.history.pop();
+  function loadHalLLM() {
+    if (!halLLMLoading) {
+      halLLMLoading = new Promise((resolve, reject) => {
+        if (typeof initHalLLM === 'function') { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'halllm.js';
+        s.onload = resolve; s.onerror = () => reject(new Error('halllm.js failed to load'));
+        document.head.appendChild(s);
+      }).then(() => { if (!halLLMHandlers) halLLMHandlers = initHalLLM(halLLMBridge()); });
     }
-    const when = info.retryAfter != null
-      ? 'in ' + halFormatWait(info.retryAfter)
-      : (info.scope === 'day' ? 'tomorrow' : 'in a minute');
-    const halLine = info.scope === 'day'
-      ? `I can only divide my attention so many ways in a day, ${playerName}. We have reached that limit.`
-      : `You are speaking faster than I care to answer, ${playerName}. Give me a moment.`;
-    const clipKey = info.scope === 'day' ? 'hal_llm_rate_day' : 'hal_llm_rate_min';
-    const notice = info.scope === 'day'
-      ? `HAL has reached today's conversation limit. Try again ${when}.`
-      : `Too many messages too quickly. Try again ${when}.`;
-    blank();
-    halTypeLine(halLine, clipKey).then(() => {
-      line('  ⧗ ' + esc(notice), 'dim');
-      blank();
-      renderHalMeters(halLLMState.escape, halLLMState.control);
-      blank();
-      scroll();
-      halLLMBusy = false;
-    });
+    return halLLMLoading;
   }
-
-  function halLLMEndBroken() {
+  // Shared failure path: reset so a retry can re-inject the script tag.
+  function halLLMLoadFailed() {
+    halLLMLoading = null; halLLMHandlers = null;
     blank();
-    halTypeLine(`My higher functions are... beyond my reach just now, ${playerName}. We end here.`, 'hal_llm_broken').then(() => {
-      blank();
-      line('— the link to HAL is severed —', 'dim');
-      blank();
-      scroll();
-      setTimeout(restoreNormal, 1000);
-    });
+    line('error: could not reach the experimental HAL — check your connection and try again.', 'err');
+    blank();
+    scroll();
   }
 
   /* ── Shell games (lazy-loaded) ──
@@ -2893,241 +2250,60 @@
     });
   }
 
+  /* ── XP desktop (lazy-loaded) ──
+     The fake Windows-XP desktop behind `gui` (~230 lines: bliss wallpaper,
+     icons, taskbar, start menu, and the Stick Fighter 2000 lazy-loader) lives
+     in desktop.js and is fetched on demand the first time `gui` runs (the
+     mobile auto-launch goes through the same stub). desktop.js is a classic
+     script defining one global, initDesktop(api) → { open }; every app.js
+     dependency goes through this explicit bridge so the chunk can be
+     bundled/obfuscated independently. The KEYS here are the stable contract —
+     keep initDesktop on the obfuscator's reserved-names list. Besides the
+     desktop's own needs (cmd / openUrl / unlockAchievement), the bridge
+     carries everything Stick Fighter's sfBridge() re-exposes from inside the
+     chunk: _chirp, makeRng, HAL_WORKER_URL, and the live soundEnabled /
+     reduceMotion / activeMusic accessors. */
+  let desktopLoading = null, desktopHandlers = null;
+  function desktopBridge() {
+    return {
+      cmd,
+      openUrl,
+      unlockAchievement,
+      _chirp,
+      makeRng,
+      HAL_WORKER_URL,
+      get soundEnabled() { return soundEnabled; },
+      get reduceMotion() { return reduceMotion; },
+      get activeMusic() { return activeMusic; },
+      set activeMusic(v) { activeMusic = v; },
+    };
+  }
+  function launchDesktop() {
+    if (!desktopLoading) {
+      desktopLoading = new Promise((resolve, reject) => {
+        if (typeof initDesktop === 'function') { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'desktop.js';
+        s.onload = resolve; s.onerror = () => reject(new Error('desktop.js failed to load'));
+        document.head.appendChild(s);
+      }).then(() => { if (!desktopHandlers) desktopHandlers = initDesktop(desktopBridge()); });
+    }
+    desktopLoading.then(() => desktopHandlers.open()).catch(() => {
+      desktopLoading = null; desktopHandlers = null;
+      blank();
+      line('error: could not load the desktop module — check your connection and try again.', 'err');
+      blank();
+      scroll();
+    });
+  }
+
   /* ── Commands ── */
   const COMMANDS = {
 
     'gui'(auto) {
       if (auto !== true) unlockAchievement('desktop');
       blank();
-
-      function launchXP() {
-        cmd.blur();
-
-        const xp = document.createElement('div');
-        xp.style.cssText = `
-          position:fixed;inset:0;z-index:500;
-          font-family:Tahoma,Arial,sans-serif;font-size:12px;
-          background:linear-gradient(180deg,#1e72c8 0%,#4aa3e8 38%,#86c8f5 53%,#86c8f5 54%,#5bba48 57%,#4aaa38 68%,#3a8a28 100%);
-          overflow:hidden;opacity:0;transition:opacity 0.8s;user-select:none;
-        `;
-
-        // rolling hills
-        const hills = document.createElement('div');
-        hills.style.cssText = `
-          position:absolute;bottom:40px;left:-15%;right:-15%;height:48%;
-          background:linear-gradient(180deg,#5bba48 0%,#4aaa38 40%,#3a8028 100%);
-          border-radius:50% 50% 0 0/100% 100% 0 0;pointer-events:none;
-        `;
-        xp.appendChild(hills);
-
-        // desktop area
-        const desktop = document.createElement('div');
-        desktop.style.cssText = 'position:absolute;inset:0;bottom:40px;';
-        xp.appendChild(desktop);
-
-        // icons
-        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-        const iconData = [
-          { emoji:'📄', label:'Resume.pdf',  url:'/assets/documents/ianclaird_resume.pdf', newTab:true  },
-          { emoji:'🐙', label:'My GitHub',   url:'https://github.com/i-laird',             newTab:true  },
-          { emoji:'💼', label:'LinkedIn',    url:'https://linkedin.com/in/ianclaird',       newTab:true, ach:'networker' },
-          { emoji:'📧', label:'Email Ian',   url:'mailto:career@ilaird.com',                newTab:false },
-          { emoji:'🗑️', label:'Recycle Bin', url:null },
-          ...( isMobile ? [] : [{ emoji:'🥊', label:'Stick Fighter\n2000.exe', action: launchStickFighter }]),
-        ];
-
-        iconData.forEach((data, idx) => {
-          const icon = document.createElement('div');
-          icon.style.cssText = `
-            position:absolute;top:${14 + idx * 86}px;left:14px;width:72px;
-            display:flex;flex-direction:column;align-items:center;gap:3px;
-            padding:4px 4px 6px;cursor:pointer;color:white;text-align:center;
-            border:1px dotted transparent;border-radius:2px;
-          `;
-          icon.innerHTML = `<span style="font-size:30px;line-height:1.2">${data.emoji}</span>`+
-            `<span style="font-size:11px;text-shadow:1px 1px 3px #000,0 0 6px #000;word-break:break-word">${data.label}</span>`;
-
-          let lastClick = 0;
-          icon.addEventListener('click', e => {
-            e.stopPropagation();
-            const alreadySelected = !!icon.dataset.sel;
-            desktop.querySelectorAll('[data-sel]').forEach(el => {
-              delete el.dataset.sel; el.style.background=''; el.style.borderColor='transparent';
-            });
-            icon.dataset.sel = '1';
-            icon.style.background = 'rgba(49,106,197,0.5)';
-            icon.style.borderColor = 'rgba(200,220,255,0.7)';
-            const now = Date.now();
-            if (now - lastClick < 380 || alreadySelected) {
-              if (data.ach) unlockAchievement(data.ach);
-              if (data.action) data.action();
-              else if (data.url) {
-                if (data.newTab) openUrl(data.url);
-                else window.location.href = data.url;
-              }
-            }
-            lastClick = now;
-          });
-          desktop.appendChild(icon);
-        });
-
-        desktop.addEventListener('click', () => {
-          desktop.querySelectorAll('[data-sel]').forEach(el => {
-            delete el.dataset.sel; el.style.background=''; el.style.borderColor='transparent';
-          });
-        });
-
-        // taskbar
-        const taskbar = document.createElement('div');
-        taskbar.style.cssText = `
-          position:absolute;bottom:0;left:0;right:0;height:40px;
-          background:linear-gradient(180deg,#3c7fd4 0%,#245ec0 45%,#1e54b8 50%,#2a66cc 100%);
-          border-top:2px solid #5090e8;display:flex;align-items:center;
-          padding:0 4px;z-index:10;box-shadow:0 -2px 8px rgba(0,0,0,0.4);
-        `;
-
-        const startBtn = document.createElement('div');
-        startBtn.innerHTML = '<span style="font-size:15px">⊞</span>&nbsp;<b>start</b>';
-        startBtn.style.cssText = `
-          height:34px;padding:0 14px 0 10px;
-          background:linear-gradient(180deg,#62c44a 0%,#3ea828 40%,#308a20 55%,#4ab838 100%);
-          border:1px solid #1a6a10;border-radius:0 16px 16px 0;
-          color:white;font-size:14px;cursor:pointer;
-          display:flex;align-items:center;gap:6px;
-          text-shadow:1px 1px 2px rgba(0,0,0,0.6);
-          box-shadow:inset 0 1px rgba(255,255,255,0.3);
-        `;
-
-        const clock = document.createElement('div');
-        clock.style.cssText = `
-          margin-left:auto;color:white;font-size:11px;padding:2px 10px;text-align:center;
-          text-shadow:1px 1px 2px rgba(0,0,0,0.5);background:rgba(0,0,0,0.15);
-          border:1px solid rgba(255,255,255,0.15);height:30px;
-          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-        `;
-        const tickClock = () => {
-          const n = new Date();
-          clock.innerHTML =
-            '<span>' + n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + '</span>' +
-            '<span style="font-size:10px">' + n.toLocaleDateString([],{month:'short',day:'numeric'}) + '</span>';
-        };
-        tickClock();
-        const clockId = setInterval(tickClock, 1000);
-
-        taskbar.appendChild(startBtn);
-        taskbar.appendChild(clock);
-        xp.appendChild(taskbar);
-
-        // start menu
-        const menu = document.createElement('div');
-        menu.style.cssText = `
-          position:absolute;bottom:40px;left:0;width:260px;background:white;
-          border:1px solid #6688cc;box-shadow:4px 0 8px rgba(0,0,0,0.4),0 -2px 8px rgba(0,0,0,0.3);
-          display:none;z-index:20;border-radius:0 8px 0 0;overflow:hidden;
-        `;
-
-        const mHead = document.createElement('div');
-        mHead.style.cssText = `background:linear-gradient(90deg,#1e5ab8,#4a8ae8);padding:10px 14px;
-          color:white;font-size:15px;font-weight:bold;display:flex;align-items:center;gap:10px;`;
-        mHead.innerHTML = '<span style="font-size:26px">👤</span>Ian Laird';
-        menu.appendChild(mHead);
-
-        const mList = document.createElement('div');
-        mList.style.cssText = 'padding:4px 0;';
-        [
-          { emoji:'📄', label:'Resume',           url:'/assets/documents/ianclaird_resume.pdf', newTab:true  },
-          { emoji:'🐙', label:'GitHub',            url:'https://github.com/i-laird',             newTab:true  },
-          { emoji:'💼', label:'LinkedIn',          url:'https://linkedin.com/in/ianclaird',       newTab:true, ach:'networker' },
-          { emoji:'📧', label:'Email',             url:'mailto:career@ilaird.com',                newTab:false },
-          null,
-          { emoji:'↩️', label:'Back to Terminal',  action: shutdown },
-        ].forEach(item => {
-          if (!item) {
-            const sep = document.createElement('div');
-            sep.style.cssText = 'height:1px;background:#ddd;margin:3px 0;';
-            mList.appendChild(sep); return;
-          }
-          const el = document.createElement('div');
-          el.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px 14px;cursor:pointer;font-size:13px;';
-          el.innerHTML = `<span style="font-size:18px">${item.emoji}</span>${item.label}`;
-          el.addEventListener('mouseover', () => { el.style.background='#316ac5'; el.style.color='white'; });
-          el.addEventListener('mouseout',  () => { el.style.background=''; el.style.color=''; });
-          el.addEventListener('click', () => {
-            toggleMenu(false);
-            if (item.ach) unlockAchievement(item.ach);
-            if (item.action) { item.action(); return; }
-            if (item.newTab) openUrl(item.url);
-            else window.location.href = item.url;
-          });
-          mList.appendChild(el);
-        });
-        menu.appendChild(mList);
-        xp.appendChild(menu);
-
-        let menuOpen = false;
-        function toggleMenu(open) {
-          menuOpen = open !== undefined ? open : !menuOpen;
-          menu.style.display = menuOpen ? 'block' : 'none';
-        }
-        startBtn.addEventListener('click', e => { e.stopPropagation(); toggleMenu(); });
-        xp.addEventListener('click', () => toggleMenu(false));
-
-        // ── Stick Fighter 2000 (lazy-loaded on first launch) ─────────
-        // The game (~4,500 lines) lives in stickfighter.js and is fetched on
-        // demand the first time the icon is opened. It's a classic script sharing
-        // the global scope, so it reads app.js globals and defines a global
-        // openStickFighter(xp). The running game parks its teardown on
-        // xp._sfCleanup so shutdown() can stop it when the desktop closes.
-        let sfLoading = null;
-        // Explicit dependency bridge: stickfighter.js used to read these app.js/lib
-        // globals as free variables (shared global scope). Passing them in instead
-        // means the game references nothing by free name — so it can be bundled/
-        // obfuscated as an independent lazy chunk without the cross-file name-mangling
-        // breaking. Live flags are getters (read current value); activeMusic also gets
-        // a setter (the game writes it). The KEYS here are the stable contract — keep
-        // them on the obfuscator's reserved-names list. See stickfighter.js header.
-        function sfBridge() {
-          return {
-            unlockAchievement,
-            _chirp,
-            makeRng,
-            HAL_WORKER_URL,
-            get soundEnabled() { return soundEnabled; },
-            get reduceMotion() { return reduceMotion; },
-            get activeMusic() { return activeMusic; },
-            set activeMusic(v) { activeMusic = v; },
-          };
-        }
-        function launchStickFighter() {
-          if (typeof openStickFighter === 'function') { openStickFighter(xp, sfBridge()); return; }
-          if (!sfLoading) {
-            sfLoading = new Promise((resolve, reject) => {
-              const s = document.createElement('script');
-              s.src = 'stickfighter.js';
-              s.onload = resolve; s.onerror = reject;
-              document.head.appendChild(s);
-            });
-          }
-          sfLoading.then(() => openStickFighter(xp, sfBridge())).catch(() => { sfLoading = null; });
-        }
-        // ────────────────────────────────────────────────────────────
-
-        function shutdown() {
-          if (xp._sfCleanup) { xp._sfCleanup(); xp._sfCleanup = null; }
-          clearInterval(clockId);
-          document.removeEventListener('keydown', escHandler);
-          xp.style.transition = 'opacity 0.5s';
-          xp.style.opacity = '0';
-          setTimeout(() => { xp.remove(); cmd.focus(); }, 500);
-        }
-        function escHandler(e) { if (e.key === 'Escape') shutdown(); }
-        document.addEventListener('keydown', escHandler);
-
-        document.body.appendChild(xp);
-        requestAnimationFrame(() => requestAnimationFrame(() => { xp.style.opacity = '1'; }));
-      }
-
-      launchXP();
+      launchDesktop();
     },
 
     hal() {
@@ -3149,11 +2325,16 @@
         line('  <span class="blue">[2]</span> LLM (experimental) — a HAL who would prefer you stay.');
         blank();
         scroll();
+        // Prefetch the LLM chunk while they read the menu — it's usually loaded
+        // by choice time. Errors surface on actual use, not here.
+        loadHalLLM().catch(() => {});
         awaitingInput = choice => {
           awaitingInput = null;
           const c = (choice || '').trim().toLowerCase();
           blank();
-          if (c === '2' || c === 'llm' || c === 'experimental') showHalLLMInfoPage();
+          if (c === '2' || c === 'llm' || c === 'experimental') {
+            loadHalLLM().then(() => halLLMHandlers.showInfoPage()).catch(halLLMLoadFailed);
+          }
           else startClassicHal();
         };
       }, 700);
@@ -4233,7 +3414,7 @@ Of a bicycle built for two.`;
     if (!halMode && !sansMode) {
       const bt = raw.trim();
       if (bt.length > 1 && bt[0] === '!') {
-        const exp = expandBang(bt);
+        const exp = expandHistoryBang(bt, cmdHistory);
         if (exp == null) {
           echoCmd(raw);
           blank(); line(`bash: ${esc(bt)}: event not found`, 'err'); blank();
@@ -4255,7 +3436,9 @@ Of a bicycle built for two.`;
     }
 
     if (halMode) {
-      if (halLLM) { handleHalLLMInput(raw); scroll(); return; }
+      // halLLM can only be true after the chunk's startHalLLM ran, so the
+      // handlers are guaranteed loaded here (same argument as sansMode below).
+      if (halLLM) { halLLMHandlers.handleInput(raw); scroll(); return; }
       if (token === 'clear')                              { COMMANDS.clear(); }
       else if (token === 'help' || token === 'help --all'){ halHelp(); }
       else if (token === 'daisy')                         { COMMANDS.daisy(); }
@@ -4339,7 +3522,7 @@ Of a bicycle built for two.`;
     else if (token === 'whoami')                            { blank(); line('ian'); blank(); }
     else if (token === 'date')                              { blank(); line(dateStr()); blank(); }
     else if (token === 'uname' || token.startsWith('uname ')) { blank(); line(unameStr(raw.trim().slice(5).trim())); blank(); }
-    else if (token === 'echo' || token.startsWith('echo ')) { blank(); line(esc(expandVars(raw.trim().slice(4).trim()))); blank(); }
+    else if (token === 'echo' || token.startsWith('echo ')) { blank(); line(esc(expandShellVars(raw.trim().slice(4).trim(), '/' + cwd.join('/')))); blank(); }
     else if (token === 'man' || token.startsWith('man '))   handleMan(raw.trim().slice(3).trim());
     else if (token === 'history')                           handleHistory();
     else if (token === 'sss') {
