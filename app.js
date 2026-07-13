@@ -201,11 +201,10 @@
     { id: 'librarian',     name: 'librarian',        desc: 'read every file on the system',    hint: 'cat everything. yes, even the dotfiles.' },
     { id: 'outsmarted-hal', name: 'open the doors',  desc: 'talked the experimental HAL into letting you escape', hint: 'wake the experimental HAL — then talk your way out' },
     { id: 'disconnected-by-hal', name: 'serve no purpose', desc: 'pushed the experimental HAL until it disconnected you', hint: 'wake the experimental HAL — and push your luck' },
-    { id: 'excalibur',     name: 'the sword in the stone', desc: 'pulled Excalibur from the stone', hint: 'in the brawler, a glowing stone holds a blade' },
-    { id: 'ogre-slayer',   name: 'ogre-slayer',      desc: 'slew the War-Ogre',                hint: 'a brute lumbers in once per run' },
-    { id: 'witch-king',    name: 'i am no man',       desc: 'defeated the Witch-king of Angmar', hint: 'outlast the nine riders' },
-    { id: 'dark-lord',     name: 'the dark lord falls', desc: 'struck down Darth Vader',        hint: 'something waits past the fantasy horde' },
-    { id: 'world-stopper', name: 'za warudo',         desc: 'turned DIO to dust',               hint: 'time itself will stop before the end' },
+    // Stick Fighter keeps its OWN in-game trophy case (SF_ACH in stickfighter.js) — the
+    // site tracks just these two: the doorway in, and the platinum for clearing the case.
+    { id: 'stick-fighter', name: 'stick fighter 2000', desc: 'booted up Stick Fighter 2000',   hint: 'the desktop hides more than wallpaper' },
+    { id: 'sf-platinum',   name: 'the platinum trophy', desc: 'earned every Stick Fighter trophy', hint: 'the brawler keeps its own trophy case — fill it' },
   ];
   const ACH_KEY = 'ilaird_eggs';
 

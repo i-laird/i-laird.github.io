@@ -24,6 +24,7 @@
           const { unlockAchievement: _unlockAch, _chirp, makeRng, HAL_WORKER_URL } = api;
           // a watched replay must never unlock the WATCHER's achievements
           const unlockAchievement = (id) => { if (!replayMode) _unlockAch(id); };
+          _unlockAch('stick-fighter');   // the site egg for booting the game at all (raw: `replayMode` isn't initialized yet, and a boot is never a replay)
 
           const GW = xp.offsetWidth;
           const GH = xp.offsetHeight - 40;
@@ -215,6 +216,140 @@
           const MINION_T   = 1400;  // a raised minion's lifespan (~21s)
           const HUSK_CAP   = 12;    // the field never drowns in husks
           const NECRO_COL  = '#64ffda';  // soul-fire teal (distinct from P2's soft green)
+
+          /* ── the TROPHY CASE: Stick Fighter's own in-game achievement system ──
+             Persisted account-wide in `ilaird_sf_trophies` (deliberately NOT per class
+             profile). sfUnlock() is idempotent, no-ops during a watched replay, queues a
+             little gold toast (drawn on every screen), and when the case is FULL reports
+             the single `sf-platinum` egg to the site — the portfolio tracks only the
+             doorway in (`stick-fighter`, on boot) and the platinum. Trophies that spoil
+             a boss or an ending are `secret` (the case shows 🔒 ??? until earned). */
+          const SF_ACH = [
+            { id: 'first_blood', name: 'FIRST BLOOD',            desc: 'slay your first foe' },
+            { id: 'wave_5',      name: 'WARBAND BROKEN',         desc: 'reach wave 5' },
+            { id: 'wave_10',     name: 'DOUBLE DIGITS',          desc: 'reach wave 10' },
+            { id: 'excalibur',   name: 'THE SWORD IN THE STONE', desc: 'pull Excalibur free' },
+            { id: 'summoner',    name: "CHAMPION'S CALL",        desc: 'summon your first ally' },
+            { id: 'fellowship',  name: 'THE FELLOWSHIP',         desc: 'three allies afield at once' },
+            { id: 'capstone',    name: 'ASCENDED',               desc: 'buy a capstone upgrade' },
+            { id: 'score_10k',   name: 'HIGH ROLLER',            desc: 'score 10,000 in one run' },
+            { id: 'coop',        name: 'IT TAKES TWO',           desc: 'begin a co-op run' },
+            { id: 'daily',       name: 'CREATURE OF HABIT',      desc: 'finish a daily challenge' },
+            { id: 'tempest',     name: 'STORMCALLER',            desc: 'call down the TEMPEST' },
+            { id: 'army_4',      name: 'LORD OF THE DEAD',       desc: 'field four minions at once' },
+            { id: 'ogre',        name: 'OGRE-SLAYER',            desc: 'slay the War-Ogre',               secret: true },
+            { id: 'witch_king',  name: 'I AM NO MAN',            desc: 'fell the Witch-king of Angmar',   secret: true },
+            { id: 'vader',       name: 'THE DARK LORD FALLS',    desc: 'strike down Darth Vader',         secret: true },
+            { id: 'sidious',     name: 'UNLIMITED POWER, UNPLUGGED', desc: 'end the Emperor',             secret: true },
+            { id: 'dio',         name: 'ZA WARUDO',              desc: 'turn DIO to dust',                secret: true },
+            { id: 'ian_spare',   name: 'MERCY',                  desc: 'spare the creator',               secret: true },
+            { id: 'ian_kill',    name: 'NO MERCY',               desc: 'strike the creator down',         secret: true },
+            { id: 'hard_5',      name: 'THE PRICE OF MERCY',     desc: 'reach wave 5 in hard mode',       secret: true },
+            // the hard set — trophies for the players who want to bleed for them
+            { id: 'unscathed',   name: 'UNSCATHED',              desc: 'break five waves without taking a single blow' },
+            { id: 'swift',       name: 'SWIFT DOOM',             desc: 'reach wave 5 inside three minutes' },
+            { id: 'deep_15',     name: 'INTO THE DARK',          desc: 'reach wave 15 — the endless dark stares back',                      secret: true },
+            { id: 'dark_hour',   name: 'DARKEST HOUR',           desc: 'fell the Witch-king in hard mode',                                  secret: true },
+            { id: 'daily_crown', name: 'LEGEND OF THE DAY',      desc: "top today's daily board" },
+            { id: 'wolf_100',    name: 'WOLFSBANE',              desc: 'put down 100 frost wolves' },
+            { id: 'the_weight',  name: 'THE WEIGHT OF IT',       desc: "hold the creator's fate for a full minute before deciding",         secret: true },
+            { id: 'hoisted',     name: 'HOISTED',                desc: 'bait a powder keg into blowing up a goblin shaman',                 secret: true },
+          ];
+          const SF_ACH_KEY = 'ilaird_sf_trophies';
+          const sfTrophies = (() => {
+            const known = new Set(SF_ACH.map(a => a.id));
+            let ids = [];
+            try { ids = JSON.parse(localStorage.getItem(SF_ACH_KEY) || '[]'); } catch (_) { /* a fresh case */ }
+            const s = new Set(Array.isArray(ids) ? ids.filter(id => known.has(id)) : []);
+            // migration: these five lived on the SITE's egg list before the case existed
+            try {
+              const old = JSON.parse(localStorage.getItem('ilaird_eggs') || '[]');
+              const map = { excalibur: 'excalibur', 'ogre-slayer': 'ogre', 'witch-king': 'witch_king', 'dark-lord': 'vader', 'world-stopper': 'dio' };
+              for (const [egg, tid] of Object.entries(map)) if (Array.isArray(old) && old.includes(egg)) s.add(tid);
+            } catch (_) { /* nothing to migrate */ }
+            return s;
+          })();
+          let sfToasts = [];        // {name, t} — the gold cards, drawn over every screen
+          let showTrophies = false; // the intro's trophy case panel (T toggles it)
+          let runFlawless = true;   // no blow has connected this run (reset in init; see strike)
+          // WOLFSBANE's lifetime ledger — replay-gated at the increment, like every save
+          let wolfKills = 0;
+          try { wolfKills = parseInt(localStorage.getItem('ilaird_sf_wolfkills') || '0', 10) || 0; } catch (_) { /* fresh hunt */ }
+          function sfUnlock(id) {
+            if (replayMode || sfTrophies.has(id)) return;   // a watched run earns the WATCHER nothing
+            const a = SF_ACH.find(x => x.id === id);
+            if (!a) return;
+            sfTrophies.add(id);
+            try { localStorage.setItem(SF_ACH_KEY, JSON.stringify([...sfTrophies])); } catch (_) {}
+            sfToasts.push({ name: a.name, t: 230 });
+            sfSfx.coin();
+            if (sfTrophies.size === SF_ACH.length) unlockAchievement('sf-platinum');   // the case is full — the site's platinum egg
+          }
+          // the toast rail: small gold cards under the HUD, fading in/out (a fade, never a
+          // flash — reduced-motion safe). Called from every render path, so a trophy earned
+          // in the same beat you die still shows over the death screen.
+          function drawTrophyToasts() {
+            if (!sfToasts.length) return;
+            ctx.save();
+            ctx.textAlign = 'center';
+            let ty = 74;
+            for (let i = 0; i < sfToasts.length; i++) {
+              const tst = sfToasts[i];
+              tst.t--;
+              const a = Math.max(0, Math.min(1, tst.t / 26, (230 - tst.t) / 14));
+              const w = 320, x = GW / 2 - w / 2;
+              ctx.globalAlpha = a * 0.92;
+              ctx.fillStyle = '#141007';
+              roundRectPath(x, ty, w, 34, 8); ctx.fill();
+              ctx.strokeStyle = '#ffd24d'; ctx.lineWidth = 1.5;
+              roundRectPath(x, ty, w, 34, 8); ctx.stroke();
+              ctx.globalAlpha = a;
+              ctx.font = 'bold 9px Tahoma,Arial'; ctx.fillStyle = '#c9a227';
+              ctx.fillText('🏆 TROPHY EARNED', GW / 2, ty + 12);
+              ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
+              ctx.fillText(tst.name, GW / 2, ty + 27);
+              ty += 42;
+            }
+            sfToasts = sfToasts.filter(t => t.t > 0);
+            ctx.restore(); ctx.globalAlpha = 1; ctx.textAlign = 'left';
+          }
+          // the case itself — an overlay on the intro screen (T toggles): every trophy as a
+          // row, secrets masked until earned
+          function drawTrophyCase() {
+            ctx.save();
+            ctx.fillStyle = 'rgba(2,4,8,0.88)'; ctx.fillRect(0, 0, GW, GH);
+            ctx.textAlign = 'center';
+            ctx.font = 'bold 22px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
+            ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
+            ctx.fillText('🏆 TROPHY CASE', GW / 2, 46);
+            ctx.font = 'bold 12px Tahoma,Arial';
+            ctx.fillStyle = sfTrophies.size === SF_ACH.length ? '#7CFC8A' : '#9fb0c0';
+            ctx.fillText(sfTrophies.size + ' / ' + SF_ACH.length +
+                         (sfTrophies.size === SF_ACH.length ? '  —  PLATINUM' : ''), GW / 2, 66);
+            ctx.shadowBlur = 0;
+            const perCol = Math.ceil(SF_ACH.length / 2);
+            const colW = Math.min(360, (GW - 60) / 2);
+            const rowH = Math.max(24, Math.min(34, Math.floor((GH - 140) / perCol)));
+            ctx.textAlign = 'left';
+            for (let i = 0; i < SF_ACH.length; i++) {
+              const a = SF_ACH[i];
+              const got = sfTrophies.has(a.id);
+              const col = Math.floor(i / perCol);
+              const x = GW / 2 - colW + 10 + col * colW;
+              const y = 92 + (i % perCol) * rowH;
+              ctx.font = 'bold 12px Tahoma,Arial';
+              ctx.fillStyle = got ? '#ffd24d' : '#5c6773';
+              ctx.fillText((got ? '🏆 ' : '🔒 ') + (got || !a.secret ? a.name : '? ? ?'), x, y);
+              if (got || !a.secret) {
+                ctx.font = '10px Tahoma,Arial'; ctx.fillStyle = got ? '#bfae7a' : '#49525c';
+                ctx.fillText(a.desc, x + 18, y + 12);
+              }
+            }
+            ctx.textAlign = 'center';
+            ctx.font = 'bold 12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+            ctx.fillText('T — close the case', GW / 2, GH - 22);
+            ctx.restore(); ctx.textAlign = 'left';
+          }
           const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
           const KEG_R     = 42;    // the bombardier's powder-keg blast radius
           const KEG_AIR   = 62;    // ticks a lobbed keg hangs in the air (the dodge window)
@@ -287,7 +422,7 @@
             ianCue = 0; ianActive = false; ianChoice = null; ianFinale = null; mournful = false; endless = false; ianBg = [];
             wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
             lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
-            cheated = false; lbTicks = 0; lbKills = 0;
+            cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true;
             up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
                    champs: { gandalf: false, luke: false, jotaro: false },
                    champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false,
@@ -328,7 +463,7 @@
             player.dashCharges = up.dashMax; player.rechargeT = 0;
             player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
             player.mana = up.manaMax;          // the wizard starts with a full well (after Deep Well applies)
-            if (coop) setupCoop();             // a second hero joins; both share allies, meter & upgrades
+            if (coop) { setupCoop(); sfUnlock('coop'); }   // a second hero joins; both share allies, meter & upgrades
           }
 
           /* ── couch co-op helpers ── */
@@ -549,6 +684,7 @@
           function buyUpgrade(u) {
             if (tokens < upCost(u)) { sfSfx.thud(); return; }   // can't afford this capstone yet
             tokens -= upCost(u); up.owned.add(u.id); u.apply();
+            if (upCost(u) >= 2) sfUnlock('capstone');
             saveUpgrades(); saveTokens();            // unlocked upgrades & token balance persist across runs
             sfSfx.summon();
             upMenu.sel = Math.min(upMenu.sel, availableUpgrades().length);  // clamp onto the (possibly shorter) list
@@ -2824,6 +2960,7 @@
               hints.push(['allies & upgrades are shared — revive a downed partner by standing close', '#9fb0c0']);
             }
             hints.push(['◀ ▶ choose   ·   ↑ ↓ switch row   ·   1 / 2 / 3 jump to a mode', '#9fb0c0']);
+            hints.push(['🏆 trophy case ' + sfTrophies.size + ' / ' + SF_ACH.length + '   ·   press T', sfTrophies.size === SF_ACH.length ? '#7CFC8A' : '#c9a227']);
             hints.push(['coins raise your multiplier  ·  graze foes for bonus  ·  clear waves for tokens', '#8494a4']);
             const barH = hints.length * 17 + 14;
             ctx.fillStyle = 'rgba(5,8,12,0.55)'; ctx.fillRect(0, GH - barH, GW, barH);
@@ -2840,6 +2977,7 @@
             ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
             ctx.fillText('⚔  Z / ENTER — BEGIN', GW / 2, byy + 20);
 
+            if (showTrophies) drawTrophyCase();   // the case sits over the whole intro
             ctx.restore(); ctx.textAlign = 'left';
           }
 
@@ -2926,6 +3064,12 @@
             if (e.type === 'dio' && e.mode !== 'dying') { startDioFinale(e); return; }
             e.dead = true;
             kills++;
+            sfUnlock('first_blood');
+            if (e.type === 'wolf' && e.elite && !replayMode) {   // WOLFSBANE: frost + dire frost wolves, lifetime
+              wolfKills++;
+              try { localStorage.setItem('ilaird_sf_wolfkills', String(wolfKills)); } catch (_) {}
+              if (wolfKills >= 100) sfUnlock('wolf_100');
+            }
             // a necromancer in the party harvests the fallen: grunts leave husks to raise
             if ((e.type === 'goblin' || e.type === 'wolf' || e.type === 'archer' || e.type === 'troll') &&
                 !champsBanned() && husks.length < HUSK_CAP && heroesAll().some(h => h.cls === 'necro')) {
@@ -2949,7 +3093,8 @@
             sparks.push({ x: e.x, y: e.y - 26, t: 20, color: '#ffd24d', txt: '+' + pts });
             sfSfx.killE();
             if (e.type === 'witchking') {
-              unlockAchievement('witch-king');
+              sfUnlock('witch_king');
+              if (hardMode) sfUnlock('dark_hour');
               bossActive = false; nineDone = true; corpses = [];
               const gotTok = grantBossToken();   // every Witch-king kill earns an upgrade token
               banner = 'the Witch-king is no more'; bannerSub = '+1000' + (gotTok ? '  ·  token earned' : ''); bannerT = 160;
@@ -2961,13 +3106,13 @@
             } else if (e.type === 'trooper') {
               swTroopersLeft--;
             } else if (e.type === 'ogre') {
-              unlockAchievement('ogre-slayer');
+              sfUnlock('ogre');
               // the mini-boss falls hard — extra points, a meter surge, and a guaranteed powerup drop
               banner = 'the war-ogre falls!'; bannerSub = '+200'; bannerT = 130;
               score += 200; addMeter(30); shake = 14;
               powerups.push({ x: e.x, y: e.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(rnd() * 3)], t: 820 });
             } else if (e.type === 'vader') {
-              unlockAchievement('dark-lord');
+              sfUnlock('vader');
               // the dark lord falls — but a darker master waits in the void. keep the saber.
               vaderActive = false; swState = 'vaderdown';   // stay in the void; keep the lightsaber + starfield
               arrows = []; player.choke = 0; player.stunT = 0; swFlash = 0;  // clear in-flight saber / Force effects
@@ -2979,6 +3124,7 @@
             } else if (e.type === 'sidious') {
               // he does not simply fall — Darth Vader rises and bears him into the dark,
               // the Emperor's lightning storming over them both (reward deferred to the cutscene's end)
+              sfUnlock('sidious');
               startSidiousFinale(e);
             } else if (e.type === 'wraith' && nineActive) {
               // every wraith's body stays on the field
@@ -2999,6 +3145,7 @@
           // run only ends once both heroes are down (see downHero/endRun).
           function strike(h) {
             if (!h || h.down || h.dashT > 0 || h.iframe > 0) return;  // mid-dash i-frames / just-shielded
+            runFlawless = false;   // a blow got through the dodges (Aegis eating it still counts) — UNSCATHED is off
             if (h.shield) {
               // the Aegis takes the blow — shatters, buys a beat of safety, and shoves attackers off
               h.shield = false; h.iframe = 44;
@@ -3028,6 +3175,7 @@
               return;
             }
             alive = false;
+            if (dailyRun) sfUnlock('daily');   // seeing a daily through counts, win or lose
             lbTicks = tick; lbKills = kills;   // the run's proof stats, frozen at death
             if (score > best) { best = score; newBest = true; localStorage.setItem('ilaird_sf_best', String(best)); }
             sfSfx.die(); shake = 14;
@@ -3122,6 +3270,7 @@
                   else lbScores = d.scores.slice(0, 10);
                 }
                 lbRank = (d && Number.isInteger(d.rank)) ? d.rank : -1;
+                if (dailyRun && lbRank === 0) sfUnlock('daily_crown');   // LEGEND OF THE DAY — top of today's board
                 lbState = 'done';
               })
               .catch(() => { if (!alive) lbState = 'view'; });   // show the board we already have
@@ -3705,7 +3854,7 @@
             if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 4);
           }
           function finishDioFinale() {
-            unlockAchievement('world-stopper');
+            sfUnlock('dio');
             const e = enemies.find(en => en.type === 'dio'); if (e) e.dead = true;
             dioFinale = null; jojoActive = false; dioStopT = 0; dioStopFx = 0; roadRoller = null;
             arrows = []; dlg = []; dlgT = 0; player.stunT = 0;
@@ -3783,6 +3932,7 @@
           function finishIanKill() {
             enemies = enemies.filter(en => en.type !== 'ian');
             ianActive = false; ianFinale = null; ianChoice = null;
+            sfUnlock('ian_kill');
             mournful = true; endless = false;
             arrows = []; warns = []; dlg = []; dlgT = 0;
             clearBlades(); stone = null; stoneCd = 150;   // Excalibur returns to the quiet world
@@ -3793,6 +3943,7 @@
           function finishIanSpare() {
             enemies = enemies.filter(en => en.type !== 'ian');
             ianActive = false; ianFinale = null; ianChoice = null;
+            sfUnlock('ian_spare');
             endless = true; mournful = false;
             try { localStorage.setItem('ilaird_sf_endless', '1'); } catch (_) {}
             // mercy has a price: HARD MODE unlocks forever — every normal run from here
@@ -4678,6 +4829,7 @@
                the onKey intro handler owns the row navigation) */
             if (!started) {
               drawIntroScreen();
+              drawTrophyToasts();
               hud.innerHTML = 'BEST: ' + best + ' · ' + (modeSel === 1 ? '2-PLAYER' : modeSel === 2 ? '☀ DAILY' : '1-PLAYER') + '<br>double-click icon to quit';
               frame++;
               return;
@@ -4702,12 +4854,14 @@
                               : lbState === 'submitting' ? 'recording your legend…'
                               : 'press R to play again';
               }
+              drawTrophyToasts();   // a trophy earned in the dying beat still shows
               return;
             }
 
             /* upgrade screen between waves — freeze the field, overlay the menu */
             if (paused) {
               drawUpgradePanel();
+              drawTrophyToasts();
               hud.innerHTML = ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left';
               return;
             }
@@ -4813,6 +4967,12 @@
             if (breatherT > 0) {
               if (--breatherT === 0) {
                 wave++;
+                if (wave >= 5) sfUnlock('wave_5');
+                if (wave >= 10) sfUnlock('wave_10');
+                if (wave >= 15) sfUnlock('deep_15');
+                if (hardMode && wave >= 5) sfUnlock('hard_5');
+                if (wave >= 6 && runFlawless) sfUnlock('unscathed');       // five waves, not one blow landed
+                if (wave >= 5 && tick <= 3 * 60 * SIM_HZ) sfUnlock('swift'); // tick-based, so replays agree
                 waveQuota = Math.min(30, 8 + wave * 3);
                 if (up.shield) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave
                 banner = 'WAVE ' + wave;
@@ -5023,7 +5183,7 @@
             const stoneGrabber = stone ? heroesLive().find(h => h.cls === 'melee' && !h.heldSaber && h.swordT <= 0 && Math.hypot(h.x - stone.x, h.y - stone.y) < PULL_R) : null;
             if (stoneGrabber) {
               stone = null; stoneCd = 150;   // a beat before the next stone (lets a co-op partner arm too, but not instantly)
-              unlockAchievement('excalibur');
+              sfUnlock('excalibur');
               stoneGrabber.swordT = Math.round(SWORD_T * up.swordMul);   // Keen Edge holds the blade longer
               banner = '⚔ EXCALIBUR ⚔'; bannerSub = 'X — swing the blade'; bannerT = 100;
               sfSfx.sword(); shake = 8;
@@ -5132,6 +5292,7 @@
 
             /* the champion */
             if (frame % 90 === 0) addMeter(1);
+            if (score >= 10000) sfUnlock('score_10k');
             if (meter >= up.summonCost && !champsBanned() && !meterPrompted && champUnlocked()) {
               meterPrompted = true;
               banner = 'summon an ally'; bannerSub = champReadyText(); bannerT = 150;
@@ -5359,7 +5520,10 @@
                   if (e2.hp && (e2.hp -= 2) > 0) {
                     e2.stun = Math.max(e2.stun || 0, 16);
                     sparks.push({ x: e2.x, y: e2.y - 30, t: 12, color: '#ffb74d', txt: 'SCORCHED' });
-                  } else killEnemy(e2);
+                  } else {
+                    if (e2.type === 'shaman') sfUnlock('hoisted');   // its own artillery got it
+                    killEnemy(e2);
+                  }
                 }
               }
               enemies = enemies.filter(e2 => !e2.dead);
@@ -5979,6 +6143,7 @@
             ctx.restore();
             drawSummonMeter();   // the ally charge gauge sits in the UI layer, unaffected by screen shake
             drawManaGauge();     // ...and the wizard's well mirrors it bottom-right
+            drawTrophyToasts();
 
             if (swFadeT > 0) {
               // cross-fade through black hides the cut to the corridor
@@ -6408,6 +6573,7 @@
               from = nx;
             }
             blasts.push({ kind: 'chain', pts, t: 0, life: 20 });
+            sfUnlock('tempest');
             return true;
           }
           /* ── the necromancer's soul scythe ──
@@ -6451,6 +6617,7 @@
                 h.souls -= up.raiseCost;
                 minions.push({ src: k.src, x: k.x, y: k.y, hp: up.minionHp + (k.elite ? 1 : 0), t: MINION_T,
                                phase: 0, fx: 1, hitCd: 20, hurtCd: 30, shotCd: 60, elite: k.elite });
+                if (minions.length >= 4) sfUnlock('army_4');
                 blasts.push({ kind: 'frost', x: k.x, y: k.y, r: 0, t: 0, life: 16, rMax: 44 });
                 sparks.push({ x: k.x, y: k.y - 30, t: 22, color: NECRO_COL, txt: 'RISE' });
                 sfSfx.ignite();
@@ -6482,6 +6649,8 @@
             }
             bannerT = 110;
             allies.push(g);
+            sfUnlock('summoner');
+            if (allies.length >= 3) sfUnlock('fellowship');
           }
 
           function championPrompt() {
@@ -6684,6 +6853,10 @@
             // (1-PLAYER · MELEE) keep the classic run one Enter away. (The headless determinism
             // test starts by dispatching Enter, then holds ArrowRight to move.)
             if (!started) {
+              // the trophy case: T toggles it; while open it swallows the intro keys
+              // (Escape is avoided on purpose — that's the XP desktop's shutdown key)
+              if (e.key === 't' || e.key === 'T') { showTrophies = !showTrophies; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (showTrophies) { e.preventDefault(); return; }
               const nRows = modeSel === 1 ? 3 : 2;
               if (e.key === 'ArrowUp')   { introRow = (introRow + nRows - 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
               if (e.key === 'ArrowDown') { introRow = (introRow + 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
@@ -6737,7 +6910,10 @@
               if (ianChoice) {
                 if (['ArrowLeft', 'a', 'A'].includes(e.key)) { ianChoice.sel = 0; sfSfx.killE(); }
                 else if (['ArrowRight', 'd', 'D'].includes(e.key)) { ianChoice.sel = 1; sfSfx.killE(); }
-                else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) { recPush([tick + 1, 10, ianChoice.sel]); chooseIan(ianChoice.sel); }
+                else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) {
+                  if (ianChoice.t >= 60 * SIM_HZ) sfUnlock('the_weight');   // a full minute holding his fate
+                  recPush([tick + 1, 10, ianChoice.sel]); chooseIan(ianChoice.sel);
+                }
               }
               e.preventDefault();
               return;
