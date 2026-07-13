@@ -63,8 +63,18 @@ function installShims(window) {
 function makeRecordingCtx(window) {
   let h = 5381 >>> 0;
   let calls = 0;
+  // Per-tick chunk hashes: a new chunk starts at each full-screen clearRect (one per
+  // rendered tick), so two runs can be compared tick-by-tick — needed for the
+  // refresh-rate test, where the accumulator allows ±1 tick at the span boundary.
+  const chunkHashes = [];
+  let ch = 5381 >>> 0;
   const fold = (s) => {
     for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
+    if (s.startsWith('clearRect')) {
+      chunkHashes.push(ch);
+      ch = 5381 >>> 0;
+    }
+    for (let i = 0; i < s.length; i++) ch = (((ch << 5) + ch) ^ s.charCodeAt(i)) >>> 0;
   };
   const canvasEl = window.document.createElement('canvas');
   canvasEl.width = 800;
@@ -116,13 +126,23 @@ function makeRecordingCtx(window) {
       return true;
     },
   });
-  return { ctx, getHash: () => h, getCalls: () => calls };
+  return {
+    ctx,
+    getHash: () => h,
+    getCalls: () => calls,
+    getChunks: () => {
+      chunkHashes.push(ch);
+      return chunkHashes.slice();
+    },
+  };
 }
 
-// Run the real game headlessly for `frames` deterministic ticks and return the
-// hash of everything it drew. `seed` is the ONLY entropy: we stub the seed draw
-// (Date.now/Math.random in init()) so the whole run is a function of it.
-async function runGame({ seed, frames }) {
+// Run the real game headlessly and return the hash of everything it drew.
+// `seed` is the ONLY entropy: we stub the seed draw (Date.now/Math.random in
+// init()) so the whole run is a function of it. `frameMs` simulates the display's
+// refresh interval (16 ≈ 60 Hz, 8 ≈ 120 Hz) — `frames` is normalized so the same
+// wall-clock span is covered either way. `reduceMotion` sets the bridge flag.
+async function runGame({ seed, frames, frameMs = 16, reduceMotion = false }) {
   const errors = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', (e) => errors.push(e));
@@ -178,30 +198,47 @@ async function runGame({ seed, frames }) {
 
   // The game takes its app.js dependencies through an explicit bridge (app.js's
   // sfBridge()). Reconstruct a minimal one: the real makeRng (so seeding is the real
-  // PRNG), no-op/static stand-ins for the rest. Static flags are fine here — both runs
-  // use the same bridge, so the sim stays a pure function of the seed.
+  // PRNG, instrumented to count rnd() draws), no-op/static stand-ins for the rest.
+  // Static flags are fine here — compared runs use the same bridge, so the sim stays
+  // a pure function of the seed (the reduceMotion test compares only rnd counts).
+  let rndCalls = 0;
   const api = {
     unlockAchievement: window.unlockAchievement, // function decl → on window
     _chirp: window._chirp, // no-ops anyway (sound off + no AudioContext)
-    makeRng: window.makeRng, // the real seeded PRNG
+    makeRng: (s) => {
+      const f = window.makeRng(s); // the real seeded PRNG
+      return () => {
+        rndCalls++;
+        return f();
+      };
+    },
     HAL_WORKER_URL: 'https://example.invalid', // leaderboard only fires on death; fetch is stubbed to reject
     soundEnabled: false,
-    reduceMotion: false,
+    reduceMotion,
     activeMusic: null,
   };
   window.openStickFighter(xp, api); // runs init() (seeds the PRNG) + the first frameStep()
   // Leave the intro (Enter begins the run in the highlighted mode — 1-PLAYER by default), then
   // hold a direction so the sim actually advances (waves spawn, enemies pursue — all RNG-driven).
+  // Held-key input only: it is cadence-independent, so cross-refresh-rate runs see the
+  // identical per-tick input surface (edge-triggered events would need tick-stamping).
   window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter' }));
   window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight' }));
 
-  for (let i = 0; i < frames; i++) {
+  const pumps = Math.round((frames * 16) / frameMs); // same wall-clock span at any cadence
+  for (let i = 0; i < pumps; i++) {
     const cbs = raf;
     raf = [];
-    for (const cb of cbs) cb(16 * i);
+    for (const cb of cbs) cb(frameMs * i);
   }
 
-  const result = { hash: rec.getHash(), calls: rec.getCalls(), errors };
+  const result = {
+    hash: rec.getHash(),
+    calls: rec.getCalls(),
+    chunks: rec.getChunks(),
+    rndCalls,
+    errors,
+  };
   dom.window.close(); // stop jsdom timers (e.g. the 60s egg-nudge)
   return result;
 }
@@ -225,4 +262,40 @@ test('a different seed diverges (the draw stream reflects RNG-driven gameplay)',
   const a = await runGame({ seed: 1, frames: 220 });
   const c = await runGame({ seed: 999, frames: 220 });
   assert.notEqual(a.hash, c.hash, 'different seeds should produce different runs');
+});
+
+test('the sim rate is independent of display refresh rate (60 Hz vs 120 Hz)', async () => {
+  // The fixed-timestep driver must advance the same tick stream per unit wall time no
+  // matter how often rAF fires. Chunk hashes (one per rendered tick) let us compare
+  // tick-by-tick: every shared tick must be bit-identical, and the totals may differ
+  // only by the one boundary tick the accumulator hasn't finished at the cut-off.
+  const hz60 = await runGame({ seed: 42, frames: 220, frameMs: 16 });
+  const hz120 = await runGame({ seed: 42, frames: 220, frameMs: 8 });
+  assert.ok(
+    Math.abs(hz60.chunks.length - hz120.chunks.length) <= 1,
+    `tick counts must match within the boundary tick (${hz60.chunks.length} vs ${hz120.chunks.length})`
+  );
+  const shared = Math.min(hz60.chunks.length, hz120.chunks.length);
+  assert.ok(shared > 100, `runs should share real gameplay ticks (${shared})`);
+  for (let c = 0; c < shared; c++) {
+    assert.equal(
+      hz60.chunks[c],
+      hz120.chunks[c],
+      `60 Hz and 120 Hz diverged at tick chunk ${c} — the sim is refresh-rate dependent`
+    );
+  }
+});
+
+test('reduceMotion does not shift the RNG stream (settings-independent consumption)', async () => {
+  // Cross-machine determinism rule: a client-side setting must never change how many
+  // rnd() draws the sim makes. Every reduceMotion branch consumes its rolls first and
+  // only gates the visual effect — this pins that (via the instrumented makeRng).
+  const off = await runGame({ seed: 7, frames: 400, reduceMotion: false });
+  const on = await runGame({ seed: 7, frames: 400, reduceMotion: true });
+  assert.ok(off.rndCalls > 0, 'the run should consume RNG');
+  assert.equal(
+    off.rndCalls,
+    on.rndCalls,
+    `reduceMotion changed rnd() consumption (${off.rndCalls} vs ${on.rndCalls})`
+  );
 });

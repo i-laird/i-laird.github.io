@@ -154,6 +154,16 @@
           let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, 2);
           let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, 2);
           let introRow = 0;   // intro chooser: 0 = mode row, 1 = P1 class, 2 = P2 class (2P only)
+          // ── per-tick input capture ──
+          // Edge-triggered combat inputs (dash / attack / summon / choke-mash) are QUEUED here
+          // by the keydown handler and consumed at the top of the next sim tick — the sim never
+          // mutates from inside a DOM event. Together with the held-key `keys` object (read once
+          // per tick in loop()), this is the sim's complete input surface for one tick: a future
+          // recorder captures {keys, pend} per tick; a replayer / lockstep peer injects them.
+          let pend = null;   // built by resetPend() in init()
+          function resetPend() {
+            pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, summon: null, prompt: false, mash: 0 };
+          }
 
           function init() {
             // Seed the run. sfSeedOverride lets a future MP handshake pin a shared seed;
@@ -202,6 +212,7 @@
                    arrowSpd: 1, ricochet: false,                                   // BOW extras
                    shatter: false, overcharge: false };                            // SORCERY extras
             paused = false; upMenu = null;
+            resetPend();                       // no queued input crosses a restart
             tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
             applySavedUpgrades();              // unlocked upgrades are permanent — re-apply across runs
             player.dashCharges = up.dashMax; player.rechargeT = 0;
@@ -1322,12 +1333,14 @@
               ctx.fillStyle = 'rgba(196,158,255,' + (steady ? 0.55 : 0.35 + 0.3 * prog + 0.2 * Math.abs(Math.sin(frame * 0.5))).toFixed(2) + ')';
               ctx.beginPath(); ctx.arc(ox, oy, 4 + prog * 6, 0, Math.PI * 2); ctx.fill();
               // little arcs spitting off the gathering orb during the windup
-              if (e.mode === 'cast' && !api.reduceMotion && prog > 0.25) {
+              if (e.mode === 'cast' && prog > 0.25) {
                 ctx.strokeStyle = 'rgba(220,200,255,0.8)'; ctx.lineWidth = 1.2; ctx.lineCap = 'round';
                 for (let a = 0; a < 3; a++) {
                   const ar = (frame * 0.5 + a * 2.1), rr = (4 + prog * 6);
+                  const jx = (rnd() - 0.5) * 3, jy = (rnd() - 0.5) * 3;   // consumed even under reduced motion — settings must not shift the RNG stream
+                  if (api.reduceMotion) continue;
                   ctx.beginPath(); ctx.moveTo(ox, oy);
-                  ctx.lineTo(ox + Math.cos(ar) * rr * 1.7 + (rnd() - 0.5) * 3, oy + Math.sin(ar) * rr * 1.7 + (rnd() - 0.5) * 3);
+                  ctx.lineTo(ox + Math.cos(ar) * rr * 1.7 + jx, oy + Math.sin(ar) * rr * 1.7 + jy);
                   ctx.stroke();
                 }
               }
@@ -1342,12 +1355,14 @@
               ctx.strokeStyle = '#cfcabf'; ctx.lineWidth = 2;                           // bony fingers
               ctx.beginPath(); ctx.moveTo(h1.x - dir * 3, h1.y); ctx.lineTo(h1.x, h1.y); ctx.stroke();
               ctx.beginPath(); ctx.moveTo(h2.x - dir * 3, h2.y); ctx.lineTo(h2.x, h2.y); ctx.stroke();
-              if (!api.reduceMotion) {            // small idle sparks crawling between the fingertips
+              {                                   // small idle sparks crawling between the fingertips
                 ctx.strokeStyle = 'rgba(200,175,255,0.7)'; ctx.lineWidth = 1; ctx.lineCap = 'round';
                 for (const h of [h1, h2]) {
                   const a = frame * 0.4 + h.y;
+                  const jx = (rnd() - 0.5) * 2, jy = (rnd() - 0.5) * 2;  // consumed even under reduced motion
+                  if (api.reduceMotion) continue;
                   ctx.beginPath(); ctx.moveTo(h.x, h.y);
-                  ctx.lineTo(h.x + Math.cos(a) * 5 + (rnd() - 0.5) * 2, h.y + Math.sin(a) * 5 + (rnd() - 0.5) * 2);
+                  ctx.lineTo(h.x + Math.cos(a) * 5 + jx, h.y + Math.sin(a) * 5 + jy);
                   ctx.stroke();
                 }
               }
@@ -1563,9 +1578,10 @@
                 ctx.restore();
               }
               // sparks flying off
-              if (!api.reduceMotion && frame % 4 === 0) {
+              if (frame % 4 === 0) {
                 const t = targets[Math.floor(rnd() * targets.length)];
-                sparks.push({ x: t.x + (rnd() - 0.5) * 14, y: t.y + (rnd() - 0.5) * 14, t: 8, color: '#d8c4ff', txt: '✦' });
+                const ox = (rnd() - 0.5) * 14, oy = (rnd() - 0.5) * 14;  // consumed even under reduced motion
+                if (!api.reduceMotion) sparks.push({ x: t.x + ox, y: t.y + oy, t: 8, color: '#d8c4ff', txt: '✦' });
               }
             }
           }
@@ -1602,7 +1618,8 @@
           function drawTheWorld(dir, alpha, mode) {
             const gold = '#e8c24a', lit = '#f6dd86', dk = '#6b5a1f', grn = '#5f9c52', pink = '#e84d8a';
             const muda = mode === 'muda';
-            const jt = api.reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
+            const jr = rnd();   // consumed even under reduced motion — settings must not shift the RNG stream
+            const jt = api.reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : jr;
             const sway = Math.sin(frame * 0.09) * 1.2;
             ctx.save(); ctx.globalAlpha = 0.82 * alpha; ctx.scale(dir, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -1624,9 +1641,9 @@
             const reach = muda ? 8 + jt * 9 : 2;
             _standArm(-13, -44, -20 - reach, -29, gold, dk);
             _standArm(13, -44, 20 + reach, -29, gold, dk);
-            if (muda && !api.reduceMotion) {
+            if (muda) {
               ctx.globalAlpha = 0.28 * alpha; ctx.fillStyle = lit;
-              for (let i = 0; i < 3; i++) { const r = rnd() * 15; ctx.beginPath(); ctx.arc(19 + r, -31 + (rnd() * 6 - 3), 2.6, 0, Math.PI * 2); ctx.fill(); }
+              for (let i = 0; i < 3; i++) { const r = rnd() * 15, oy = rnd() * 6 - 3; if (api.reduceMotion) continue; ctx.beginPath(); ctx.arc(19 + r, -31 + oy, 2.6, 0, Math.PI * 2); ctx.fill(); }
               ctx.globalAlpha = 0.82 * alpha;
             }
 
@@ -1651,7 +1668,8 @@
           // Star Platinum — Jotaro's violet Stand, looming over his shoulder during the DIO fight
           function drawStarPlatinum(dir, alpha, punching) {
             const pur = '#7d6fd6', lit = '#a99cf0', dk = '#352a63', cy = '#86f0e0', gold = '#e8c24a', skin = '#caa6ff';
-            const jt = api.reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : rnd();
+            const jr = rnd();   // consumed even under reduced motion — settings must not shift the RNG stream
+            const jt = api.reduceMotion ? 0.5 + 0.5 * Math.sin(frame * 0.4) : jr;
             const sway = Math.sin(frame * 0.08) * 1.6;
             ctx.save(); ctx.globalAlpha = 0.78 * alpha; ctx.scale(dir, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -1678,9 +1696,9 @@
             const reach = punching ? 9 + jt * 10 : 2;
             _standArm(-14, -44, -21 - reach, -30, pur, dk);
             _standArm(14, -44, 21 + reach, -30, pur, dk);
-            if (punching && !api.reduceMotion) {
+            if (punching) {
               ctx.globalAlpha = 0.28 * alpha; ctx.fillStyle = lit;
-              for (let i = 0; i < 3; i++) { const r = rnd() * 17; ctx.beginPath(); ctx.arc(20 + r, -31 + (rnd() * 6 - 3), 2.8, 0, Math.PI * 2); ctx.fill(); }
+              for (let i = 0; i < 3; i++) { const r = rnd() * 17, oy = rnd() * 6 - 3; if (api.reduceMotion) continue; ctx.beginPath(); ctx.arc(20 + r, -31 + oy, 2.8, 0, Math.PI * 2); ctx.fill(); }
               ctx.globalAlpha = 0.78 * alpha;
             }
 
@@ -1714,7 +1732,8 @@
               // dissolve from the feet up: clip away the lower (cr) of the body, fade the rest, jitter as ash
               ctx.globalAlpha = 1 - cr * 0.55;
               ctx.beginPath(); ctx.rect(-46, -60, 92, 63 * (1 - cr)); ctx.clip();
-              if (!api.reduceMotion) ctx.translate((rnd() - 0.5) * cr * 3, (rnd() - 0.5) * cr * 2);
+              const ashX = (rnd() - 0.5) * cr * 3, ashY = (rnd() - 0.5) * cr * 2;  // consumed even under reduced motion
+              if (!api.reduceMotion) ctx.translate(ashX, ashY);
             }
             if ((e.stand || 0) > 0.05) {   // The World rises above and behind DIO's shoulder
               ctx.save(); ctx.translate(-dir * 12, -24); ctx.scale(1.4, 1.4);
@@ -2755,8 +2774,9 @@
               if (f.t >= 96) { f.phase = 'crumble'; f.t = 0; banner = 'WRYYYYYYY!'; bannerSub = ''; bannerT = 200; sfSfx.die(); shake = 22; }
             } else {                                              // he crumbles to dust from the feet up
               if (e) e.crumble = clamp(f.t / 120, 0, 1);
-              if (!api.reduceMotion && f.t % 2 === 0 && e) {
-                sparks.push({ x: e.x + (rnd() - 0.5) * 26, y: e.y - 6 - (e.crumble || 0) * 42 + (rnd() - 0.5) * 10, t: 22 + rnd() * 24, color: rnd() < 0.5 ? '#d8c9a4' : '#caa6ff', txt: '·' });
+              if (f.t % 2 === 0 && e) {
+                const ox = (rnd() - 0.5) * 26, oy = (rnd() - 0.5) * 10, tt = 22 + rnd() * 24, pale = rnd() < 0.5;  // consumed even under reduced motion
+                if (!api.reduceMotion) sparks.push({ x: e.x + ox, y: e.y - 6 - (e.crumble || 0) * 42 + oy, t: tt, color: pale ? '#d8c9a4' : '#caa6ff', txt: '·' });
               }
               if (f.t >= 132) { finishDioFinale(); return; }
             }
@@ -2826,7 +2846,7 @@
                 if (f.t >= 30) { f.phase = 'fall'; f.t = 0; if (e) { e.mode = 'dying'; e.crumble = 0; } sfSfx.die(); shake = 14; }
               } else {                                       // he fades to ash
                 if (e) e.crumble = clamp(f.t / 90, 0, 1);
-                if (!api.reduceMotion && f.t % 3 === 0 && e) sparks.push({ x: e.x + (rnd() - 0.5) * 22, y: e.y - 18 - (e.crumble || 0) * 28, t: 26, color: '#9e9e9e', txt: '·' });
+                if (f.t % 3 === 0 && e) { const ox = (rnd() - 0.5) * 22; if (!api.reduceMotion) sparks.push({ x: e.x + ox, y: e.y - 18 - (e.crumble || 0) * 28, t: 26, color: '#9e9e9e', txt: '·' }); }
                 if (f.t >= 116) { finishIanKill(); return; }
               }
             } else {
@@ -2943,7 +2963,7 @@
               if (e.x < 22 || e.x > GW - 22) { e.wang = Math.PI - e.wang; e.x = clamp(e.x, 22, GW - 22); }  // turn at the walls
               if (e.y < 42 || e.y > GH - 14) { e.wang = -e.wang; e.y = clamp(e.y, 42, GH - 14); }
               e.phase += 0.05 + (e.wsp || 0) * 0.12;
-              if (!api.reduceMotion && rnd() < 0.005) sparks.push({ x: e.x - 4 + rnd() * 8, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' });
+              if (rnd() < 0.005) { const ox = rnd() * 8; if (!api.reduceMotion) sparks.push({ x: e.x - 4 + ox, y: e.y - 28, t: 32, color: '#8fd8ff', txt: '·' }); }
               return;
             }
             const tgt = hordeTarget(e);   // P1 for bosses/set-pieces; nearest standing hero for the open-field horde
@@ -3542,12 +3562,25 @@
           }
 
           /* ── main loop ── */
-          // rAF driver: advance the simulation SF_SPEED steps per frame (renders the last one)
-          function frameStep() {
+          // rAF driver on a FIXED TIMESTEP: the sim advances SIM_HZ × SF_SPEED ticks per
+          // second of wall-clock time, independent of the display's refresh rate — a 120 Hz
+          // monitor renders more often but simulates no faster (before this, sim speed
+          // scaled with refresh rate). loop() is one sim tick + a render, fused — catch-up
+          // ticks simply redraw, and (important for determinism) any rnd() consumed in
+          // render code still runs exactly once per tick. The accumulator is capped so a
+          // backgrounded tab doesn't fast-forward the horde on return, and a hard per-frame
+          // step cap drops the remainder rather than spiraling.
+          let lastFrameTs = null;
+          function frameStep(ts) {
             rafId = requestAnimationFrame(frameStep);
-            simAcc += SF_SPEED;
-            const steps = Math.floor(simAcc);
+            const now = (typeof ts === 'number') ? ts : performance.now();
+            if (lastFrameTs === null) lastFrameTs = now;
+            const dt = Math.max(0, Math.min(0.25, (now - lastFrameTs) / 1000));
+            lastFrameTs = now;
+            simAcc += dt * SIM_HZ * SF_SPEED;
+            let steps = Math.floor(simAcc);
             simAcc -= steps;
+            if (steps > 5) steps = 5;   // hard cap — drop the excess, never spiral
             for (let i = 0; i < steps; i++) loop();
           }
 
@@ -3655,6 +3688,19 @@
 
             frame++;
 
+            /* per-tick input: queued edge-triggered presses enter the sim only here, on the
+               tick boundary (see resetPend) — with the held-key reads just below, this is the
+               sim's complete input surface for this tick (the replay/lockstep capture point) */
+            if (pend.dashP1) { pend.dashP1 = false; tryDash(player); }
+            if (pend.atkP1)  { pend.atkP1 = false;  tryAttack(player); }
+            if (coop && p2) {
+              if (pend.dashP2) { pend.dashP2 = false; tryDash(p2); }
+              if (pend.atkP2)  { pend.atkP2 = false;  tryAttack(p2); }
+            } else { pend.dashP2 = false; pend.atkP2 = false; }
+            if (pend.summon) { const sk = pend.summon; pend.summon = null; trySummon(sk); }
+            if (pend.prompt) { pend.prompt = false; championPrompt(); }
+            if (player.choke <= 0) pend.mash = 0;   // mashes only mean anything mid-choke
+
             /* input → acceleration + friction (P1) */
             let ix = 0, iy = 0;
             // P1 always reads the arrow keys; in single-player WASD also drives P1 (the classic
@@ -3668,8 +3714,10 @@
             if (sidFinale || dioFinale || ianActive) { ix = 0; iy = 0; } // input locked — watch the cutscene
             if (dioStopT > 0) { ix = 0; iy = 0; }           // time stopped — you cannot move
             if (player.down) { ix = 0; iy = 0; }            // a fallen hero lies still until revived
-            // Force choke: held aloft, input locked — break free by struggling (handled in onKey)
+            // Force choke: held aloft, input locked — break free by struggling (mashes queue in
+            // onKey and are applied here, on the tick)
             if (player.choke > 0) {
+              if (pend.mash > 0) { player.chokeBreak += pend.mash; player.swingT = 6; sfSfx.saberHit(); pend.mash = 0; }
               ix = 0; iy = 0; player.choke--;
               if (player.chokeBreak >= 3) {                 // struggled free
                 player.choke = 0; player.stunT = 0;
@@ -3888,16 +3936,20 @@
               if (b.kind === 'fire' || b.kind === 'frost') {
                 const grow = b.rMax || (b.kind === 'fire' ? FIRE_R : FROST_R);  // caster spells are tighter than the powerups
                 b.r = grow * Math.min(1, b.t / (b.kind === 'fire' ? 12 : 9));
-                if (!api.reduceMotion && b.t % 2 === 0) {
-                  const ang = rnd() * Math.PI * 2, rr = b.r * (0.7 + rnd() * 0.35);
-                  if (b.kind === 'fire')
-                    sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 16, color: rnd() < 0.5 ? '#ffb74d' : '#ff7043', txt: '✦' });
-                  else
-                    sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 18, color: '#b3e5fc', txt: '❄' });
+                if (b.t % 2 === 0) {
+                  // rolls consumed even under reduced motion — settings must not shift the RNG stream
+                  const ang = rnd() * Math.PI * 2, rr = b.r * (0.7 + rnd() * 0.35), hot = rnd() < 0.5;
+                  if (!api.reduceMotion) {
+                    if (b.kind === 'fire')
+                      sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 16, color: hot ? '#ffb74d' : '#ff7043', txt: '✦' });
+                    else
+                      sparks.push({ x: b.x + Math.cos(ang) * rr, y: b.y + Math.sin(ang) * rr, t: 18, color: '#b3e5fc', txt: '❄' });
+                  }
                 }
-              } else if (b.kind === 'chain' && !api.reduceMotion && b.t % 2 === 0 && b.pts.length > 1) {
+              } else if (b.kind === 'chain' && b.t % 2 === 0 && b.pts.length > 1) {
                 const seg = b.pts[Math.floor(rnd() * (b.pts.length - 1)) + 1];
-                sparks.push({ x: seg.x + (rnd() * 16 - 8), y: seg.y + (rnd() * 16 - 8), t: 12, color: '#cff3ff', txt: '·' });
+                const ox = rnd() * 16 - 8, oy = rnd() * 16 - 8;
+                if (!api.reduceMotion) sparks.push({ x: seg.x + ox, y: seg.y + oy, t: 12, color: '#cff3ff', txt: '·' });
               }
               if (b.t >= b.life) blasts.splice(i, 1);
             }
@@ -4230,7 +4282,7 @@
             /* ── render ── */
             ctx.clearRect(0, 0, GW, GH);
             ctx.save();
-            if (shake > 0) { shake--; if (!api.reduceMotion) ctx.translate((rnd() - 0.5) * shake, (rnd() - 0.5) * shake); }
+            if (shake > 0) { shake--; const sx = (rnd() - 0.5) * shake, sy = (rnd() - 0.5) * shake; if (!api.reduceMotion) ctx.translate(sx, sy); }
 
             if (swActive) {
               // the corridor: black void + a fixed starfield
@@ -4355,7 +4407,7 @@
               ctx.save(); ctx.textAlign = 'left'; ctx.lineJoin = 'round';
               for (const m of jojoBg) {
                 if (!api.reduceMotion) m.y += m.vy;
-                if (m.y < -34) { m.y = GH + 24; m.x = rnd() * GW; }
+                if (m.y < -34) { m.y = GH + 24; m.x = (m.x * 1.7 + 61) % GW; }  // rnd-free recycle — this branch only runs when motion is on
                 ctx.globalAlpha = Math.min(0.32, m.a * 2.4);
                 ctx.font = '900 ' + m.s.toFixed(0) + 'px serif';
                 ctx.lineWidth = 2.4; ctx.strokeStyle = 'rgba(18,7,28,0.95)'; ctx.fillStyle = '#d6bcff';
@@ -4378,7 +4430,7 @@
                   ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); ctx.fill();
                 } else {
                   if (!api.reduceMotion) { m.y += m.vy; m.x += Math.sin((frame + m.ph) * 0.02) * 0.2; }
-                  if (m.y < -20) { m.y = GH + 16; m.x = rnd() * GW; }
+                  if (m.y < -20) { m.y = GH + 16; m.x = (m.x * 1.7 + 53) % GW; }  // rnd-free recycle — this branch only runs when motion is on
                   ctx.globalAlpha = m.a; ctx.fillStyle = m.col;
                   ctx.font = m.s.toFixed(0) + 'px Tahoma,Arial'; ctx.textAlign = 'center';
                   ctx.fillText(m.ch, m.x, m.y);
@@ -5328,30 +5380,31 @@
               e.preventDefault();
               return;
             }
-            // Force choke: the only escape is to struggle — mash attack/dash; nothing else responds
+            // Force choke: the only escape is to struggle — mash attack/dash; nothing else responds.
+            // Mashes queue like every other combat input and land on the next tick.
             if (player.choke > 0) {
-              if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) {
-                player.chokeBreak++; player.swingT = 6; sfSfx.saberHit();
-              }
+              if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) pend.mash++;
               if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
               return;
             }
             // combat keys. Solo: Space/Shift dash, X/F swing (unchanged). Co-op splits them by
             // hand — P1 = Right-Shift dash + '/' swing, P2 = Left-Shift dash + F swing (the two
             // Shifts are told apart by e.code). Summons/champion-prompt are shared either way.
+            // All of these QUEUE into `pend` and apply at the next sim tick (per-tick input
+            // capture) — never mutate the sim from inside the event handler.
             if (!coop) {
-              if (e.key === ' ' || e.key === 'Shift') tryDash(player);
-              if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') tryAttack(player);
+              if (e.key === ' ' || e.key === 'Shift') pend.dashP1 = true;
+              if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') pend.atkP1 = true;
             } else {
-              if (e.code === 'ShiftRight') tryDash(player);
-              if (e.code === 'Slash') tryAttack(player);
-              if (e.code === 'ShiftLeft') tryDash(p2);
-              if (e.key === 'f' || e.key === 'F') tryAttack(p2);
+              if (e.code === 'ShiftRight') pend.dashP1 = true;
+              if (e.code === 'Slash') pend.atkP1 = true;
+              if (e.code === 'ShiftLeft') pend.dashP2 = true;
+              if (e.key === 'f' || e.key === 'F') pend.atkP2 = true;
             }
-            if (e.key === 'g' || e.key === 'G') championPrompt();
-            if (e.key === '1') trySummon('gandalf');
-            if (e.key === '2') trySummon('luke');
-            if (e.key === '3') trySummon('jotaro');
+            if (e.key === 'g' || e.key === 'G') pend.prompt = true;
+            if (e.key === '1') pend.summon = 'gandalf';
+            if (e.key === '2') pend.summon = 'luke';
+            if (e.key === '3') pend.summon = 'jotaro';
             if ((e.key === 'r' || e.key === 'R') && !alive) {
               init();
               started = true; banner = coop ? 'CO-OP · WAVE 1' : 'WAVE 1'; bannerT = 90; startSfMusic();
