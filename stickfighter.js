@@ -138,6 +138,22 @@
           let coop = false, coopSel = 0, p2 = null;
           const P2_COL    = '#8fe388';   // P2's stick figure — a soft green, distinct from white P1 and enemy red
           const REVIVE_T  = 150;         // frames a partner must stand by a downed hero to revive them (~2.5s)
+          // ── hero classes (chosen on the intro screen; persist across R-restarts & visits) ──
+          //   melee  = the classic kit, unchanged (sword in the stone / lightsaber pickups)
+          //   ranged = the bow is always strung — the attack key looses arrows at the nearest foe
+          //   caster = the attack key hurls arcing lightning; SORCERY adds auto-cast nova & fireball
+          //   Each hero picks independently in co-op; each class has its own upgrade tree.
+          const CLASSES   = ['melee', 'ranged', 'caster'];
+          const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨' };
+          const ARROW_SPD = 7.4;   // player arrows fly this fast (px/tick)
+          const ZAP_R     = 170;   // caster bolt reaches this far — deliberately short; position matters
+          const ZAP_HOP   = 180;   // each chain jump reaches this far
+          const CAST_T    = 14;    // ticks the caster's bolt charges before it fires (the wind-up)
+          const NOVA_R    = 130;   // caster auto frost nova (smaller than the powerup's FROST_R)
+          const FIREB_R   = 120;   // caster auto fireball (smaller than the powerup's FIRE_R)
+          let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, 2);
+          let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, 2);
+          let introRow = 0;   // intro chooser: 0 = mode row, 1 = P1 class, 2 = P2 class (2P only)
 
           function init() {
             // Seed the run. sfSeedOverride lets a future MP handshake pin a shared seed;
@@ -150,7 +166,8 @@
             tick = 0;
             player = { x: GW / 2, y: GH / 2, vx: 0, vy: 0, phase: 0,
                        fx: 1, fy: 0, dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0, shield: false,
-                       swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0 };
+                       swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
+                       cls: CLASSES[classSel], novaCd: 0, fireCd: 0, castT: 0 };
             p2 = null;
             enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
             bolts = []; arrows = [];
@@ -176,7 +193,9 @@
             lbScores = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
             up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
                    champs: { gandalf: false, luke: false, jotaro: false },
-                   champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false };
+                   champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false,
+                   shotMs: 500, shotDmg: 1, shotCount: 1, shotPierce: 0,          // BOW (ranged)
+                   zapMs: 800, zapJumps: 1, nova: false, fire: false, spellCd: 1 }; // SORCERY (caster)
             paused = false; upMenu = null;
             tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
             applySavedUpgrades();              // unlocked upgrades are permanent — re-apply across runs
@@ -193,11 +212,12 @@
             p2 = { x: GW / 2 + 48, y: GH / 2, vx: 0, vy: 0, phase: 0, fx: -1, fy: 0,
                    dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
                    shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
-                   swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0 };
+                   swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
+                   cls: CLASSES[classSel2], novaCd: 0, fireCd: 0, castT: 0 };
           }
           // each hero arms independently — the blade (Excalibur / lightsaber) lives on the hero,
           // not the run. helpers for the scripted interlude transitions that arm/disarm everyone.
-          function armSaberAll(v) { for (const h of heroesAll()) h.heldSaber = v; }
+          function armSaberAll(v) { for (const h of heroesAll()) if (h.cls === 'melee') h.heldSaber = v; }  // blades are the melee kit; ranged/caster keep their own weapons
           function clearBlades() { for (const h of heroesAll()) { h.swordT = 0; h.swingT = 0; h.heldSaber = false; } }
           // the active heroes; in single-player this is just [player], so co-op code stays a no-op
           function heroesAll()  { return (coop && p2) ? [player, p2] : [player]; }
@@ -253,9 +273,11 @@
           }
           // cheat: unlock the entire upgrade tree at once (definition order so dependent values settle)
           function grantAllUpgrades() {
-            for (const u of UPGRADES) { if (!up.owned.has(u.id)) { up.owned.add(u.id); u.apply(); } }
+            // only the trees the party can use — other classes' nodes stay locked (and unsaved)
+            const present = new Set(heroesAll().map(h => h.cls));
+            for (const u of UPGRADES) { if ((!u.cls || present.has(u.cls)) && !up.owned.has(u.id)) { up.owned.add(u.id); u.apply(); } }
             saveUpgrades();
-            banner = 'ALL UPGRADES UNLOCKED'; bannerSub = 'the full tree — dash · allies · blade'; bannerT = 150;
+            banner = 'ALL UPGRADES UNLOCKED'; bannerSub = 'every tree your party can use'; bannerT = 150;
             if (typeof sfSfx !== 'undefined' && sfSfx.summon) sfSfx.summon();
           }
           /* a token is earned only the FIRST time a given level is beaten (highest cleared
@@ -286,16 +308,29 @@
             { id: 'champ_fast',  tree: 'ALLIES', name: 'Quick Summon',    desc: 'meter charges 50% faster',           icon: '⏩', req: 'gandalf',    apply: () => { up.meterMul = 1.5; } },
             { id: 'champ_cost',  tree: 'ALLIES', name: 'Cheap Summon',    desc: 'allies cost less meter to call',     icon: '🪙', req: 'gandalf',    apply: () => { up.summonCost = Math.round(METER_MAX * 0.7); } },
             { id: 'champ_master',tree: 'ALLIES', name: 'The Fellowship',  desc: 'allies linger · charge fast · cheap', icon: '💍', req: 'champ_long2', cost: 3, apply: () => { up.champMul = 4; up.meterMul = 2.2; up.summonCost = Math.round(METER_MAX * 0.5); } },
-            { id: 'swing_fast',  tree: 'BLADE',  name: 'Swift Blade',     desc: 'swing more often',                   icon: '🗡️', req: null,         apply: () => { up.swingMs = 440; } },
-            { id: 'swing_fast2', tree: 'BLADE',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = 300; } },
-            { id: 'swing_wide',  tree: 'BLADE',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = 150; } },
-            { id: 'swing_wide2', tree: 'BLADE',  name: 'Great Cleave',    desc: 'even wider reach',                   icon: '⭕', req: 'swing_wide', apply: () => { up.swingR = 195; } },
-            { id: 'swing_master',tree: 'BLADE',  name: 'Andúril',         desc: 'huge reach · blistering swing speed', icon: '🔥', req: 'swing_wide2', cost: 2, apply: () => { up.swingR = 250; up.swingMs = 210; } },
+            { id: 'swing_fast',  tree: 'BLADE',  cls: 'melee',  name: 'Swift Blade',     desc: 'swing more often',                   icon: '🗡️', req: null,         apply: () => { up.swingMs = 440; } },
+            { id: 'swing_fast2', tree: 'BLADE',  cls: 'melee',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = 300; } },
+            { id: 'swing_wide',  tree: 'BLADE',  cls: 'melee',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = 150; } },
+            { id: 'swing_wide2', tree: 'BLADE',  cls: 'melee',  name: 'Great Cleave',    desc: 'even wider reach',                   icon: '⭕', req: 'swing_wide', apply: () => { up.swingR = 195; } },
+            { id: 'swing_master',tree: 'BLADE',  cls: 'melee',  name: 'Andúril',         desc: 'huge reach · blistering swing speed', icon: '🔥', req: 'swing_wide2', cost: 2, apply: () => { up.swingR = 250; up.swingMs = 210; } },
+            { id: 'bow_fast',    tree: 'BOW',    cls: 'ranged', name: 'Rapid Shot',      desc: 'loose arrows more often',            icon: '🏹', req: null,         apply: () => { up.shotMs = Math.min(up.shotMs, 360); } },
+            { id: 'bow_fast2',   tree: 'BOW',    cls: 'ranged', name: 'Arrow Storm',     desc: 'a blistering rate of fire',          icon: '🌪️', req: 'bow_fast',   apply: () => { up.shotMs = Math.min(up.shotMs, 280); } },
+            { id: 'bow_dmg',     tree: 'BOW',    cls: 'ranged', name: 'Power Shot',      desc: 'arrows strike twice as hard',        icon: '💪', req: null,         apply: () => { up.shotDmg = 2; } },
+            { id: 'bow_multi',   tree: 'BOW',    cls: 'ranged', name: 'Split Shot',      desc: 'loose two arrows in a fan',          icon: '🔱', req: 'bow_dmg',    apply: () => { up.shotCount = Math.max(up.shotCount, 2); } },
+            { id: 'bow_master',  tree: 'BOW',    cls: 'ranged', name: 'Legolas',         desc: 'three piercing arrows · rapid fire', icon: '🧝', req: 'bow_multi',  cost: 2, apply: () => { up.shotCount = 3; up.shotPierce = 2; up.shotMs = Math.min(up.shotMs, 250); } },
+            { id: 'zap_fast',    tree: 'SORCERY', cls: 'caster', name: 'Quick Cast',     desc: 'bolts come faster',                  icon: '⚡', req: null,         apply: () => { up.zapMs = Math.min(up.zapMs, 560); } },
+            { id: 'zap_chain',   tree: 'SORCERY', cls: 'caster', name: 'Chain Arc',      desc: 'bolts leap to a second foe',         icon: '🔗', req: null,         apply: () => { up.zapJumps = Math.max(up.zapJumps, 2); } },
+            { id: 'zap_chain2',  tree: 'SORCERY', cls: 'caster', name: 'Storm Arc',      desc: 'bolts leap to three foes',           icon: '🌩️', req: 'zap_chain',  apply: () => { up.zapJumps = Math.max(up.zapJumps, 3); } },
+            { id: 'nova',        tree: 'SORCERY', cls: 'caster', name: 'Frost Nova',     desc: 'auto: an ice ring when foes close in', icon: '❄️', req: null,       apply: () => { up.nova = true; } },
+            { id: 'fireball',    tree: 'SORCERY', cls: 'caster', name: 'Fireball',       desc: 'auto: erupt when the mob presses',   icon: '☄️', req: 'nova',       apply: () => { up.fire = true; } },
+            { id: 'zap_master',  tree: 'SORCERY', cls: 'caster', name: 'Archmage',       desc: 'five-fold arcs · spells recover fast', icon: '🧙‍♂️', req: 'zap_chain2', cost: 2, apply: () => { up.zapJumps = 5; up.zapMs = Math.min(up.zapMs, 420); up.spellCd = 0.6; } },
           ];
           const upCost = (u) => u.cost || 1;   // most nodes cost 1 token; capstones cost more
-          const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d' };
+          const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8' };
           function availableUpgrades() {
-            return UPGRADES.filter(u => !up.owned.has(u.id) && (!u.req || up.owned.has(u.req)));
+            // class trees only show for classes actually in the party (DASH/ALLIES have no cls and always show)
+            const present = new Set(heroesAll().map(h => h.cls));
+            return UPGRADES.filter(u => (!u.cls || present.has(u.cls)) && !up.owned.has(u.id) && (!u.req || up.owned.has(u.req)));
           }
           // open the shop if there's actually something to spend on; returns whether it opened
           function openUpgradeMenu(title) {
@@ -1968,6 +2003,93 @@
             ctx.restore();
           }
 
+          // the ranged hero's bow: a curved stave + string held out in the facing direction,
+          // with the string drawn back and an arrow nocked in the beat after a shot
+          function drawHeldBow(h) {
+            // the bow points along the held direction (the facing) — where the next arrow flies
+            const fl = Math.hypot(h.fx, h.fy) || 1;
+            const ux = h.fx / fl, uy = h.fy / fl, px = -uy, py = ux;
+            const handX = h.x + ux * 12, handY = h.y - 14 + uy * 5;
+            const drawn = h.swingT > 0 ? (h.swingT / 8) : 0;   // 1 = just loosed
+            ctx.save();
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;      // the bow arm
+            ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
+            ctx.strokeStyle = '#a5d6a7'; ctx.lineWidth = 3;     // the stave
+            ctx.beginPath();
+            ctx.moveTo(handX + px * 13, handY + py * 13);
+            ctx.quadraticCurveTo(handX + ux * 9, handY + uy * 9, handX - px * 13, handY - py * 13);
+            ctx.stroke();
+            const pull = 3 + drawn * 6;                         // the string (pulled back right after firing)
+            ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(handX + px * 13, handY + py * 13);
+            ctx.lineTo(handX - ux * pull, handY - uy * pull);
+            ctx.lineTo(handX - px * 13, handY - py * 13);
+            ctx.stroke();
+            if (drawn > 0.3) {                                  // the nocked arrow flashes as it looses
+              ctx.strokeStyle = '#f5f5dc'; ctx.lineWidth = 2;
+              ctx.beginPath(); ctx.moveTo(handX - ux * pull, handY - uy * pull); ctx.lineTo(handX + ux * 12, handY + uy * 12); ctx.stroke();
+            }
+            ctx.fillStyle = '#f2f2f2';
+            ctx.beginPath(); ctx.arc(handX, handY, 2.6, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+          // the caster's staff: held upright with a glowing violet orb — it swells through
+          // the incantation (h.castT counting down) and flares as the bolt looses
+          function drawHeldStaff(h) {
+            const fl = Math.hypot(h.fx, h.fy) || 1;
+            const ux = h.fx / fl;
+            const side = ux >= 0 ? 1 : -1;
+            const gx = h.x + side * 10, gy = h.y - 13;
+            const charge = h.castT > 0 ? 1 - h.castT / CAST_T : 0;
+            const flare = (h.swingT > 0 ? h.swingT / 10 : 0) + charge;
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;      // the staff arm
+            ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(gx, gy); ctx.stroke();
+            ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 3;     // the staff itself
+            ctx.beginPath(); ctx.moveTo(gx + side * 2, gy + 12); ctx.lineTo(gx + side * 5, gy - 24); ctx.stroke();
+            const pulse = api.reduceMotion ? 0.5 : 0.4 + 0.25 * Math.sin(frame * 0.15);
+            ctx.fillStyle = '#e1bee7';
+            ctx.shadowColor = '#ce93d8'; ctx.shadowBlur = 10 + flare * 14;
+            ctx.globalAlpha = Math.min(1, pulse + 0.35 + flare * 0.6);
+            ctx.beginPath(); ctx.arc(gx + side * 5.5, gy - 27, 3.4 + flare * 2.2, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+            ctx.fillStyle = '#f2f2f2';
+            ctx.beginPath(); ctx.arc(gx, gy, 2.6, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+
+          // the intro's living mannequin: the hero as currently built — weapon in hand, gently
+          // scanning — over a class-colored spotlight. `hot` marks the row being edited.
+          function drawClassPreview(x, y, cls, color, hot, label) {
+            const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8' }[cls];
+            ctx.save();
+            // light pool under the feet
+            ctx.globalAlpha = hot ? 0.5 : 0.26;
+            const pool = ctx.createRadialGradient(x, y + 4, 4, x, y + 4, 46);
+            pool.addColorStop(0, cc); pool.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = pool;
+            ctx.beginPath(); ctx.ellipse(x, y + 4, 46, 12, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+            // the hero at 1.3× — a fake hero object drives the same weapon draws the game uses,
+            // its facing swaying slowly so the weapon reads as alive, not a museum piece
+            ctx.translate(x, y); ctx.scale(1.3, 1.3); ctx.translate(-x, -y);
+            stickFigure(x, y, frame * 0.05, color, 1, 1, 0, hot ? cc : 0);
+            const fake = { x, y, fx: 1, fy: Math.sin(frame * 0.02) * 0.22, swingT: 0, castT: 0,
+                           swordT: 1e9, heldSaber: false, cls };
+            if (cls === 'ranged') drawHeldBow(fake);
+            else if (cls === 'caster') drawHeldStaff(fake);
+            else drawHeldSword(fake);
+            ctx.restore();
+            ctx.save();
+            ctx.textAlign = 'center'; ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
+            ctx.font = (hot ? 'bold ' : '') + '13px Tahoma,Arial'; ctx.fillStyle = hot ? cc : '#9aa3a8';
+            ctx.fillText((label ? label + ' · ' : '') + CLASS_ICON[cls] + ' ' + cls.toUpperCase(), x, y + 32);
+            ctx.restore(); ctx.textAlign = 'left';
+          }
+
           // draw one hero (figure + Aegis bubble + held blade). baseColor distinguishes P1
           // (white) from P2 (green). A downed hero is drawn fallen with a revive ring instead.
           function drawHero(h, baseColor) {
@@ -1989,7 +2111,9 @@
               ctx.closePath(); ctx.stroke();
               ctx.shadowBlur = 0; ctx.restore();
             }
-            if (h.swordT > 0 || h.heldSaber) drawHeldSword(h);
+            if (h.cls === 'ranged') drawHeldBow(h);
+            else if (h.cls === 'caster') drawHeldStaff(h);
+            else if (h.swordT > 0 || h.heldSaber) drawHeldSword(h);
           }
           // a fallen co-op hero: a prone figure with a revive ring that fills as a partner stands by
           function drawDownedHero(h) {
@@ -3388,29 +3512,71 @@
           function loop() {
             tick++;                          // the deterministic sim clock — advances once per logical tick
 
-            /* intro screen — also the 1P / 2P chooser (see the onKey intro handler) */
+            /* intro screen — character creation: live hero preview(s) + the 1P/2P and class
+               rows (see the onKey intro handler for the row navigation) */
             if (!started) {
               ctx.clearRect(0, 0, GW, GH);
-              stickFigure(player.x, player.y, frame * 0.06, 'white');
-              if (coopSel === 1) stickFigure(player.x + 46, player.y, frame * 0.06, P2_COL);   // a green partner joins the preview
-              const modeRow = coopSel === 0
-                ? ['▶ 1 PLAYER ◀      2 player', 'bold 18px Tahoma,Arial', '#ffd24d']
-                : ['1 player      ▶ 2 PLAYER ◀', 'bold 18px Tahoma,Arial', P2_COL];
-              const controlRows = coopSel === 0
-                ? [['move: WASD / arrows   ·   dash: Space / Shift   ·   swing: X / F', '13px Tahoma,Arial', '#ccc']]
-                : [['Player 1 (white):  arrows move  ·  Right-Shift dash  ·  /  swing', '13px Tahoma,Arial', '#fff'],
-                   ['Player 2 (green):  WASD move  ·  Left-Shift dash  ·  F  swing', '13px Tahoma,Arial', P2_COL],
-                   ['allies & upgrades are shared — revive a downed partner by standing close', '12px Tahoma,Arial', '#9fb0c0']];
-              panel([
-                ['STICK FIGHTER 2000', 'bold 36px Tahoma,Arial', 'white'],
-                ['⚔  the horde approaches.  RUN.  (and fight)  ⚔', '15px Tahoma,Arial', '#ffd24d'],
-                modeRow,
-                ['◀ ▶ choose  (or 1 / 2)', '12px Tahoma,Arial', '#9fb0c0'],
-                ...controlRows,
-                ['run over the stone to seize the sword  ·  clear waves to earn upgrade tokens', '12px Tahoma,Arial', '#ccc'],
-                ['coins raise your multiplier  ·  graze foes for bonus', '12px Tahoma,Arial', '#ccc'],
-                ['▶  Z / Enter to begin  ◀', '14px Tahoma,Arial', 'white'],
-              ]);
+              ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, GW, GH);
+              ctx.save();
+              ctx.textAlign = 'center';
+              ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
+              ctx.font = 'bold 36px Tahoma,Arial'; ctx.fillStyle = 'white';
+              ctx.fillText('STICK FIGHTER 2000', GW / 2, 58);
+              ctx.font = '15px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
+              ctx.fillText('⚔  the horde approaches.  RUN.  (and fight)  ⚔', GW / 2, 86);
+              // one line per chooser row: the selected value gets ▶ ◀, the active row gets color
+              const pickLine = (opts, sel) => opts.map((o, i) => i === sel ? '▶ ' + o.toUpperCase() + ' ◀' : o).join('     ');
+              const rowCol = (r, activeCol) => introRow === r ? activeCol : '#77828c';
+              ctx.font = 'bold 18px Tahoma,Arial'; ctx.fillStyle = rowCol(0, coopSel ? P2_COL : '#ffd24d');
+              ctx.fillText(pickLine(['1 player', '2 player'], coopSel), GW / 2, 120);
+              // the hero(es) being built, weapon in hand
+              const py = clamp(Math.round(GH * 0.42), 196, 252);
+              if (coopSel === 0) {
+                drawClassPreview(GW / 2, py, CLASSES[classSel], 'white', introRow === 1);
+              } else {
+                drawClassPreview(GW / 2 - 85, py, CLASSES[classSel], 'white', introRow === 1, 'P1');
+                drawClassPreview(GW / 2 + 85, py, CLASSES[classSel2], P2_COL, introRow === 2, 'P2');
+              }
+              // class pick rows under the mannequins
+              ctx.textAlign = 'center';
+              const clsOpts = CLASSES.map(c => CLASS_ICON[c] + ' ' + c);
+              let cy = py + 60;
+              ctx.font = 'bold 14px Tahoma,Arial';
+              if (coopSel === 0) {
+                ctx.fillStyle = rowCol(1, '#ffd24d');
+                ctx.fillText(pickLine(clsOpts, classSel), GW / 2, cy);
+              } else {
+                ctx.fillStyle = rowCol(1, '#fff');
+                ctx.fillText('P1   ' + pickLine(clsOpts, classSel), GW / 2, cy);
+                cy += 24;
+                ctx.fillStyle = rowCol(2, P2_COL);
+                ctx.fillText('P2   ' + pickLine(clsOpts, classSel2), GW / 2, cy);
+              }
+              // hints & controls, stacked up from the bottom edge
+              const CLASS_BLURB = {
+                melee:  'run over the stone to seize the sword — X cleaves all before you',
+                ranged: 'hold a direction and X looses an arrow that way — diagonals work',
+                caster: 'X charges a bolt that arcs to the nearest foe — frost & fire come with practice',
+              };
+              const blurbCls = CLASSES[introRow === 2 ? classSel2 : classSel];
+              const bottom = [['◀ ▶ choose   ·   ↑ ↓ switch row   (or 1 / 2 for players)', '12px Tahoma,Arial', '#9fb0c0']];
+              if (coopSel === 0) {
+                bottom.push(['move: WASD / arrows   ·   dash: Space / Shift   ·   attack: X / F', '13px Tahoma,Arial', '#ccc']);
+              } else {
+                bottom.push(['Player 1 (white):  arrows move  ·  Right-Shift dash  ·  /  attack', '13px Tahoma,Arial', '#fff']);
+                bottom.push(['Player 2 (green):  WASD move  ·  Left-Shift dash  ·  F  attack', '13px Tahoma,Arial', P2_COL]);
+                bottom.push(['allies & upgrades are shared — revive a downed partner by standing close', '12px Tahoma,Arial', '#9fb0c0']);
+              }
+              bottom.push([CLASS_BLURB[blurbCls], '12px Tahoma,Arial', '#ccc']);
+              bottom.push(['coins raise your multiplier  ·  graze foes for bonus  ·  clear waves for tokens', '12px Tahoma,Arial', '#ccc']);
+              bottom.push(['▶  Z / Enter to begin  ◀', '14px Tahoma,Arial', 'white']);
+              let by = GH - 22 - (bottom.length - 1) * 21;
+              for (const [text, font, color] of bottom) {
+                ctx.font = font; ctx.fillStyle = color;
+                ctx.fillText(text, GW / 2, by);
+                by += 21;
+              }
+              ctx.restore(); ctx.textAlign = 'left';
               hud.innerHTML = 'BEST: ' + best + ' · ' + (coopSel === 1 ? '2-PLAYER' : '1-PLAYER') + '<br>double-click icon to quit';
               frame++;
               return;
@@ -3678,7 +3844,7 @@
               const b = blasts[i];
               b.t++;
               if (b.kind === 'fire' || b.kind === 'frost') {
-                const grow = b.kind === 'fire' ? FIRE_R : FROST_R;
+                const grow = b.rMax || (b.kind === 'fire' ? FIRE_R : FROST_R);  // caster spells are tighter than the powerups
                 b.r = grow * Math.min(1, b.t / (b.kind === 'fire' ? 12 : 9));
                 if (!api.reduceMotion && b.t % 2 === 0) {
                   const ang = rnd() * Math.PI * 2, rr = b.r * (0.7 + rnd() * 0.35);
@@ -3696,7 +3862,7 @@
             if (freezeT > 0) freezeT--;
 
             /* the sword in the stone (never during the Star Wars / JoJo interludes) */
-            if (!swActive && !jojoActive && jojoCue <= 0 && !awaitExit && swFadeT <= 0 && !ianActive && ianCue <= 0 && !stone && heroesLive().some(h => h.swordT <= 0 && !h.heldSaber) && --stoneCd <= 0) {
+            if (!swActive && !jojoActive && jojoCue <= 0 && !awaitExit && swFadeT <= 0 && !ianActive && ianCue <= 0 && !stone && heroesLive().some(h => h.cls === 'melee' && h.swordT <= 0 && !h.heldSaber) && --stoneCd <= 0) {
               const p = farPoint(80);
               stone = { x: p.x, y: p.y };
               if (!stoneSeen) {
@@ -3706,8 +3872,8 @@
                 sparks.push({ x: p.x, y: p.y - 40, t: 30, color: '#eceff1', txt: 'the sword returns' });
               }
             }
-            // only a hero who isn't already holding a blade can pull the sword (it's theirs alone)
-            const stoneGrabber = stone ? heroesLive().find(h => !h.heldSaber && h.swordT <= 0 && Math.hypot(h.x - stone.x, h.y - stone.y) < PULL_R) : null;
+            // only a melee hero who isn't already holding a blade can pull the sword (it's theirs alone)
+            const stoneGrabber = stone ? heroesLive().find(h => h.cls === 'melee' && !h.heldSaber && h.swordT <= 0 && Math.hypot(h.x - stone.x, h.y - stone.y) < PULL_R) : null;
             if (stoneGrabber) {
               stone = null; stoneCd = 150;   // a beat before the next stone (lets a co-op partner arm too, but not instantly)
               unlockAchievement('excalibur');
@@ -3723,14 +3889,50 @@
                 sparks.push({ x: h.x, y: h.y - 46, t: 30, color: '#eceff1', txt: 'the blade fades...' });
               }
             }
-            /* the blue lightsaber on the corridor deck — claimed by whichever hero reaches it */
-            const saberGrabber = saberPickup ? heroesLive().find(h => !h.heldSaber && Math.hypot(h.x - saberPickup.x, h.y - saberPickup.y) < PULL_R) : null;
+            /* the blue lightsaber on the corridor deck — claimed by whichever melee hero reaches it */
+            const saberGrabber = saberPickup ? heroesLive().find(h => h.cls === 'melee' && !h.heldSaber && Math.hypot(h.x - saberPickup.x, h.y - saberPickup.y) < PULL_R) : null;
             if (saberGrabber) {
               saberPickup = null; saberGrabber.heldSaber = true;
               banner = 'A LIGHTSABER'; bannerSub = 'X — strike them down'; bannerT = 110;
               sfSfx.saber(); shake = 6;
             }
             for (const h of heroesAll()) if (h.swingT > 0) h.swingT--;
+
+            /* the caster's clock: pending incantations resolve, and the auto-spells
+               (frost nova when the mob closes in, fireball when it truly presses) tick */
+            if (!sidFinale && !dioFinale && dioStopT <= 0 && !ianActive) {
+              for (const h of heroesLive()) {
+                if (h.cls !== 'caster') continue;
+                if (h.castT > 0 && --h.castT === 0) resolveZap(h);
+                if (h.novaCd > 0) h.novaCd--;
+                if (h.fireCd > 0) h.fireCd--;
+                if (up.nova && h.novaCd <= 0 &&
+                    enemies.some(e => !untouchable(e) && e.kr > 0 && !e.frozen && Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R * 0.7)) {
+                  h.novaCd = Math.round(720 * up.spellCd);
+                  sfSfx.freeze();
+                  blasts.push({ kind: 'frost', x: h.x, y: h.y, r: 0, t: 0, life: 26, rMax: NOVA_R });
+                  let n = 0;
+                  for (const e of enemies) {
+                    // same immunities as the frost powerup — the great bosses shrug off the cold
+                    if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+                    if (untouchable(e)) continue;
+                    if (Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R) { e.frozen = 240; e.vx = 0; e.vy = 0; n++; }  // briefer than the powerup's FROST_DUR
+                  }
+                  sparks.push({ x: h.x, y: h.y - 36, t: 24, color: '#8fd8ff', txt: n ? 'FROZEN x' + n : 'frost nova' });
+                }
+                if (up.fire && h.fireCd <= 0) {
+                  let n = 0;
+                  for (const e of enemies) if (!untouchable(e) && Math.hypot(e.x - h.x, e.y - h.y) < FIREB_R) n++;
+                  if (n >= 3) {                            // only when genuinely mobbed
+                    h.fireCd = Math.round(900 * up.spellCd);
+                    sfSfx.bomb(); shake = Math.max(shake, 10);
+                    blasts.push({ kind: 'fire', x: h.x, y: h.y, r: 0, t: 0, life: 30, rMax: FIREB_R });
+                    knockback(h.x, h.y, FIREB_R, 180, 40);
+                    sparks.push({ x: h.x, y: h.y - 36, t: 24, color: '#ff8a65', txt: 'FWOOSH' });
+                  }
+                }
+              }
+            }
 
             /* the champion */
             if (frame % 90 === 0) addMeter(1);
@@ -3803,6 +4005,7 @@
                 }
                 for (let i = arrows.length - 1; i >= 0; i--) {  // the whirling saber bats away bolts
                   const a = arrows[i];
+                  if (a.kind === 'parrow') continue;            // a hero's own arrows fly through
                   if (Math.hypot(a.x - g.x, a.y - (g.y - 18)) < 48) {
                     sparks.push({ x: a.x, y: a.y, t: 12, color: '#aaff66', txt: '✦' });
                     arrows.splice(i, 1);
@@ -3929,6 +4132,22 @@
                 }
                 if (struck) arrows.splice(i, 1);
                 continue;  // never harms the player
+              }
+              if (a.kind === 'parrow') {
+                // a hero's arrow — harmless to heroes, strikes the first foe in its path
+                let spent = false;
+                for (const e of enemies) {
+                  if (untouchable(e) || (a.hitSet && a.hitSet.has(e))) continue;
+                  if (Math.hypot(a.x - e.x, a.y - (e.y - 14)) < (e.type === 'troll' || e.type === 'ogre' ? 20 : 15)) {
+                    (a.hitSet || (a.hitSet = new Set())).add(e);   // a piercing arrow never re-hits the same foe
+                    const dv = Math.hypot(a.vx, a.vy) || 1;
+                    rangedHit(e, a.dmg, a.vx / dv, a.vy / dv);
+                    if (a.pierce > 0) a.pierce--; else spent = true;
+                    break;
+                  }
+                }
+                if (spent) arrows.splice(i, 1);
+                continue;
               }
               if (a.kind === 'vsaber') {                         // Vader's thrown saber: out, then home back to him
                 a.spin += 0.6;
@@ -4361,7 +4580,8 @@
                 ctx.shadowColor = a.reflected ? '#5ac8ff' : '#ff6f60'; ctx.shadowBlur = 8;
                 ctx.beginPath(); ctx.moveTo(a.x - a.vx / d * 14, a.y - a.vy / d * 14); ctx.lineTo(a.x, a.y); ctx.stroke();
               } else {
-                ctx.strokeStyle = '#f5f5dc'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+                // your own arrows fletch green so friend and foe never blur mid-horde
+                ctx.strokeStyle = a.kind === 'parrow' ? '#c5e1a5' : '#f5f5dc'; ctx.lineWidth = 2; ctx.lineCap = 'round';
                 ctx.beginPath(); ctx.moveTo(a.x - a.vx / d * 9, a.y - a.vy / d * 9); ctx.lineTo(a.x, a.y); ctx.stroke();
                 ctx.fillStyle = '#fff';
                 ctx.beginPath(); ctx.arc(a.x, a.y, 2, 0, Math.PI * 2); ctx.fill();
@@ -4478,7 +4698,13 @@
               (up.shield ? (player.shield
                 ? '  ·  <span style="color:#7fd8ff">🛡️ AEGIS</span>'
                 : '  ·  <span style="color:#5a6168">🛡️ broken · refreshes next wave</span>') : '') + '<br>' +
-              (player.heldSaber
+              (player.cls === 'ranged'
+                ? '<span style="color:#9ccc65">🏹 bow · X fires your held direction</span>'
+                : player.cls === 'caster'
+                ? '<span style="color:#ce93d8">✨ arcana · X charges a bolt' +
+                  (up.nova ? (player.novaCd <= 0 ? ' · ❄ ready' : ' · ❄ ' + Math.ceil(player.novaCd / 60) + 's') : '') +
+                  (up.fire ? (player.fireCd <= 0 ? ' · ☄ ready' : ' · ☄ ' + Math.ceil(player.fireCd / 60) + 's') : '') + '</span>'
+                : player.heldSaber
                 ? '<span style="color:#5ac8ff">⚔ lightsaber · X strikes</span>'
                 : saberPickup ? '<span style="color:#5ac8ff">⚔ a lightsaber waits ahead</span>'
                 : player.swordT > 0
@@ -4506,7 +4732,9 @@
                 }
                 const dash = up.dashMax === 0 ? '' : ' ◆' + h.dashCharges;
                 const aeg = up.shield ? (h.shield ? ' 🛡️' : ' 🛡️✕') : '';
-                const blade = h.heldSaber ? ' ⚔' : h.swordT > 0 ? ' ⚔' + Math.ceil(h.swordT / 60) + 's' : '';
+                const blade = h.cls === 'ranged' ? ' 🏹'
+                            : h.cls === 'caster' ? ' ✨'
+                            : h.heldSaber ? ' ⚔' : h.swordT > 0 ? ' ⚔' + Math.ceil(h.swordT / 60) + 's' : '';
                 return '<span style="color:' + col + '">' + label + dash + aeg + blade + '</span>';
               };
               hud.innerHTML += '<br>' + hero(player, 'P1', '#fff') + '   ' + hero(p2, 'P2', P2_COL);
@@ -4623,6 +4851,7 @@
             if (slain > 0) shake = Math.max(shake, Math.min(10, 2 + slain * 2));
             for (let i = arrows.length - 1; i >= 0; i--) {  // the blade meets the bolts
               const a = arrows[i];
+              if (a.kind === 'parrow') continue;            // never bat a partner's arrows out of the air
               const dx = a.x - h.x, dy = a.y - h.y, d = Math.hypot(dx, dy) || 1;
               if (d < up.swingR + 20 && (dx / d) * fx + (dy / d) * fy > -0.2) {
                 sparks.push({ x: a.x, y: a.y, t: 12, color: '#fff', txt: '✦' });
@@ -4637,6 +4866,104 @@
                 }
               }
             }
+          }
+
+          /* ── the other class kits: the attack key dispatches by h.cls ── */
+          function tryAttack(h) {
+            if (!h) return;
+            if (h.cls === 'ranged') return tryShoot(h);
+            if (h.cls === 'caster') return tryZap(h);
+            return trySwing(h);
+          }
+          // foes the player cannot damage yet (scripted intros) — mirrors trySwing's skip rules
+          function untouchable(e) {
+            return e.dead ||
+                   (e.type === 'dio' && (e.mode === 'troll' || e.mode === 'dying')) ||
+                   ((e.type === 'sidious' || e.type === 'guard') && sidiousIntroT > 0);
+          }
+          // an arrow/bolt lands on e: the blade's no-flinch rules, with a gentler shove
+          function rangedHit(e, dmg, ux, uy) {
+            if (e.hp && (e.hp -= dmg) > 0) {
+              if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') {
+                e.stun = Math.max(e.stun || 0, e.type === 'ogre' ? 10 : 6);
+                sparks.push({ x: e.x, y: e.y - 34, t: 14, color: '#ff8a80', txt: 'TSSS' });
+                sfSfx.saberHit();
+              } else {
+                e.stun = 14; sfSfx.thud();
+                e.x = clamp(e.x + ux * 16, -60, GW + 60);
+                e.y = clamp(e.y + uy * 16, -60, GH + 60);
+                sparks.push({ x: e.x, y: e.y - 30, t: 12, color: '#fff', txt: (e.type === 'wraith' || e.type === 'witchking') ? 'SCREECH' : 'THUNK' });
+              }
+              return false;
+            }
+            killEnemy(e);
+            return true;
+          }
+          // ranged: the bow is always strung — a skill shot, not a homing one. The arrow
+          // flies in the direction being held (8-way, diagonals included); release the keys
+          // and it fires along the last facing. Aim by footwork.
+          function tryShoot(h) {
+            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || tick < h.swingReadyTick) return;
+            h.swingReadyTick = tick + Math.round(up.shotMs * SIM_HZ / 1000); h.swingT = 8;
+            sfSfx.arrow();
+            const fd = Math.hypot(h.fx, h.fy) || 1;
+            const ux = h.fx / fd, uy = h.fy / fd;
+            const n = up.shotCount, spread = 0.16;
+            for (let i = 0; i < n; i++) {
+              const off = (i - (n - 1) / 2) * spread;
+              const ca = Math.cos(off), sa = Math.sin(off);
+              arrows.push({ x: h.x + ux * 12, y: h.y - 18 + uy * 12, kind: 'parrow',
+                            vx: (ux * ca - uy * sa) * ARROW_SPD, vy: (ux * sa + uy * ca) * ARROW_SPD,
+                            t: 110, dmg: up.shotDmg, pierce: up.shotPierce, hitSet: null });
+            }
+          }
+          // caster: a deliberate spell, not a trigger — the attack key begins a short
+          // incantation (CAST_T ticks, the staff orb swells), then the bolt arcs to the
+          // nearest foe and chains. Short reach (ZAP_R): the mage fights up close and
+          // trades wind-up time for aim-free area damage. A dry press fizzles free.
+          function tryZap(h) {
+            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || h.castT > 0 || tick < h.swingReadyTick) return;
+            let t = null, bd = ZAP_R;
+            for (const e of enemies) {
+              if (untouchable(e)) continue;
+              const d = Math.hypot(e.x - h.x, e.y - h.y);
+              if (d < bd) { bd = d; t = e; }
+            }
+            if (!t) { sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: '·' }); return; }
+            h.swingReadyTick = tick + Math.round(up.zapMs * SIM_HZ / 1000);
+            h.castT = CAST_T;                             // the incantation begins — resolveZap() fires it
+            sfSfx.bolt();
+          }
+          // the wind-up completes: the arc leaps to whatever is nearest NOW (with a little
+          // grace past ZAP_R, since the foe had CAST_T ticks to drift)
+          function resolveZap(h) {
+            let t = null, bd = ZAP_R + 40;
+            for (const e of enemies) {
+              if (untouchable(e)) continue;
+              const d = Math.hypot(e.x - h.x, e.y - h.y);
+              if (d < bd) { bd = d; t = e; }
+            }
+            if (!t) { sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: 'fzzt' }); return; }
+            h.swingT = 10;
+            sfSfx.zap();
+            const pts = [{ x: h.x, y: h.y - 16 }];
+            const hit = new Set();
+            let from = t;
+            for (let j = 0; j < up.zapJumps && from; j++) {
+              hit.add(from);
+              const prev = pts[pts.length - 1];
+              const dv = Math.hypot(from.x - prev.x, (from.y - 14) - prev.y) || 1;
+              pts.push({ x: from.x, y: from.y - 14 });
+              rangedHit(from, 1, (from.x - prev.x) / dv, ((from.y - 14) - prev.y) / dv);
+              let nx = null, nd = ZAP_HOP;                // the arc leaps on to the next foe
+              for (const e of enemies) {
+                if (untouchable(e) || hit.has(e)) continue;
+                const dd = Math.hypot(e.x - from.x, e.y - from.y);
+                if (dd < nd) { nd = dd; nx = e; }
+              }
+              from = nx;
+            }
+            blasts.push({ kind: 'chain', pts, t: 0, life: 16 });
           }
 
           function trySummon(kind) {
@@ -4694,7 +5021,8 @@
             enemies = []; warns = []; arrows = []; bolts = []; coins = []; powerups = []; blasts = []; corpses = [];
             // no medieval steel beyond the door — Excalibur stays behind
             stone = null; clearBlades();
-            saberPickup = { x: GW * 0.30, y: GH / 2 };  // a lightsaber waits on the deck
+            // a lightsaber waits on the deck — but only a melee hero has any use for it
+            saberPickup = heroesAll().some(h => h.cls === 'melee') ? { x: GW * 0.30, y: GH / 2 } : null;
             // player has just charged through the doorway — slam them against the west wall
             player.x = 34; player.y = GH / 2; player.vx = 0; player.vy = 0;
             // co-op: P2 lands beside P1, and both arm up — a single floor saber can't equip two,
@@ -4836,16 +5164,29 @@
               e.preventDefault();
               return;
             }
-            // ── intro screen: pick 1-PLAYER / 2-PLAYER, then begin ──
-            // ←/→ (or 1/2, or ↑/↓ to flip) move the highlight; the controls for the choice are shown
-            // on the panel; Z / Enter / Space begins the run in the chosen mode. (The headless
-            // determinism test starts by dispatching Enter, then holds ArrowRight to move.)
+            // ── intro screen: pick 1P/2P on the mode row and a class per hero, then begin ──
+            // ↑/↓ switch rows (mode · P1 class · P2 class in 2P), ←/→ change the value on the
+            // active row (1/2 still jump the mode directly); Z / Enter / Space begins. Defaults
+            // (1-PLAYER · MELEE) keep the classic run one Enter away. (The headless determinism
+            // test starts by dispatching Enter, then holds ArrowRight to move.)
             if (!started) {
-              if (e.key === 'ArrowLeft' || e.key === '1') { coopSel = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
-              if (e.key === 'ArrowRight' || e.key === '2') { coopSel = 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
-              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { coopSel = coopSel ? 0 : 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              const nRows = coopSel === 1 ? 3 : 2;
+              if (e.key === 'ArrowUp')   { introRow = (introRow + nRows - 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === 'ArrowDown') { introRow = (introRow + 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === '1') { coopSel = 0; if (introRow === 2) introRow = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === '2') { coopSel = 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                const d = e.key === 'ArrowRight' ? 1 : -1;
+                if (introRow === 0)      coopSel = d > 0 ? 1 : 0;
+                else if (introRow === 1) classSel  = (classSel  + d + 3) % 3;
+                else                     classSel2 = (classSel2 + d + 3) % 3;
+                if (sfSfx.killE) sfSfx.killE();
+                e.preventDefault(); return;
+              }
               if (['z', 'Z', 'Enter', ' '].includes(e.key)) {
                 coop = coopSel === 1;
+                player.cls = CLASSES[classSel];
+                try { localStorage.setItem('ilaird_sf_cls', String(classSel)); localStorage.setItem('ilaird_sf_cls2', String(classSel2)); } catch (_) {}
                 if (coop) setupCoop();
                 started = true; frame = 0;
                 banner = coop ? 'CO-OP · WAVE 1' : 'WAVE 1'; bannerT = 90;
@@ -4922,12 +5263,12 @@
             // Shifts are told apart by e.code). Summons/champion-prompt are shared either way.
             if (!coop) {
               if (e.key === ' ' || e.key === 'Shift') tryDash(player);
-              if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') trySwing(player);
+              if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') tryAttack(player);
             } else {
               if (e.code === 'ShiftRight') tryDash(player);
-              if (e.code === 'Slash') trySwing(player);
+              if (e.code === 'Slash') tryAttack(player);
               if (e.code === 'ShiftLeft') tryDash(p2);
-              if (e.key === 'f' || e.key === 'F') trySwing(p2);
+              if (e.key === 'f' || e.key === 'F') tryAttack(p2);
             }
             if (e.key === 'g' || e.key === 'G') championPrompt();
             if (e.key === '1') trySummon('gandalf');
