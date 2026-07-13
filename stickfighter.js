@@ -26,6 +26,13 @@
           const unlockAchievement = (id) => { if (!replayMode) _unlockAch(id); };
           _unlockAch('stick-fighter');   // the site egg for booting the game at all (raw: `replayMode` isn't initialized yet, and a boot is never a replay)
 
+          // the creator's REAL face (assets/ian_face.png) — drawn as two South Park photo-
+          // cutout pieces split at the lips (see drawIan). Purely progressive: until the
+          // image is decoded (or if it 404s / runs headless), the hand-drawn caricature
+          // renders instead, so tests and offline play never depend on the asset.
+          const ianFace = new Image();
+          ianFace.src = 'assets/ian_face.png';
+
           const GW = xp.offsetWidth;
           const GH = xp.offsetHeight - 40;
 
@@ -150,7 +157,8 @@
           // stores it beside the board entry; anyone can then WATCH the run — the deterministic
           // sim replays it bit-exactly. Event codes: 0 mask · 1 dashP1 · 2 atkP1 · 3 dashP2 ·
           // 4 atkP2 · 5 summon · 6 mash · 7 buy · 8 shop-continue · 9 intro-advance · 10 ian ·
-          // 11 spell-cycle (arg = hero index; the wizard's page selection is sim state).
+          // 11 spell-cycle (arg = hero index; the wizard's page selection is sim state) ·
+          // 12 boon pick (arg = boon id — offers re-roll deterministically, the pick is input).
           let replayMode = false;      // watching someone else's run (read game-wide: gates saves/achievements)
           let replay = null;           // { d: replay data, i: next event index, name, score }
           let repMask = 0;             // the replayed held-direction mask
@@ -272,6 +280,8 @@
           let sfToasts = [];        // {name, t} — the gold cards, drawn over every screen
           let showTrophies = false; // the intro's trophy case panel (T toggles it)
           let runFlawless = true;   // no blow has connected this run (reset in init; see strike)
+          let bn = null;            // per-run boon effects (rebuilt in init — see BOONS)
+          let boonMenu = null;      // an open 1-of-3 boon offer (pauses the sim while it stands)
           // WOLFSBANE's lifetime ledger — replay-gated at the increment, like every save
           let wolfKills = 0;
           try { wolfKills = parseInt(localStorage.getItem('ilaird_sf_wolfkills') || '0', 10) || 0; } catch (_) { /* fresh hunt */ }
@@ -350,6 +360,123 @@
             ctx.fillText('T — close the case', GW / 2, GH - 22);
             ctx.restore(); ctx.textAlign = 'left';
           }
+
+          /* ── BOONS: per-run blessings, chosen 1-of-3 at three moments — the run's start,
+             the Witch-king's fall, and Ian's mercy. Ephemeral by design (nothing persists;
+             `bn` and any `up` tweaks rebuild each init), so every run has its own identity
+             on top of the permanent tree. Offers are rolled with rnd() (pure function of
+             the seed + roll position); the PICK is sim input, recorded as opcode 12 (boon
+             id) in the same between-tick slot as a shop buy. The run-start menu opens
+             SYNCHRONOUSLY in the begin/R/startReplay handlers right after init() — the
+             offer roll is then the seed's first draws in both live play and replay, and
+             a headless driver can pick before the first frame is ever pumped. */
+          const BOONS = [
+            { id: 'fleet_foot', name: 'FLEET FOOT',    icon: '👟', desc: 'run 12% faster',                        apply: () => { bn.spd = 1.12; } },
+            { id: 'deathward',  name: 'DEATHWARD',     icon: '💖', desc: 'cheat death once this run',             apply: () => { bn.cheatDeath = true; } },
+            { id: 'gold_touch', name: 'GOLDEN TOUCH',  icon: '🪙', desc: 'coins pay double meter, +25 score',     apply: () => { bn.gold = true; } },
+            { id: 'war_horn',   name: 'WAR HORN',      icon: '📯', desc: 'ally meter charges 50% faster', apply: () => { up.meterMul *= 1.5; } },
+            { id: 'tithe',      name: "KING'S TITHE",  icon: '👑', desc: 'story bosses pay double tokens',        apply: () => { bn.tithe = true; } },
+            { id: 'bounty',     name: 'BOUNTY',        icon: '💰', desc: 'every kill scores +5 (before multiplier)', apply: () => { bn.bounty = 5; } },
+            { id: 'giants_arc', name: "GIANT'S ARC",   icon: '⭕', desc: 'the blade sweeps 25% wider',   cls: 'melee',  apply: () => { up.swingR = Math.round(up.swingR * 1.25); } },
+            { id: 'berserk',    name: 'BERSERKER',     icon: '⚡', desc: 'swings come 30% faster',       cls: 'melee',  apply: () => { up.swingMs = Math.round(up.swingMs * 0.7); } },
+            { id: 'keen_legacy',name: 'KEEN LEGACY',   icon: '⌛', desc: 'Excalibur burns 50% longer', cls: 'melee', apply: () => { up.swordMul *= 1.5; } },
+            { id: 'twin_fang',  name: 'TWIN FANG',     icon: '🔱', desc: 'one more arrow per volley',    cls: 'ranged', apply: () => { up.shotCount += 1; } },
+            { id: 'piercer',    name: 'PIERCER',       icon: '🎯', desc: 'arrows pierce one more foe',   cls: 'ranged', apply: () => { up.shotPierce += 1; } },
+            { id: 'hunters_pace',name:'HUNTER\'S PACE',icon: '🏹', desc: 'loose arrows 30% faster',      cls: 'ranged', apply: () => { up.shotMs = Math.round(up.shotMs * 0.7); } },
+            { id: 'bottomless', name: 'BOTTOMLESS WELL',icon:'🔮', desc: '+50 mana to the pool',         cls: 'caster', apply: () => { up.manaMax += 50; } },
+            { id: 'siphon',     name: 'SIPHON',        icon: '✨', desc: 'soul sparks return double mana', cls: 'caster', apply: () => { bn.sparks2 = true; } },
+            { id: 'flicker',    name: 'FLICKER CAST',  icon: '💫', desc: 'incantations 40% shorter',     cls: 'caster', apply: () => { bn.castMul = 0.6; } },
+            { id: 'harvest',    name: 'GRAVE HARVEST', icon: '🌾', desc: '+3 souls from every kill',     cls: 'necro',  apply: () => { bn.soulBonus = 3; } },
+            { id: 'legion',     name: 'ONE MORE',      icon: '🧟', desc: 'command one more minion',      cls: 'necro',  apply: () => { up.minionCap += 1; } },
+            { id: 'restless',   name: 'RESTLESS',      icon: '⚰️', desc: 'minions endure 50% longer', cls: 'necro', apply: () => { bn.minionMul = 1.5; } },
+          ];
+          /* BANES — hard mode's answer to boons: no gifts at all, and the run OPENS by
+             choosing one burden instead (1-of-3, same menu/opcode machinery — bane ids
+             live in the same pick namespace, so opcode 12 and the worker regex cover
+             them unchanged). All shared, all painful, all fair. */
+          const BANES = [
+            { id: 'lead_boots', name: 'LEAD BOOTS',     icon: '🥾', desc: 'run 12% slower',                       apply: () => { bn.spd = 0.88; } },
+            { id: 'dull_arms',  name: 'DULLED ARMS',    icon: '🪨', desc: 'attacks recover 25% slower',           apply: () => { up.swingMs = Math.round(up.swingMs * 1.25); up.shotMs = Math.round(up.shotMs * 1.25); up.zapMs = Math.round(up.zapMs * 1.25); up.scytheMs = Math.round(up.scytheMs * 1.25); } },
+            { id: 'heavy_toll', name: 'HEAVY TOLL',     icon: '⚖️', desc: 'every upgrade costs one more token',   apply: () => { bn.toll = 1; } },
+            { id: 'marked',     name: 'MARKED',         icon: '🎯', desc: 'the horde walks 8% faster',            apply: () => { bn.foeSpd = 1.08; } },
+            { id: 'blood_price',name: 'BLOOD PRICE',    icon: '🩸', desc: 'summons cost 50% more',      apply: () => { up.summonCost = Math.round(up.summonCost * 1.5); } },
+            { id: 'miser',      name: "MISER'S CURSE",  icon: '🕳️', desc: 'coins feed the ally meter nothing',    apply: () => { bn.miser = true; } },
+          ];
+          function rollBoonOffer(pool) {
+            const opts = [];
+            while (opts.length < 3 && pool.length) opts.push(pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
+            return opts;
+          }
+          function openBoonMenu(title) {
+            const present = new Set(heroesAll().map(h => h.cls));
+            const opts = rollBoonOffer(BOONS.filter(b => (!b.cls || present.has(b.cls)) && !bn.picked.includes(b.id)));
+            if (!opts.length) return;                 // the pool ran dry — no menu, no pause
+            boonMenu = { sel: 0, opts, title };
+            paused = true;
+            sfSfx.wave();
+          }
+          function openBaneMenu(title) {
+            const opts = rollBoonOffer(BANES.filter(b => !bn.picked.includes(b.id)));
+            if (!opts.length) return;
+            boonMenu = { sel: 0, opts, title, bane: true };
+            paused = true;
+            sfSfx.charge();
+          }
+          function pickBoon(id) {
+            if (!boonMenu) return;
+            const b = boonMenu.opts.find(o => o.id === id);
+            if (!b) return;
+            const bane = !!boonMenu.bane;
+            bn.picked.push(b.id);
+            b.apply();
+            banner = b.icon + ' ' + b.name + (bane ? ' — your burden' : ''); bannerSub = b.desc; bannerT = 110;
+            boonMenu = null; paused = false; keys = {};
+            bane ? sfSfx.thud() : sfSfx.sword();
+          }
+          function drawBoonPanel() {
+            const m = boonMenu;
+            ctx.save();
+            ctx.fillStyle = m.bane ? 'rgba(8,0,0,0.85)' : 'rgba(0,0,0,0.82)'; ctx.fillRect(0, 0, GW, GH);
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
+            ctx.fillStyle = m.bane ? '#ff6e6e' : '#ffd24d'; ctx.font = 'bold 26px Tahoma,Arial';
+            ctx.fillText(m.title, GW / 2, Math.round(GH * 0.24));
+            ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+            ctx.fillText(m.bane ? 'hard mode offers no gifts — carry one burden' : 'this run only — choose well', GW / 2, Math.round(GH * 0.24) + 24);
+            ctx.shadowBlur = 0;
+            const cw = Math.min(210, (GW - 80) / 3), chh = 150, gap = 18;
+            const x0 = GW / 2 - (cw * m.opts.length + gap * (m.opts.length - 1)) / 2;
+            const cy = Math.round(GH * 0.36);
+            for (let i = 0; i < m.opts.length; i++) {
+              const b = m.opts[i], hot = i === m.sel;
+              const x = x0 + i * (cw + gap), y = cy - (hot ? 8 : 0);
+              const accent = m.bane ? '#ff6e6e' : b.cls ? { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL }[b.cls] : '#e8eef4';
+              ctx.fillStyle = hot ? 'rgba(28,24,10,0.96)' : 'rgba(12,16,22,0.92)';
+              roundRectPath(x, y, cw, chh, 10); ctx.fill();
+              if (hot) { ctx.shadowColor = accent; ctx.shadowBlur = api.reduceMotion ? 12 : 10 + 4 * Math.sin(frame * 0.1); }
+              ctx.strokeStyle = hot ? accent : 'rgba(120,140,160,0.4)'; ctx.lineWidth = hot ? 2.5 : 1.5;
+              roundRectPath(x, y, cw, chh, 10); ctx.stroke();
+              ctx.shadowBlur = 0;
+              ctx.font = '34px Tahoma,Arial';
+              ctx.fillText(b.icon, x + cw / 2, y + 52);
+              ctx.font = 'bold 14px Tahoma,Arial'; ctx.fillStyle = hot ? accent : '#aeb9c4';
+              ctx.fillText(b.name, x + cw / 2, y + 80);
+              ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = hot ? '#d8e0e8' : '#77828c';
+              // wrap the one-line desc onto two centred lines if it runs long
+              const words = b.desc.split(' ');
+              let l1 = '', l2 = '';
+              for (const w of words) { if (l2 || (l1 + ' ' + w).trim().length > 26) l2 = (l2 + ' ' + w).trim(); else l1 = (l1 + ' ' + w).trim(); }
+              ctx.fillText(l1, x + cw / 2, y + 102);
+              if (l2) ctx.fillText(l2, x + cw / 2, y + 116);
+              if (b.cls) {
+                ctx.font = 'bold 9px Tahoma,Arial'; ctx.fillStyle = accent;
+                ctx.fillText(CLASS_ICON[b.cls] + ' ' + b.cls.toUpperCase(), x + cw / 2, y + chh - 12);
+              }
+            }
+            ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+            ctx.fillText('◀ ▶ choose   ·   Z / Enter — take it', GW / 2, cy + chh + 40);
+            ctx.restore(); ctx.textAlign = 'left';
+          }
           const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
           const KEG_R     = 42;    // the bombardier's powder-keg blast radius
           const KEG_AIR   = 62;    // ticks a lobbed keg hangs in the air (the dodge window)
@@ -423,6 +550,10 @@
             wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
             lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
             cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true;
+            bn = { picked: [], spd: 1, cheatDeath: false, gold: false, tithe: false, bounty: 0,
+                   sparks2: false, castMul: 1, soulBonus: 0, minionMul: 1,
+                   toll: 0, foeSpd: 1, miser: false };   // bane fields (hard mode)
+            boonMenu = null;
             up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
                    champs: { gandalf: false, luke: false, jotaro: false },
                    champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false,
@@ -595,7 +726,7 @@
           }
           // the story bosses (Witch-king, Vader, Sidious, DIO) pay out on EVERY kill, not just
           // the first — the trees grew too deep to live off first-clears alone
-          function grantBossToken() { tokens++; saveTokens(); return true; }
+          function grantBossToken() { tokens += bn.tithe ? 2 : 1; saveTokens(); return true; }
 
           /* ── upgrades: a token-based skill tree. Each cleared wave grants a token;
              spend tokens (1 each) on unlocked nodes, or save them to grab several at once. ── */
@@ -627,7 +758,7 @@
             { id: 'swing_fast2', tree: 'BLADE',  cls: 'melee',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = 300; } },
             { id: 'swing_wide',  tree: 'BLADE',  cls: 'melee',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = 150; } },
             { id: 'swing_wide2', tree: 'BLADE',  cls: 'melee',  name: 'Great Cleave',    desc: 'even wider reach',                   icon: '⭕', req: 'swing_wide', apply: () => { up.swingR = 195; } },
-            { id: 'swing_long',  tree: 'BLADE',  cls: 'melee',  name: 'Keen Edge',       desc: 'Excalibur lasts half again as long', icon: '⌛', req: null,         apply: () => { up.swordMul = 1.5; } },
+            { id: 'swing_long',  tree: 'BLADE',  cls: 'melee',  name: 'Keen Edge',       desc: 'Excalibur lasts 50% longer', icon: '⌛', req: null,         apply: () => { up.swordMul = 1.5; } },
             { id: 'swing_riposte',tree: 'BLADE', cls: 'melee',  name: 'Riposte',         desc: 'batted shots return as your own',    icon: '🔄', req: 'swing_fast', apply: () => { up.riposte = true; } },
             { id: 'swing_master',tree: 'BLADE',  cls: 'melee',  name: 'Andúril',         desc: 'huge reach · blistering swing speed', icon: '🔥', req: 'swing_wide2', cost: 2, apply: () => { up.swingR = 250; up.swingMs = 210; } },
             { id: 'bow_fast',    tree: 'BOW',    cls: 'ranged', name: 'Rapid Shot',      desc: 'loose arrows more often',            icon: '🏹', req: null,         apply: () => { up.shotMs = Math.min(up.shotMs, 360); } },
@@ -640,7 +771,7 @@
             { id: 'zap_fast',    tree: 'SORCERY', cls: 'caster', name: 'Quick Cast',     desc: 'spells come faster',                 icon: '⚡', req: null,         apply: () => { up.zapMs = Math.min(up.zapMs, 560); } },
             { id: 'zap_chain',   tree: 'SORCERY', cls: 'caster', name: 'Chain Arc',      desc: 'bolts leap to a second foe',         icon: '🔗', req: null,         apply: () => { up.zapJumps = Math.max(up.zapJumps, 2); } },
             { id: 'zap_chain2',  tree: 'SORCERY', cls: 'caster', name: 'Storm Arc',      desc: 'bolts leap to three foes',           icon: '🌩️', req: 'zap_chain',  apply: () => { up.zapJumps = Math.max(up.zapJumps, 3); } },
-            { id: 'mana_pool',   tree: 'SORCERY', cls: 'caster', name: 'Deep Well',      desc: 'half again as much mana',            icon: '🔮', req: null,         apply: () => { up.manaMax = Math.max(up.manaMax, 150); } },
+            { id: 'mana_pool',   tree: 'SORCERY', cls: 'caster', name: 'Deep Well',      desc: '50% more mana',            icon: '🔮', req: null,         apply: () => { up.manaMax = Math.max(up.manaMax, 150); } },
             { id: 'mana_font',   tree: 'SORCERY', cls: 'caster', name: 'Font of Power',  desc: 'mana returns much faster',           icon: '⛲', req: 'mana_pool',  apply: () => { up.manaRegen = Math.max(up.manaRegen, 1.6); } },
             { id: 'nova',        tree: 'SORCERY', cls: 'caster', name: 'Frost Nova',     desc: 'SPELL: an ice ring freezes the pack', icon: '❄️', req: null,        apply: () => { learnSpell('nova'); } },
             { id: 'fireball',    tree: 'SORCERY', cls: 'caster', name: 'Fireball',       desc: 'SPELL: hurl fire that erupts on the mob', icon: '☄️', req: 'nova',  apply: () => { learnSpell('fire'); } },
@@ -649,13 +780,13 @@
             { id: 'zap_master',  tree: 'SORCERY', cls: 'caster', name: 'Archmage',       desc: 'five-fold arcs · SPELL: the TEMPEST', icon: '🧙‍♂️', req: 'zap_chain2', cost: 2, apply: () => { up.zapJumps = 5; up.zapMs = Math.min(up.zapMs, 420); learnSpell('storm'); } },
             { id: 'grave_cap',   tree: 'GRAVE',  cls: 'necro',  name: 'Restless Dead',   desc: 'command a third minion',             icon: '🧟', req: null,         apply: () => { up.minionCap = Math.max(up.minionCap, 3); } },
             { id: 'grave_cheap', tree: 'GRAVE',  cls: 'necro',  name: 'Grave Pact',      desc: 'raising costs far fewer souls',      icon: '🤝', req: null,         apply: () => { up.raiseCost = Math.min(up.raiseCost, 16); } },
-            { id: 'grave_last',  tree: 'GRAVE',  cls: 'necro',  name: 'Preservation',    desc: 'husks linger half again as long',    icon: '⚰️', req: null,         apply: () => { up.huskMul = Math.max(up.huskMul, 1.5); } },
+            { id: 'grave_last',  tree: 'GRAVE',  cls: 'necro',  name: 'Preservation',    desc: 'husks linger 50% longer',    icon: '⚰️', req: null,         apply: () => { up.huskMul = Math.max(up.huskMul, 1.5); } },
             { id: 'grave_reap',  tree: 'GRAVE',  cls: 'necro',  name: 'Reaper',          desc: 'faster sweeps · kills feed more souls', icon: '🌾', req: null,      apply: () => { up.scytheMs = Math.min(up.scytheMs, 380); up.reaper = true; } },
             { id: 'grave_boom',  tree: 'GRAVE',  cls: 'necro',  name: 'Deathburst',      desc: 'falling minions erupt in soul-fire', icon: '💥', req: 'grave_cap',  apply: () => { up.minionBoom = true; } },
             { id: 'grave_true',  tree: 'GRAVE',  cls: 'necro',  name: 'True Forms',      desc: 'wolves lope · archers loose spectral arrows', icon: '🐺', req: 'grave_cap', apply: () => { up.trueForms = true; } },
             { id: 'grave_master',tree: 'GRAVE',  cls: 'necro',  name: 'Lord of the Fallen', desc: 'a fourth minion · the dead rise harder', icon: '👑', req: 'grave_boom', cost: 2, apply: () => { up.minionCap = Math.max(up.minionCap, 4); up.minionHp = 3; up.minionDmg = 2; } },
           ];
-          const upCost = (u) => u.cost || 1;   // most nodes cost 1 token; capstones cost more
+          const upCost = (u) => (u.cost || 1) + bn.toll;   // most nodes cost 1 token; capstones more; HEAVY TOLL taxes all
           const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8', GRAVE: NECRO_COL };
           function availableUpgrades() {
             // class trees only show for classes actually in the party (DASH/ALLIES have no cls and
@@ -1057,14 +1188,12 @@
             ctx.lineWidth = 2.5; ctx.lineCap = 'round';
             const hy = kneel ? -22 : -34;
             if (kneel) {
-              ctx.beginPath(); ctx.arc(0, -22, 8, 0, Math.PI * 2); ctx.stroke();        // head (low — kneeling)
               ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(0, 2); ctx.stroke();      // short torso
               ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(-12, -22); ctx.stroke();  // arms raised, pleading
               ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(12, -22); ctx.stroke();
               ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(-10, 4); ctx.lineTo(-12, 2); ctx.stroke();  // folded knees
               ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(8, 6); ctx.lineTo(12, 2); ctx.stroke();
             } else {
-              ctx.beginPath(); ctx.arc(0, -34, 8, 0, Math.PI * 2); ctx.stroke();        // head
               ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, -6); ctx.stroke();     // torso
               if (armsUp) {                                                              // standing, both hands up
                 ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(-12, -34 + wob); ctx.stroke();
@@ -1076,14 +1205,90 @@
               ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(-9, 12); ctx.stroke();     // legs
               ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(9, 12); ctx.stroke();
             }
-            // glasses — the dev
-            ctx.lineWidth = 1.5;
-            ctx.beginPath(); ctx.arc(-3, hy, 2.4, 0, Math.PI * 2); ctx.arc(3, hy, 2.4, 0, Math.PI * 2); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(-0.6, hy); ctx.lineTo(0.6, hy); ctx.stroke();
+            /* ── the creator's face: his own portrait, South Park-ized — TWO PIECES hinged
+               at the lips, clapping together while his lines run (the dlg queue is live).
+               When the real photo (ianFace) is decoded it's drawn as elliptical cutout
+               pieces — the authentic South Park celebrity treatment; otherwise the hand-
+               drawn caricature below stands in. Flap is a fade-free bob; reduced motion
+               holds it slightly ajar instead. Drawn over the stick body at head height. */
+            // "talking" must cover every way his words reach the screen: lines still QUEUED
+            // (dlg) or in the between-line gap (dlgT), the displayed spare speech (the dlg
+            // pump shifts a line into the banner while it shows, so the queue alone goes
+            // empty mid-speech — the 'thanks' phase spans the whole thing), and the intro
+            // card's plea (which never touches dlg; it types on the card itself).
+            const talking = mode !== 'dying' &&
+                            (dlg.length > 0 || dlgT > 0 ||
+                             (ianFinale && ianFinale.outcome === 'spare' && ianFinale.phase === 'thanks') ||
+                             (bossIntro && bossIntro.key === 'ian' && bossIntro.phase !== 'approach'));
+            const flap = talking ? (api.reduceMotion ? 2 : Math.abs(Math.sin((frame || 0) * 0.3)) * 5) : 0;
+            const R = 8.5, skin = '#e8c39e', hair = '#2e241c', beard = '#3a2a20';
+            if (ianFace.complete && ianFace.naturalWidth > 0) {
+              const iw = ianFace.naturalWidth, ih = ianFace.naturalHeight;
+              const MOUTH = 0.75;                        // the lip line, as a fraction of the photo's height
+              const HW = 21, HH = HW * ih / iw;          // a touch larger than the stick head — it's a cutout
+              const topH = HH * MOUTH, botH = HH - topH;
+              const mouthY = hy + 1;
+              // a tight head-shaped ellipse — trims the photo's background corners and collar
+              const ecx = 0, ecy = mouthY - topH + HH * 0.47, erx = HW * 0.44, ery = HH * 0.46;
+              if (flap > 0.6) {                          // the open mouth between the pieces
+                ctx.fillStyle = '#4a1518';
+                ctx.beginPath(); ctx.ellipse(0, mouthY - flap / 2, HW * 0.3, flap * 0.55 + 1.4, 0, 0, Math.PI * 2); ctx.fill();
+              }
+              // the jaw piece: full photo drawn once, clipped to (head ellipse ∩ below the lips)
+              ctx.save();
+              ctx.beginPath(); ctx.ellipse(ecx, ecy, erx, ery, 0, 0, Math.PI * 2); ctx.clip();
+              ctx.beginPath(); ctx.rect(-HW / 2 - 2, mouthY, HW + 4, botH + 4); ctx.clip();
+              ctx.drawImage(ianFace, -HW / 2, mouthY - topH, HW, HH);
+              ctx.restore();
+              // the top piece: same photo, clipped to (ellipse ∩ above the lips), lifted by the flap
+              ctx.save();
+              ctx.translate(0, -flap);
+              ctx.beginPath(); ctx.ellipse(ecx, ecy, erx, ery, 0, 0, Math.PI * 2); ctx.clip();
+              ctx.beginPath(); ctx.rect(-HW / 2 - 2, mouthY - topH - 2, HW + 4, topH + 2); ctx.clip();
+              ctx.drawImage(ianFace, -HW / 2, mouthY - topH, HW, HH);
+              ctx.restore();
+              // a tear, while he kneels (over the photo cheek)
+              if (kneel && !api.reduceMotion && Math.floor((frame || 0) / 18) % 3 === 0) {
+                ctx.fillStyle = '#8fd8ff';
+                ctx.beginPath(); ctx.arc(HW * 0.28, mouthY - topH * 0.4, 1.6, 0, Math.PI * 2); ctx.fill();
+              }
+              ctx.restore();
+              return;
+            }
+            if (flap > 0.6) {                                          // the open mouth between the halves
+              ctx.fillStyle = '#4a1518';
+              ctx.beginPath(); ctx.ellipse(0, hy + 0.6 - flap / 2, R * 0.62, flap * 0.55 + 1.4, 0, 0, Math.PI * 2); ctx.fill();
+            }
+            // the JAW half — chin wrapped in the full beard
+            ctx.fillStyle = skin;
+            ctx.beginPath(); ctx.arc(0, hy + 0.8, R, 0.12 * Math.PI, 0.88 * Math.PI); ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = beard; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.arc(0, hy + 0.8, R - 1, 0.16 * Math.PI, 0.84 * Math.PI); ctx.stroke();
+            // the DOME half — bald on top, short dark hair on the sides, lifted by the flap
+            ctx.save();
+            ctx.translate(0, hy - flap);
+            ctx.fillStyle = skin;
+            ctx.beginPath(); ctx.arc(-R - 1.4, -1.4, 2.1, 0, Math.PI * 2); ctx.fill();   // the ears ride the top half
+            ctx.beginPath(); ctx.arc(R + 1.4, -1.4, 2.1, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(0, 0.8, R, Math.PI, 2 * Math.PI); ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = hair; ctx.lineWidth = 2.4;               // side hair — the top stays bare
+            ctx.beginPath(); ctx.arc(0, 0.8, R - 0.8, Math.PI * 1.0, Math.PI * 1.24); ctx.stroke();
+            ctx.beginPath(); ctx.arc(0, 0.8, R - 0.8, Math.PI * 1.76, Math.PI * 2.0); ctx.stroke();
+            ctx.lineWidth = 1.7;                                        // strong brows
+            ctx.beginPath(); ctx.moveTo(-5.2, -3.2); ctx.lineTo(-1.6, -3.7); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(1.6, -3.7); ctx.lineTo(5.2, -3.2); ctx.stroke();
+            ctx.fillStyle = '#1a1a1a';                                  // the eyes
+            ctx.beginPath(); ctx.arc(-3.1, -1.5, 1.1, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(3.1, -1.5, 1.1, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#c99b72'; ctx.lineWidth = 1.2;           // a hint of nose
+            ctx.beginPath(); ctx.moveTo(0.2, -1); ctx.lineTo(-0.7, 0.2); ctx.stroke();
+            ctx.strokeStyle = beard; ctx.lineWidth = 2;                 // the mustache rides the lip edge
+            ctx.beginPath(); ctx.moveTo(-3.8, 0.6); ctx.quadraticCurveTo(0, 1.8, 3.8, 0.6); ctx.stroke();
+            ctx.restore();
             // a tear, while he kneels
             if (kneel && !api.reduceMotion && Math.floor((frame || 0) / 18) % 3 === 0) {
               ctx.fillStyle = '#8fd8ff';
-              ctx.beginPath(); ctx.arc(5, hy + 4, 1.6, 0, Math.PI * 2); ctx.fill();
+              ctx.beginPath(); ctx.arc(5.6, hy - 0.2, 1.6, 0, Math.PI * 2); ctx.fill();
             }
             ctx.restore();
           }
@@ -3087,7 +3292,7 @@
               }
               if (n) sparks.push({ x: e.x, y: e.y - 30, t: 18, color: '#8fd8ff', txt: 'SHATTER' });
             }
-            const pts = (e.type === 'dio' ? 500 : e.type === 'sidious' ? 400 : e.type === 'vader' ? 300 : e.type === 'witchking' ? 200 : e.type === 'ogre' ? 120 : e.type === 'troll' ? 40 : e.type === 'shaman' ? 35 : e.type === 'bomber' ? 35 : e.type === 'wraith' ? 30 : e.type === 'guard' ? 25 : e.type === 'trooper' ? 20 : 15) * mult * (e.elite === 2 ? 4 : e.elite ? 2 : 1);
+            const pts = ((e.type === 'dio' ? 500 : e.type === 'sidious' ? 400 : e.type === 'vader' ? 300 : e.type === 'witchking' ? 200 : e.type === 'ogre' ? 120 : e.type === 'troll' ? 40 : e.type === 'shaman' ? 35 : e.type === 'bomber' ? 35 : e.type === 'wraith' ? 30 : e.type === 'guard' ? 25 : e.type === 'trooper' ? 20 : 15) + bn.bounty) * mult * (e.elite === 2 ? 4 : e.elite ? 2 : 1);
             score += pts;
             addMeter(7);
             sparks.push({ x: e.x, y: e.y - 26, t: 20, color: '#ffd24d', txt: '+' + pts });
@@ -3095,6 +3300,7 @@
             if (e.type === 'witchking') {
               sfUnlock('witch_king');
               if (hardMode) sfUnlock('dark_hour');
+              if (!hardMode) openBoonMenu('THE WITCH-KING FALLS — CHOOSE A BOON');   // hard mode: no gifts, ever
               bossActive = false; nineDone = true; corpses = [];
               const gotTok = grantBossToken();   // every Witch-king kill earns an upgrade token
               banner = 'the Witch-king is no more'; bannerSub = '+1000' + (gotTok ? '  ·  token earned' : ''); bannerT = 160;
@@ -3156,6 +3362,15 @@
                 h.dashCharges = up.dashMax; h.rechargeT = 0;
                 sparks.push({ x: h.x, y: h.y - 48, t: 24, color: '#80deea', txt: 'SECOND WIND' });
               }
+              return;
+            }
+            if (bn.cheatDeath) {
+              // DEATHWARD: the boon takes the blow that would have ended things — once.
+              // Sits BELOW the Aegis on purpose: the shield refreshes every wave, this doesn't.
+              bn.cheatDeath = false; h.iframe = 60;
+              shake = Math.max(shake, 12); sfSfx.shieldBreak();
+              sparks.push({ x: h.x, y: h.y - 32, t: 34, color: '#ff8ab5', txt: '💖 DEATHWARD' });
+              knockback(h.x, h.y, 0, 130, 16);
               return;
             }
             downHero(h);
@@ -3312,6 +3527,9 @@
             repMask = 0;
             init();                 // replayMode: init loads the RECORDER's persistent state
             started = true; frame = 0;
+            // same post-init roll as live play — the feeder's opcode 12 picks (hardMode
+            // came from the recording's header, so hard replays open on the bane menu)
+            hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
             banner = '▶ ' + replay.name + ' — ' + replay.score;
             bannerSub = 'a legend, replayed · Q to leave'; bannerT = 150;
           }
@@ -3509,6 +3727,8 @@
             if (type === 'wolf')   { e.spd = 1.15; e.kr = 13; e.mode = 'stalk'; e.st = 70; }
             if (type === 'archer') { e.spd = 1.5; e.kr = 12; e.mode = 'approach'; e.st = 40; }
             if (type === 'troll')  { e.spd = Math.min(1.5, 0.8 + wave * 0.06); e.kr = 26; e.hp = 3; }
+            // MARKED (bane): the open-field horde walks faster — the scripted bosses keep their tuned pace
+            if (type === 'goblin' || type === 'wolf' || type === 'archer' || type === 'troll') e.spd *= bn.foeSpd;
             if (type === 'shaman') {
               // endless support: harmless to touch, 2 HP — it rides with the warband,
               // shrieking the pack into a frenzy and blinking clear of hunters
@@ -3903,8 +4123,8 @@
               try { localStorage.setItem('ilaird_sf_ending', 'spare'); } catch (_) {}
               ianFinale = { outcome: 'spare', phase: 'thanks', t: 0 };
               if (e) e.mode = 'rise';
-              ianSay('...thank you. truly.', 150, 55);
-              ianSay('then let it never end. fight on — as long as you like.', 175, 0);
+              ianSay('thank you for sparing me.', 150, 55);
+              ianSay('I will now throw everything I have at you.', 185, 0);
               sfSfx.summon();
             }
           }
@@ -3959,6 +4179,7 @@
             arrows = []; warns = []; dlg = []; dlgT = 0;
             bannerT = 230;
             breatherT = BREATHER;
+            if (!hardMode) openBoonMenu('MERCY REWARDED — A FINAL BOON');   // (a hard run re-sparing earns nothing more)
           }
           function drawIanChoice() {
             const c = ianChoice; c.t = (c.t || 0) + 1;
@@ -4821,6 +5042,7 @@
                   case 9: if (bossIntro) advanceBossIntro(); break;
                   case 10: if (ianChoice) chooseIan(e[2] ? 1 : 0); break;
                   case 11: if (e[2]) pend.cycleP2 = true; else pend.cycleP1 = true; break;
+                  case 12: if (boonMenu) pickBoon(e[2]); break;
                 }
               }
             }
@@ -4858,16 +5080,21 @@
               return;
             }
 
-            /* upgrade screen between waves — freeze the field, overlay the menu */
+            /* a paused overlay — a boon offer, or the upgrade shop between waves */
             if (paused) {
-              drawUpgradePanel();
+              if (boonMenu) drawBoonPanel();
+              else drawUpgradePanel();
               drawTrophyToasts();
-              hud.innerHTML = ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left';
+              hud.innerHTML = boonMenu
+                ? (boonMenu.bane ? 'a bane must be borne' : 'a boon is offered') + '<br>◀ ▶ choose · Z takes it'
+                : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left';
               return;
             }
 
             /* boss intro card / codec entrance — freeze the field, overlay the cutscene */
-            if (bossIntro) { drawBossIntro(); return; }
+            // the presentation clock still runs under the intro card (tick already does) —
+            // without this, Ian's talking flap freezes mid-plea on his card
+            if (bossIntro) { frame++; drawBossIntro(); return; }
 
             frame++;
 
@@ -5084,8 +5311,8 @@
               if (nearHero(ck.x, ck.y, 22)) {
                 coins.splice(i, 1);
                 mult = Math.min(6, mult + 1);
-                score += 40;
-                addMeter(5);
+                score += 40 + (bn.gold ? 25 : 0);
+                addMeter(bn.miser ? 0 : bn.gold ? 10 : 5);   // Miser's Curse starves the meter
                 sfSfx.coin();
                 sparks.push({ x: ck.x, y: ck.y, t: 20, color: '#ffd24d', txt: 'x' + mult });
               }
@@ -5259,7 +5486,7 @@
                     rangedHit(prey, up.minionDmg, dx / d, dy / d);
                     if (kills > k0) {                                            // a minion's kill still feeds the master
                       const boss = heroesLive().find(hh => hh.cls === 'necro');
-                      if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + SOUL_MKILL * (kills - k0));
+                      if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + (SOUL_MKILL + bn.soulBonus) * (kills - k0));
                     }
                   }
                   if (up.trueForms && m.src === 'archer' && m.shotCd <= 0 && d > 60 && d < 340) {
@@ -6273,7 +6500,7 @@
           // (and RNG consumption — there is none here) is identical to the old inline block.
           function moveHero(h, ix, iy) {
             // a frost-wolf chill drags the hero's acceleration and top speed (dash unaffected — the escape valve)
-            const chill = h.chillT > 0 ? 0.55 : 1;
+            const chill = (h.chillT > 0 ? 0.55 : 1) * bn.spd;   // Fleet Foot raises both accel and the cap
             if (h.chillT > 0) h.chillT--;
             h.vx = h.vx * 0.86 + ix * 0.62 * chill;
             h.vy = h.vy * 0.86 + iy * 0.62 * chill;
@@ -6473,7 +6700,8 @@
             }
             h.mana -= sp.cost;                            // committed — the incantation drinks up front
             h.swingReadyTick = tick + Math.round(up.zapMs * SIM_HZ / 1000);
-            h.castT = sp.cast; h.castMax = sp.cast; h.casting = key;
+            const castT = Math.max(4, Math.round(sp.cast * bn.castMul));   // Flicker Cast trims the wind-up
+            h.castT = castT; h.castMax = castT; h.casting = key;
             sfSfx.bolt();
           }
           // the wind-up completes: the spell resolves against the field as it is NOW
@@ -6494,9 +6722,9 @@
               return;
             }
             h.swingT = 10;
-            const slain = kills - kills0;                 // soul sparks: kills feed the well
+            const slain = kills - kills0;                 // soul sparks: kills feed the well (Siphon doubles them)
             if (slain > 0) {
-              const back = slain * 4 + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
+              const back = slain * (bn.sparks2 ? 8 : 4) + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
               h.mana = Math.min(up.manaMax, h.mana + back);
               sparks.push({ x: h.x, y: h.y - 34, t: 12, color: '#b39ddb', txt: '🔮+' + back });
             }
@@ -6601,7 +6829,7 @@
             enemies = enemies.filter(e => !e.dead);
             const slain = kills - kills0;
             if (slain > 0) {
-              const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0));
+              const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0) + bn.soulBonus);
               h.souls = Math.min(SOULS_MAX, h.souls + gain);
               sparks.push({ x: h.x, y: h.y - 36, t: 14, color: NECRO_COL, txt: '+' + gain + ' souls' });
               shake = Math.max(shake, Math.min(8, 2 + slain * 2));
@@ -6615,7 +6843,8 @@
                 if (d > RAISE_R || (dx / d) * fx + (dy / d) * fy < -0.3) continue;
                 husks.splice(i, 1);
                 h.souls -= up.raiseCost;
-                minions.push({ src: k.src, x: k.x, y: k.y, hp: up.minionHp + (k.elite ? 1 : 0), t: MINION_T,
+                minions.push({ src: k.src, x: k.x, y: k.y, hp: up.minionHp + (k.elite ? 1 : 0),
+                               t: Math.round(MINION_T * bn.minionMul),   // Restless: the loan runs longer
                                phase: 0, fx: 1, hitCd: 20, hurtCd: 30, shotCd: 60, elite: k.elite });
                 if (minions.length >= 4) sfUnlock('army_4');
                 blasts.push({ kind: 'frost', x: k.x, y: k.y, r: 0, t: 0, life: 16, rMax: 44 });
@@ -6884,8 +7113,24 @@
                 started = true; frame = 0;
                 banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
                 bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
+                // synchronous: the seed's first draws, live and in replay alike.
+                // Hard mode gets no gifts — the run opens on a BANE instead.
+                hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
                 bannerT = 90;
                 startSfMusic();
+              }
+              e.preventDefault();
+              return;
+            }
+            // a boon offer on the table — nothing else responds until one is taken
+            if (paused && boonMenu) {
+              const n = boonMenu.opts.length;
+              if (['ArrowLeft', 'a', 'A'].includes(e.key))       { boonMenu.sel = (boonMenu.sel + n - 1) % n; sfSfx.killE(); }
+              else if (['ArrowRight', 'd', 'D'].includes(e.key)) { boonMenu.sel = (boonMenu.sel + 1) % n; sfSfx.killE(); }
+              else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) {
+                // stamped tick+1 like every between-tick UI event (see the shop below)
+                recPush([tick + 1, 12, boonMenu.opts[boonMenu.sel].id]);
+                pickBoon(boonMenu.opts[boonMenu.sel].id);
               }
               e.preventDefault();
               return;
@@ -6988,6 +7233,7 @@
               banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
               bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
               bannerT = 90; startSfMusic();
+              hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
             }
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
           }

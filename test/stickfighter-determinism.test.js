@@ -223,6 +223,9 @@ async function runGame({ seed, frames, frameMs = 16, reduceMotion = false }) {
   // Held-key input only: it is cadence-independent, so cross-refresh-rate runs see the
   // identical per-tick input surface (edge-triggered events would need tick-stamping).
   window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter' }));
+  // the run opens on the boon chooser (opened synchronously at begin) — take the first
+  // offer. Same wall-time-zero slot as Enter, so it's cadence-independent like held keys.
+  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z' }));
   window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight' }));
 
   const pumps = Math.round((frames * 16) / frameMs); // same wall-clock span at any cadence
