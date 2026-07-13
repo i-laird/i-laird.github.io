@@ -120,14 +120,14 @@
               score, mult, wave, alive, started, frame, keys, rafId,
               freezeT, banner, bannerSub, bannerT, deadT, shake, newBest,
               stone, stoneCd, stoneSeen,
-              meter, meterPrompted, allies, bolts, arrows, kills,
+              meter, meterPrompted, allies, bolts, arrows, kegs, kills,
               nineActive, nineDone, wraithsLeft, waveQuota, breatherT,
               corpses, bossActive, bossRiseT, bossRiseX, bossRiseY,
               awaitExit, swActive, swState, swReadyT, swFadeT, swTroopersLeft, swStars,
               saberPickup, vaderActive, up, paused, upMenu, tokens, swFlash,
               sidiousActive, sidiousCue, sidiousIntroT, ltnBolts, ltnFlash, dlg, dlgT, sidFinale,
               jojoActive, jojoCue, jojoBg, dioStopT, dioStopFx, roadRoller, dioFinale, bossIntro, playerStand,
-              ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned;
+              ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned, eliteSeen, dreadSeen, shamanSeen, bomberSeen;
           // online leaderboard ("hall of legends"): lbState drives the death screen
           //   off=worker down/unscored · loading · enter=typing a name · submitting · view/done=show the board
           // lbScores = the all-time board; lbDaily = today's daily-challenge board (null when
@@ -184,6 +184,9 @@
           const CAST_T    = 14;    // ticks the caster's bolt charges before it fires (the wind-up)
           const NOVA_R    = 130;   // caster auto frost nova (smaller than the powerup's FROST_R)
           const FIREB_R   = 120;   // caster auto fireball (smaller than the powerup's FIRE_R)
+          const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
+          const KEG_R     = 42;    // the bombardier's powder-keg blast radius
+          const KEG_AIR   = 62;    // ticks a lobbed keg hangs in the air (the dodge window)
           let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, 2);
           let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, 2);
           let introRow = 0;   // intro chooser: 0 = mode row, 1 = P1 class, 2 = P2 class (2P only)
@@ -222,10 +225,10 @@
             player = { x: GW / 2, y: GH / 2, vx: 0, vy: 0, phase: 0,
                        fx: 1, fy: 0, dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0, shield: false,
                        swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-                       cls: CLASSES[classSel], novaCd: 0, fireCd: 0, castT: 0 };
+                       cls: CLASSES[classSel], novaCd: 0, fireCd: 0, castT: 0, chillT: 0 };
             p2 = null;
             enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
-            bolts = []; arrows = [];
+            bolts = []; arrows = []; kegs = [];
             score = 0; mult = 1; wave = 1; alive = true; started = false; frame = 0;
             keys = {}; freezeT = 0; banner = ''; bannerSub = ''; bannerT = 0;
             deadT = 0; shake = 0; newBest = false;
@@ -244,7 +247,7 @@
             playerStand = 0;
             bossIntro = null;
             ianCue = 0; ianActive = false; ianChoice = null; ianFinale = null; mournful = false; endless = false; ianBg = [];
-            wraithLunged = false; ogreSpawned = false;
+            wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
             lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
             cheated = false; lbTicks = 0; lbKills = 0;
             up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
@@ -270,9 +273,12 @@
               tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
               runMaxwave = parseInt(localStorage.getItem('ilaird_sf_maxwave') || '0', 10) || 0;
               applySavedUpgrades();            // unlocked upgrades are permanent — re-apply across runs
-              // arm the recorder: the header is every piece of persistent state the sim just read
+              // arm the recorder: the header is every piece of persistent state the sim just
+              // read. `v` is the SIM-BALANCE version — bump it on ANY gameplay-affecting
+              // change (damage, speeds, AI, economy), or old replays re-simulate under new
+              // rules and silently diverge from their recorded scores.
               recEv = []; recLastM = -1; recOverflow = false;
-              recHdr = { v: 1, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop,
+              recHdr = { v: 2, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop,
                          up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
             }
             player.dashCharges = up.dashMax; player.rechargeT = 0;
@@ -289,7 +295,7 @@
                    dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
                    shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
                    swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-                   cls: CLASSES[classSel2], novaCd: 0, fireCd: 0, castT: 0 };
+                   cls: CLASSES[classSel2], novaCd: 0, fireCd: 0, castT: 0, chillT: 0 };
           }
           // each hero arms independently — the blade (Excalibur / lightsaber) lives on the hero,
           // not the run. helpers for the scripted interlude transitions that arm/disarm everyone.
@@ -319,6 +325,15 @@
             if (!player.down) return player;
             if (p2 && !p2.down) return p2;
             return player;                 // both down — the run is ending anyway
+          }
+          // the goblin shaman's ritual circle: grunts inside are hastened 1.3×. ≤2 shamans
+          // afield keeps this scan trivial; a frozen shaman's circle gutters out.
+          function shamanHaste(e) {
+            for (const s of enemies) {
+              if (s.type === 'shaman' && !s.dead && !(s.frozen > 0) &&
+                  Math.hypot(s.x - e.x, s.y - e.y) < SHAMAN_R) return 1.3;
+            }
+            return 1;
           }
           // who a horde grunt chases. The scripted boss/set-piece foes lock onto bossTarget()
           // (P1, or the survivor); the open-field horde splits aggro to the nearest standing hero —
@@ -394,13 +409,13 @@
             { id: 'gandalf',     tree: 'ALLIES', name: 'Summon Gandalf',  desc: 'press 1 — staff bolts',              icon: '🧙', req: null,         apply: () => { up.champs.gandalf = true; } },
             { id: 'luke',        tree: 'ALLIES', name: 'Summon Luke',     desc: 'press 2 — a green saber',            icon: '⚔️', req: 'gandalf',    apply: () => { up.champs.luke = true; } },
             { id: 'jotaro',      tree: 'ALLIES', name: 'Summon Jotaro',   desc: 'press 3 — ZA WARUDO',                icon: '👊', req: 'luke',       apply: () => { up.champs.jotaro = true; } },
-            { id: 'champ_long',  tree: 'ALLIES', name: 'Lasting Allies',  desc: 'allies fight 60% longer',            icon: '⏳', req: 'gandalf',    apply: () => { up.champMul = 1.6; } },
-            { id: 'champ_long2', tree: 'ALLIES', name: 'Eternal Allies',  desc: 'allies fight far longer still',      icon: '♾️', req: 'champ_long', apply: () => { up.champMul = 2.4; } },
+            { id: 'champ_long',  tree: 'ALLIES', name: 'Lasting Allies',  desc: 'allies fight 40% longer',            icon: '⏳', req: 'gandalf',    apply: () => { up.champMul = 1.4; } },
+            { id: 'champ_long2', tree: 'ALLIES', name: 'Eternal Allies',  desc: 'allies fight far longer still',      icon: '♾️', req: 'champ_long', apply: () => { up.champMul = 1.8; } },
             { id: 'champ_fast',  tree: 'ALLIES', name: 'Quick Summon',    desc: 'meter charges 50% faster',           icon: '⏩', req: 'gandalf',    apply: () => { up.meterMul = 1.5; } },
             { id: 'champ_cost',  tree: 'ALLIES', name: 'Cheap Summon',    desc: 'allies cost less meter to call',     icon: '🪙', req: 'gandalf',    apply: () => { up.summonCost = Math.round(METER_MAX * 0.7); } },
             { id: 'ally_taunt',  tree: 'ALLIES', name: 'Vanguard',        desc: 'nearby foes turn on your allies',    icon: '🚩', req: 'gandalf',    apply: () => { up.vanguard = true; } },
             { id: 'ally_medic',  tree: 'ALLIES', name: 'Medic',           desc: 'revive twice as fast · longer mercy', icon: '⛑️', req: null, coopOnly: true, apply: () => { up.medic = true; } },
-            { id: 'champ_master',tree: 'ALLIES', name: 'The Fellowship',  desc: 'allies linger · charge fast · cheap', icon: '💍', req: 'champ_long2', cost: 3, apply: () => { up.champMul = 4; up.meterMul = 2.2; up.summonCost = Math.round(METER_MAX * 0.5); } },
+            { id: 'champ_master',tree: 'ALLIES', name: 'The Fellowship',  desc: 'allies linger · charge fast · cheap', icon: '💍', req: 'champ_long2', cost: 3, apply: () => { up.champMul = 2.4; up.meterMul = 2.2; up.summonCost = Math.round(METER_MAX * 0.5); } },
             { id: 'swing_fast',  tree: 'BLADE',  cls: 'melee',  name: 'Swift Blade',     desc: 'swing more often',                   icon: '🗡️', req: null,         apply: () => { up.swingMs = 440; } },
             { id: 'swing_fast2', tree: 'BLADE',  cls: 'melee',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = 300; } },
             { id: 'swing_wide',  tree: 'BLADE',  cls: 'melee',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = 150; } },
@@ -475,7 +490,9 @@
           // the meter banks up to one charge per unlocked ally, so you can save up and summon several at once
           function alliesUnlocked() { return (up.champs.gandalf ? 1 : 0) + (up.champs.luke ? 1 : 0) + (up.champs.jotaro ? 1 : 0); }
           function meterCap() { return METER_MAX * Math.max(1, alliesUnlocked()); }
-          function addMeter(n) { meter = Math.min(meterCap(), meter + n * up.meterMul); }
+          // while a champion is afield the meter charges at HALF rate — the champions carry
+          // the glory, so a summon's own chaos can't chain into the next summon forever
+          function addMeter(n) { meter = Math.min(meterCap(), meter + n * up.meterMul * (allies.length ? 0.5 : 1)); }
           function champUnlocked() { return up.champs.gandalf || up.champs.luke || up.champs.jotaro; }
           // boss duels are solo — no champions while a named boss is on the field (the trooper squad is fair game)
           function champsBanned() { return nineActive || bossActive || vaderActive || sidiousActive || jojoActive || sidFinale || dioFinale || ianActive || mournful; }
@@ -509,7 +526,8 @@
             ctx.font = 'bold 11px Tahoma,Arial';
             ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
             ctx.fillStyle = banned ? '#e57373' : ready ? '#caffa0' : '#9fc4e8';
-            ctx.fillText(banned ? '🧙 ALLIES SEALED' : ready ? '🧙 ALLY READY' : '🧙 SUMMON CHARGING', x, y - 6);
+            ctx.fillText(banned ? '🧙 ALLIES SEALED' : ready ? '🧙 ALLY READY'
+                       : allies.length ? '🧙 SLOW CHARGE · ally afield' : '🧙 SUMMON CHARGING', x, y - 6);
             ctx.shadowBlur = 0;
             for (let i = 0; i < cap; i++) {
               const sx = x + i * (segW + segGap);
@@ -723,6 +741,95 @@
             ctx.beginPath(); ctx.arc(10, -27, 5.5, 0, Math.PI * 2); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(6, -31); ctx.lineTo(2, -38); ctx.lineTo(9, -32); ctx.closePath(); ctx.fill();
             ctx.beginPath(); ctx.moveTo(13, -31); ctx.lineTo(17, -38); ctx.lineTo(10, -32); ctx.closePath(); ctx.fill();
+            // the shield-bearer's buckler on its lead arm — gone once its blocks are spent;
+            // the warlord carries a taller gold-bossed tower shield instead
+            if (e.elite && (e.hp || 0) >= 2) {
+              if (e.elite === 2) {
+                ctx.fillStyle = '#aab2bb'; ctx.strokeStyle = '#8a6d1f'; ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(11, -22); ctx.lineTo(18, -22); ctx.lineTo(18, -4); ctx.lineTo(14.5, 0); ctx.lineTo(11, -4);
+                ctx.closePath(); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = '#c9a227';
+                ctx.beginPath(); ctx.arc(14.5, -12, 2.4, 0, Math.PI * 2); ctx.fill();
+              } else {
+                ctx.fillStyle = '#aab2bb'; ctx.strokeStyle = '#5d6d7e'; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.arc(14, -11, 6.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = '#5d6d7e';
+                ctx.beginPath(); ctx.arc(14, -11, 2, 0, Math.PI * 2); ctx.fill();
+              }
+            }
+            ctx.restore();
+          }
+
+          function drawShaman(e, col) {
+            ctx.save(); ctx.translate(e.x, e.y);
+            // the ritual circle IS the haste zone — telegraphed exactly (gutters out while iced)
+            if (!(e.frozen > 0)) {
+              const a = api.reduceMotion ? 0.3 : 0.2 + 0.12 * Math.sin(frame * 0.07);
+              ctx.strokeStyle = 'rgba(140,220,120,' + a.toFixed(2) + ')'; ctx.lineWidth = 2;
+              ctx.setLineDash([6, 8]);
+              ctx.beginPath(); ctx.arc(0, -8, SHAMAN_R, 0, Math.PI * 2); ctx.stroke();
+              ctx.setLineDash([]);
+            }
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.beginPath(); ctx.ellipse(0, 3, 9, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+            const dir = (player.x - e.x) >= 0 ? 1 : -1;
+            ctx.scale(dir, 1);
+            ctx.strokeStyle = col; ctx.fillStyle = col;
+            ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            // a ragged cowled robe, swaying with the chant
+            const sway = Math.sin(e.phase) * 1.5;
+            ctx.beginPath();
+            ctx.moveTo(-8 + sway * 0.4, 0); ctx.lineTo(-3, -24); ctx.lineTo(5, -28); ctx.lineTo(8 + sway * 0.4, 0);
+            ctx.closePath(); ctx.fill();
+            // hooded goblin head — the kin ears poke through the cowl
+            ctx.beginPath(); ctx.arc(6, -30, 5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(3, -34); ctx.lineTo(0, -40); ctx.lineTo(6, -34); ctx.closePath(); ctx.fill();
+            // gnarled staff crowned with the chant-light
+            ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 2.5;
+            ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(14, -34 + sway); ctx.stroke();
+            const glow = api.reduceMotion ? 0.7 : 0.5 + 0.35 * Math.sin(frame * 0.11);
+            ctx.fillStyle = '#a5e88a';
+            ctx.shadowColor = '#8fdc78'; ctx.shadowBlur = 8 + glow * 8;
+            ctx.beginPath(); ctx.arc(14, -37 + sway, 3.2 + glow, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.restore();
+          }
+
+          function drawBomber(e, col) {
+            const s = Math.sin(e.phase);
+            const dir = (player.x - e.x) >= 0 ? 1 : -1;
+            ctx.save(); ctx.translate(e.x, e.y);
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.beginPath(); ctx.ellipse(0, 3, 10, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.scale(dir, 1);
+            ctx.strokeStyle = col; ctx.fillStyle = col;
+            ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            // goblin kin: scurrying legs + hunched spine, bent under the powder load
+            ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(-6, 4 + s * 4); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(6, 4 - s * 4); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, -8); ctx.quadraticCurveTo(0, -16, 6, -20); ctx.stroke();
+            // head with the pointy ears
+            ctx.beginPath(); ctx.arc(9, -24, 5, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(6, -28); ctx.lineTo(2, -34); ctx.lineTo(8, -29); ctx.closePath(); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(12, -28); ctx.lineTo(15, -34); ctx.lineTo(9, -29); ctx.closePath(); ctx.fill();
+            // the keg on its back — hoisted overhead while winding up the throw
+            const up = e.mode === 'wind' ? 14 : 0;
+            ctx.save();
+            ctx.translate(-4, -26 - up); ctx.rotate(e.mode === 'wind' ? -0.2 : 0.35);
+            ctx.fillStyle = '#6b4a2b'; ctx.fillRect(-5, -7, 10, 14);
+            ctx.strokeStyle = '#3e2a17'; ctx.lineWidth = 1.5;
+            ctx.strokeRect(-5, -7, 10, 14);
+            ctx.beginPath(); ctx.moveTo(-5, -2); ctx.lineTo(5, -2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(-5, 3); ctx.lineTo(5, 3); ctx.stroke();
+            if (e.mode === 'wind' && (api.reduceMotion || Math.floor(frame / 3) % 2 === 0)) {
+              ctx.fillStyle = '#ffd24d';
+              ctx.beginPath(); ctx.arc(0, -10, 2.2, 0, Math.PI * 2); ctx.fill();   // fuse lit — it's coming
+            }
+            ctx.restore();
+            // carrying arms up to the keg
+            ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+            ctx.beginPath(); ctx.moveTo(4, -18); ctx.lineTo(-2, -24 - up); ctx.stroke();
             ctx.restore();
           }
 
@@ -730,6 +837,13 @@
             const s = Math.sin(e.phase);
             const dir = (e.mode === 'lunge' ? e.lx : (player.x - e.x)) >= 0 ? 1 : -1;
             ctx.save(); ctx.translate(e.x, e.y);
+            // the dire frost wolf's chill aura — the icy ring IS the danger zone, telegraphed
+            if (e.elite === 2) {
+              ctx.strokeStyle = 'rgba(180,225,255,0.28)'; ctx.lineWidth = 2;
+              ctx.setLineDash([5, 7]);
+              ctx.beginPath(); ctx.arc(0, -8, 90, 0, Math.PI * 2); ctx.stroke();
+              ctx.setLineDash([]);
+            }
             ctx.fillStyle = 'rgba(0,0,0,0.25)';
             ctx.beginPath(); ctx.ellipse(0, 3, 13, 3.5, 0, 0, Math.PI * 2); ctx.fill();
             ctx.scale(dir, 1);
@@ -1882,6 +1996,8 @@
           function drawEnemy(e) {
             const col = enemyColor(e);
             if (e.type === 'goblin') drawGoblin(e, col);
+            else if (e.type === 'shaman') drawShaman(e, col);
+            else if (e.type === 'bomber') drawBomber(e, col);
             else if (e.type === 'ogre') drawOgre(e, col);
             else if (e.type === 'wolf') drawWolf(e, col);
             else if (e.type === 'archer') drawArcher(e, col);
@@ -1896,7 +2012,9 @@
             else {
               const lean = clamp((e.vx || 0) * 0.05, -0.35, 0.35);
               drawTroll(e, col, lean);
-              if (e.hp < 3) {
+              // hearts only for a LIVING wounded troll — a corpse can linger one frame before
+              // the dead-filter sweeps it, and overkill damage can leave hp negative
+              if (!e.dead && e.hp > 0 && e.hp < (e.elite === 2 ? 8 : e.elite ? 5 : 3)) {
                 ctx.fillStyle = '#ffd24d'; ctx.font = 'bold 11px Tahoma,Arial'; ctx.textAlign = 'center';
                 ctx.fillText('♥'.repeat(e.hp), e.x, e.y - 78); ctx.textAlign = 'left';
               }
@@ -2204,7 +2322,7 @@
           function drawHero(h, baseColor) {
             if (h.down) { drawDownedHero(h); return; }
             const lean = clamp(h.vx * 0.04, -0.3, 0.3);
-            const col = h.dashT > 0 ? '#80deea' : baseColor;
+            const col = h.dashT > 0 ? '#80deea' : h.chillT > 0 ? '#a8d8e8' : baseColor;
             stickFigure(h.x, h.y, h.phase, col, 1, 1, lean, h.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
             // the Aegis: a soft hex-bubble around the hero while it holds; a bright flash as it breaks
             if (h.shield || h.iframe > 0) {
@@ -2284,7 +2402,7 @@
               }
               if (n) sparks.push({ x: e.x, y: e.y - 30, t: 18, color: '#8fd8ff', txt: 'SHATTER' });
             }
-            const pts = (e.type === 'dio' ? 500 : e.type === 'sidious' ? 400 : e.type === 'vader' ? 300 : e.type === 'witchking' ? 200 : e.type === 'ogre' ? 120 : e.type === 'troll' ? 40 : e.type === 'wraith' ? 30 : e.type === 'guard' ? 25 : e.type === 'trooper' ? 20 : 15) * mult;
+            const pts = (e.type === 'dio' ? 500 : e.type === 'sidious' ? 400 : e.type === 'vader' ? 300 : e.type === 'witchking' ? 200 : e.type === 'ogre' ? 120 : e.type === 'troll' ? 40 : e.type === 'shaman' ? 35 : e.type === 'bomber' ? 35 : e.type === 'wraith' ? 30 : e.type === 'guard' ? 25 : e.type === 'trooper' ? 20 : 15) * mult * (e.elite === 2 ? 4 : e.elite ? 2 : 1);
             score += pts;
             addMeter(7);
             sparks.push({ x: e.x, y: e.y - 26, t: 20, color: '#ffd24d', txt: '+' + pts });
@@ -2376,7 +2494,7 @@
           }
           function reviveHero(h) {
             h.down = false; h.reviveT = 0; h.iframe = up.medic ? 120 : 70;   // up again, with a beat of mercy invulnerability (longer with a Medic)
-            h.shield = up.shield; h.vx = 0; h.vy = 0;
+            h.shield = up.shield; h.vx = 0; h.vy = 0; h.chillT = 0;
             sfSfx.summon();
             sparks.push({ x: h.x, y: h.y - 32, t: 34, color: P2_COL, txt: 'REVIVED!' });
             banner = (h === player ? 'PLAYER 1' : 'PLAYER 2') + ' REVIVED'; bannerSub = ''; bannerT = 70;
@@ -2407,7 +2525,7 @@
           }
           function lbBegin() {
             lbScore = score; lbWave = wave; lbRank = -1; lbName = ''; lbScores = null; lbDaily = null;
-            watchSel = null;
+            watchSel = null; watchErr = '';
             const base = lbBase();
             if (cheated) { lbState = 'off'; return; }   // warp/grant cheats: a fine playground, not a ranked run
             if (!base || score <= 0) { lbState = 'off'; return; }
@@ -2470,6 +2588,7 @@
 
           /* ── watching a legend: fetch a stored replay and re-simulate it locally ── */
           let watchSel = null;    // { list: [{entry, daily}], idx } — the death-screen picker
+          let watchErr = '';      // sticky failure notice (the death hud repaints every tick)
           function watchableEntries() {
             const list = [];
             for (const e of lbScores || []) if (e && typeof e.rp === 'string') list.push({ entry: e, daily: false });
@@ -2484,10 +2603,12 @@
               .then(r => r.ok ? r.json() : Promise.reject(r.status))
               .then(d => {
                 const rd = d && d.replay;
-                if (!rd || rd.v !== 1 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+                // v must match the CURRENT sim-balance version — an older recording would
+                // re-simulate under new rules and play back a different run than it claims
+                if (!rd || rd.v !== 2 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
                 startReplay(rd, item.entry);
               })
-              .catch(() => { hud.innerHTML = 'replay unavailable · press R to play'; });
+              .catch(() => { watchSel = null; watchErr = 'replay unavailable — recorded on an older build, or expired'; });
           }
           function startReplay(d, entry) {
             // impersonate the recorded run's setup; the watcher's own selections return on exit
@@ -2650,6 +2771,19 @@
           }
 
           function rollType() {
+            // the goblin SHAMAN (endless, wave 8+): a rare support piece — it never attacks,
+            // it makes everything else worse (see the shaman branch + shamanHaste). At most
+            // two afield (counting pending warns), so it stays a priority target, not a wall.
+            if (endless && wave >= 8 &&
+                enemies.filter(s => s.type === 'shaman' && !s.dead).length +
+                warns.filter(w => w.type === 'shaman').length < 2 &&
+                rnd() < 0.08) return 'shaman';
+            // the goblin BOMBARDIER (endless, wave 10+): long-range area denial — its kegs
+            // make the floor itself unsafe (and wound the horde too: bait the shot). ≤2 afield.
+            if (endless && wave >= 10 &&
+                enemies.filter(s => s.type === 'bomber' && !s.dead).length +
+                warns.filter(w => w.type === 'bomber').length < 2 &&
+                rnd() < 0.07) return 'bomber';
             const r = rnd();
             if (wave >= 4 && r < 0.15) return 'troll';
             if (wave >= 3 && r < 0.35) return 'archer';
@@ -2657,13 +2791,57 @@
             return 'goblin';
           }
 
-          function makeEnemy(type, x, y) {
+          // endless-only ELITE variants — one harder cousin per base sprite, phased in by
+          // depth (the roll's odds grow with wave). Returns a TIER: 0 none · 1 elite
+          // (double points) · 2 DREAD (rare, wave 9+, quadruple points).
+          //   tier 1: shield-bearer goblin (blocks one hit) · frost wolf (chills on a close
+          //           pass) · volley archer (three-arrow fan) · bull troll (5 HP, enrages)
+          //   tier 2: goblin warlord (tower shield blocks two, faster) · dire frost wolf
+          //           (the chill is a 90px AURA) · deadeye (five faster arrows) · dread
+          //           troll (8 HP, roars into a harder enrage)
+          function rollElite() {
+            if (!endless) return 0;
+            if (rnd() >= Math.min(0.5, 0.06 * (wave - 5))) return 0;
+            // a rolled elite may ascend to the dread tier — rarer, and only in deep waves
+            return wave >= 9 && rnd() < Math.min(0.25, 0.04 * (wave - 8)) ? 2 : 1;
+          }
+
+          function makeEnemy(type, x, y, elite) {
             const e = { type, x, y, vx: 0, vy: 0, phase: rnd() * Math.PI * 2,
                         grz: 0, stun: 0 };
             if (type === 'goblin') { e.spd = Math.min(2.6, 1.35 + wave * 0.15); e.kr = 14; }
             if (type === 'wolf')   { e.spd = 1.15; e.kr = 13; e.mode = 'stalk'; e.st = 70; }
             if (type === 'archer') { e.spd = 1.5; e.kr = 12; e.mode = 'approach'; e.st = 40; }
             if (type === 'troll')  { e.spd = Math.min(1.5, 0.8 + wave * 0.06); e.kr = 26; e.hp = 3; }
+            if (type === 'shaman') {
+              // endless support: harmless to touch, shy, 2 HP — kill it first or fight a hasted horde
+              e.spd = 1.1; e.kr = 0; e.hp = 2; e.st = 90;
+              if (!shamanSeen) {
+                shamanSeen = true;
+                banner = 'a goblin SHAMAN chants at the edge'; bannerSub = 'break the ritual circle first'; bannerT = 130;
+              }
+            }
+            if (type === 'bomber') {
+              // endless artillery: harmless to touch, shy, 2 HP — but its kegs shell the floor
+              e.spd = 1.2; e.kr = 0; e.hp = 2; e.mode = 'roam'; e.st = 120;
+              if (!bomberSeen) {
+                bomberSeen = true;
+                banner = 'a goblin BOMBARDIER wheels its kegs in'; bannerSub = 'the red ring is the landing zone — its own horde is not spared'; bannerT = 140;
+              }
+            }
+            // endless elites (see rollElite): tinted, one behavior tweak per tier, 2×/4× points
+            if (elite && (type === 'goblin' || type === 'wolf' || type === 'archer' || type === 'troll')) {
+              e.elite = elite;                                // 1 = elite · 2 = dread
+              if (type === 'goblin') { e.hp = elite === 2 ? 3 : 2; if (elite === 2) e.spd *= 1.25; }  // buckler eats one blow; the warlord's tower shield eats two
+              if (type === 'troll') e.hp = elite === 2 ? 8 : 5;   // bull troll / dread troll — both enrage low
+              if (elite === 2 && !dreadSeen) {
+                dreadSeen = true;
+                banner = 'a DREAD elite takes the field'; bannerSub = 'the endless dark has champions of its own'; bannerT = 140;
+              } else if (!eliteSeen) {
+                eliteSeen = true;
+                banner = 'the endless dark breeds ELITES'; bannerSub = 'tinted foes fight back harder'; bannerT = 130;
+              }
+            }
             if (type === 'ogre') {
               // a horde mini-boss: lumbers, telegraphs, then bull-rushes straight across the field
               e.spd = 1.25; e.kr = 30; e.hp = 8; e.maxhp = 8; e.mode = 'stalk'; e.st = 80; e.lx = 0; e.ly = 0;
@@ -3166,12 +3344,64 @@
 
             if (e.type === 'goblin') {
               // steering with momentum so they swing wide on sharp turns
-              e.vx += dx / d * 0.085; e.vy += dy / d * 0.085;
+              const hz = shamanHaste(e);
+              e.vx += dx / d * 0.085 * hz; e.vy += dy / d * 0.085 * hz;
               const sp = Math.hypot(e.vx, e.vy);
-              if (sp > e.spd) { e.vx = e.vx / sp * e.spd; e.vy = e.vy / sp * e.spd; }
+              if (sp > e.spd * hz) { e.vx = e.vx / sp * e.spd * hz; e.vy = e.vy / sp * e.spd * hz; }
               e.x += e.vx; e.y += e.vy; e.phase += 0.22;
+            } else if (e.type === 'shaman') {
+              // the shaman never attacks — it keeps its distance and channels: grunts inside
+              // its ritual circle are hastened (shamanHaste), and each beat it knits one
+              // wounded troll within the circle back together, heart by heart
+              e.st--;
+              if (d < 240) { e.x -= dx / d * e.spd; e.y -= dy / d * e.spd; }   // shy — it backs away
+              e.phase += 0.07;
+              if (e.st <= 0) {
+                e.st = 90;
+                for (const t of enemies) {
+                  if (t.type !== 'troll' || t.dead || !(t.hp > 0)) continue;
+                  const mx = t.elite === 2 ? 8 : t.elite ? 5 : 3;
+                  if (t.hp < mx && Math.hypot(t.x - e.x, t.y - e.y) < SHAMAN_R) {
+                    t.hp++;
+                    sparks.push({ x: t.x, y: t.y - 62, t: 22, color: '#8fdc78', txt: '✚' });
+                    break;                                   // one heart per beat
+                  }
+                }
+              }
+            } else if (e.type === 'bomber') {
+              // the bombardier: long-range artillery. Roams far out, winds up (a visible
+              // fuse tell), then lobs a powder keg at the target's current spot with a
+              // little seeded scatter — the shrinking red ring is the dodge. After firing
+              // it scurries and re-sights. It never touches you; the floor does.
+              e.st--;
+              if (e.mode === 'roam') {
+                if (d < 300) { e.x -= dx / d * e.spd; e.y -= dy / d * e.spd; e.phase += 0.14; }
+                else if (d > 430) { e.x += dx / d * e.spd * 0.7; e.y += dy / d * e.spd * 0.7; e.phase += 0.1; }
+                if (e.st <= 0 && d < 520) { e.mode = 'wind'; e.st = 34; }
+                else if (e.st <= 0) e.st = 30;
+              } else if (e.mode === 'wind') {
+                if (e.st <= 0) {
+                  const sx = clamp(tgt.x + (rnd() - 0.5) * 70, 20, GW - 20);
+                  const sy = clamp(tgt.y + (rnd() - 0.5) * 70, 46, GH - 12);
+                  kegs.push({ sx: e.x, sy: e.y - 22, tx: sx, ty: sy, t: 0, T: KEG_AIR });
+                  sfSfx.lunge();
+                  e.mode = 'cool'; e.st = 150 + rnd() * 80;
+                }
+              } else { // cool — scurry off the counter-charge, then re-sight
+                if (d < 260) { e.x -= dx / d * e.spd; e.y -= dy / d * e.spd; e.phase += 0.12; }
+                if (e.st <= 0) { e.mode = 'roam'; e.st = 40; }
+              }
             } else if (e.type === 'troll') {
-              e.x += dx / d * e.spd; e.y += dy / d * e.spd; e.phase += 0.1;
+              // the bull troll enrages below half — faster feet, faster club; the dread
+              // troll enrages sooner, harder, and ROARS the moment it turns
+              const raging = e.elite && e.hp <= (e.elite === 2 ? 3 : 2);
+              if (raging && e.elite === 2 && !e.roared) {
+                e.roared = true;
+                sparks.push({ x: e.x, y: e.y - 66, t: 26, color: '#ff7043', txt: 'ROAR' });
+                shake = Math.max(shake, 8); sfSfx.charge();
+              }
+              const sp = (raging ? e.spd * (e.elite === 2 ? 1.9 : 1.7) : e.spd) * shamanHaste(e);
+              e.x += dx / d * sp; e.y += dy / d * sp; e.phase += (raging ? 0.17 : 0.1);
             } else if (e.type === 'ogre') {
               e.st--;
               if (e.mode === 'stalk') {
@@ -3453,13 +3683,27 @@
               // skeleton archer: keep range, telegraph, loose an arrow
               e.st--;
               if (e.mode === 'approach') {
-                if (d > 270) { e.x += dx / d * e.spd; e.y += dy / d * e.spd; e.phase += 0.16; }
-                else if (d < 180) { e.x -= dx / d * e.spd * 0.8; e.y -= dy / d * e.spd * 0.8; e.phase += 0.14; }
+                const hz = shamanHaste(e);
+                if (d > 270) { e.x += dx / d * e.spd * hz; e.y += dy / d * e.spd * hz; e.phase += 0.16; }
+                else if (d < 180) { e.x -= dx / d * e.spd * 0.8 * hz; e.y -= dy / d * e.spd * 0.8 * hz; e.phase += 0.14; }
                 if (e.st <= 0 && d < 320) { e.mode = 'aim'; e.st = 26; }
                 else if (e.st <= 0) e.st = 20;
               } else if (e.mode === 'aim') {
                 if (e.st <= 0) {
-                  arrows.push({ x: e.x, y: e.y - 18, vx: dx / d * 4.6, vy: dy / d * 4.6, t: 240 });
+                  if (e.elite) {
+                    // volley archer: a three-arrow fan; the DEADEYE looses five, faster —
+                    // the gaps are the dodge either way
+                    const base = Math.atan2(dy, dx);
+                    const wide = e.elite === 2 ? 2 : 1;
+                    const spd = e.elite === 2 ? 5.4 : 4.6;
+                    const step = e.elite === 2 ? 0.14 : 0.17;
+                    for (let vi = -wide; vi <= wide; vi++) {
+                      const a = base + vi * step;
+                      arrows.push({ x: e.x, y: e.y - 18, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, t: 240 });
+                    }
+                  } else {
+                    arrows.push({ x: e.x, y: e.y - 18, vx: dx / d * 4.6, vy: dy / d * 4.6, t: 240 });
+                  }
                   sfSfx.arrow();
                   e.mode = 'cool'; e.st = 110 + rnd() * 60;
                 }
@@ -3470,7 +3714,8 @@
             } else { // wolf: stalk → aim (telegraph) → lunge → rest
               e.st--;
               if (e.mode === 'stalk') {
-                e.x += dx / d * e.spd; e.y += dy / d * e.spd; e.phase += 0.15;
+                const hz = shamanHaste(e);   // hasted stalking — the lunge itself stays honest
+                e.x += dx / d * e.spd * hz; e.y += dy / d * e.spd * hz; e.phase += 0.15;
                 if (e.st <= 0) {
                   if (d < 380) { e.mode = 'aim'; e.st = 30; }
                   else e.st = 30;
@@ -3893,6 +4138,7 @@
                 drawDeathScreen();
                 hud.innerHTML = replayMode               ? '▶ replay over · Q to return'
                               : watchSel                 ? '↑↓ choose a legend · ENTER to watch'
+                              : watchErr                 ? '▶ ' + watchErr + ' · R to play'
                               : lbState === 'enter'      ? 'type your name · ENTER to submit'
                               : lbState === 'loading'    ? 'reaching the hall of legends…'
                               : lbState === 'submitting' ? 'recording your legend…'
@@ -4095,12 +4341,12 @@
             const maxFoes = Math.min(26, 7 + wave * 3);
             if (!nineActive && !awaitExit && !swActive && swFadeT <= 0 && breatherT <= 0 && !ianActive && ianCue <= 0 && waveQuota > 0 && frame > 50 && frame % spawnEvery === 0 && enemies.length + warns.length < maxFoes) {
               const p = edgePoint();
-              warns.push({ x: p.x, y: p.y, type: rollType(), t: 45 });
+              warns.push({ x: p.x, y: p.y, type: rollType(), elite: rollElite(), t: 45 });
               waveQuota--;
             }
             for (let i = warns.length - 1; i >= 0; i--) {
               const w = warns[i];
-              if (--w.t <= 0) { enemies.push(makeEnemy(w.type, w.x, w.y)); warns.splice(i, 1); }
+              if (--w.t <= 0) { enemies.push(makeEnemy(w.type, w.x, w.y, w.elite)); warns.splice(i, 1); }
             }
 
             /* pickups */
@@ -4375,7 +4621,13 @@
                 }
               }
               if (g.t <= 0) {
-                const bye = { gandalf: '"I must away."', luke: '"may the Force be with you."', jotaro: '"yare yare daze."' }[g.kind];
+                if (g.kind === 'gandalf' && !swActive) {
+                  // "fly, you fools" — one final repelling nova as he goes (skipped in the
+                  // corridor, where a knockback would scramble the trooper formation)
+                  knockback(g.x, g.y, 0, 190, 40);
+                  shake = Math.max(shake, 10); sfSfx.bomb();
+                }
+                const bye = { gandalf: '"fly, you fools!"', luke: '"may the Force be with you."', jotaro: '"yare yare daze."' }[g.kind];
                 sparks.push({ x: g.x, y: g.y - 50, t: 36, color: '#fff', txt: bye });
                 allies.splice(ci, 1);
               }
@@ -4387,8 +4639,21 @@
               for (const e of enemies) {
                 if (e.dead) continue;
                 if (Math.hypot(b.x - e.x, b.y - (e.y - 18)) < 15) {
-                  if (e.hp && (e.hp -= 2) > 0) { e.stun = 14; sfSfx.thud(); }
-                  else killEnemy(e);
+                  // Gandalf REPELS, he does not slay — a heavy knockdown + shove buys you
+                  // the space; the kill (and its score and meter) stays yours
+                  if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') {
+                    e.stun = Math.max(e.stun || 0, 6);          // the no-flinch set barely notices
+                  } else if (e.type === 'trooper') {
+                    e.stun = Math.max(e.stun || 0, 20);         // staggered, but formation holds
+                  } else {
+                    const dv = Math.hypot(b.vx, b.vy) || 1;
+                    e.stun = Math.max(e.stun || 0, 42);
+                    e.x = clamp(e.x + b.vx / dv * 34, -60, GW + 60);
+                    e.y = clamp(e.y + b.vy / dv * 34, -60, GH + 60);
+                    e.vx = 0; e.vy = 0;
+                    sparks.push({ x: e.x, y: e.y - 30, t: 14, color: '#bbdefb', txt: 'REPELLED' });
+                  }
+                  sfSfx.thud();
                   bolts.splice(i, 1);
                   break;
                 }
@@ -4400,6 +4665,7 @@
             for (const e of enemies) {
               updateEnemy(e);
               if (e.type === 'ian' || mournful) continue;  // the creator & a grieving world cannot harm you
+              if (e.type === 'shaman' || e.type === 'bomber') continue;  // support pieces never touch you — their horde (and kegs) do
               // shared "this foe is harmless right now" gates (independent of which hero)
               if ((e.type === 'sidious' || e.type === 'guard') && sidiousIntroT > 0) continue;  // harmless during the reveal
               if (e.type === 'vader' && e.intro > 0) continue;   // harmless as he steps from the shadows
@@ -4411,6 +4677,12 @@
                 if (h.dashT > 0) continue;               // i-frames: untouchable mid-dash
                 const d = Math.hypot(h.x - e.x, h.y - e.y);
                 if (d < e.kr + PLAYER_R) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
+                // the frost wolf chills a hero who brushes close; the DIRE wolf's chill is
+                // a full 90px aura (drawn as an icy ring) — no brush needed
+                if (e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
+                  if (h.chillT <= 0) sparks.push({ x: h.x, y: h.y - 34, t: 14, color: '#8fd8ff', txt: 'CHILLED' });
+                  h.chillT = 90;
+                }
                 if (d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
                   e.grz = 50; score += 5 * mult;
                   addMeter(1);
@@ -4453,6 +4725,35 @@
                   if (h.dashT <= 0 && ((h.x - rr.zoneX) / 46) ** 2 + ((h.y - rr.zoneY) / 17) ** 2 < 1) { strike(h); if (!alive) return; }
                 }
               }
+            }
+
+            /* powder kegs: ballistic lobs — the landing ring is telegraphed from launch,
+               and the blast spares nobody (heroes through strike(); the horde takes 2) */
+            for (let i = kegs.length - 1; i >= 0; i--) {
+              const k = kegs[i];
+              k.t++;
+              if (k.t < k.T) continue;
+              kegs.splice(i, 1);
+              sfSfx.bomb(); shake = Math.max(shake, 8);
+              blasts.push({ kind: 'fire', x: k.tx, y: k.ty, r: 0, t: 0, life: 22, rMax: KEG_R + 14 });
+              sparks.push({ x: k.tx, y: k.ty - 12, t: 16, color: '#ff8a65', txt: 'BOOM' });
+              for (const h of heroesLive()) {
+                if (h.dashT > 0) continue;                 // i-frames clear the blast
+                if (Math.hypot(h.x - k.tx, (h.y - 10) - k.ty) < KEG_R) { strike(h); if (!alive) return; }
+              }
+              // the shrapnel reaches the horde well past the core (a pursuer walks ~72px
+              // during the keg's flight — a tight radius would never touch a moving pack,
+              // and baiting shots into the horde is the whole point of friendly fire)
+              for (const e2 of enemies) {
+                if (untouchable(e2)) continue;
+                if (Math.hypot(e2.x - k.tx, e2.y - k.ty) < KEG_R + 34) {
+                  if (e2.hp && (e2.hp -= 2) > 0) {
+                    e2.stun = Math.max(e2.stun || 0, 16);
+                    sparks.push({ x: e2.x, y: e2.y - 30, t: 12, color: '#ffb74d', txt: 'SCORCHED' });
+                  } else killEnemy(e2);
+                }
+              }
+              enemies = enemies.filter(e2 => !e2.dead);
             }
 
             /* arrows */
@@ -4913,6 +5214,32 @@
                 }
               }
             }
+            /* powder kegs: the shrinking landing ring (steady by design — no flashing) and
+               the keg itself tumbling along its lobbed arc */
+            for (const k of kegs) {
+              const p = k.t / k.T;
+              ctx.save();
+              ctx.strokeStyle = 'rgba(255,82,82,' + (0.35 + p * 0.45).toFixed(2) + ')';
+              ctx.lineWidth = 2;
+              ctx.setLineDash([5, 5]);
+              ctx.beginPath(); ctx.arc(k.tx, k.ty, KEG_R + (1 - p) * 26, 0, Math.PI * 2); ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = 'rgba(255,82,82,' + (0.08 + p * 0.15).toFixed(2) + ')';
+              ctx.beginPath(); ctx.arc(k.tx, k.ty, KEG_R, 0, Math.PI * 2); ctx.fill();
+              const kx = k.sx + (k.tx - k.sx) * p;
+              const ky = k.sy + (k.ty - k.sy) * p - Math.sin(p * Math.PI) * 90;
+              ctx.translate(kx, ky); ctx.rotate(p * 7);
+              ctx.fillStyle = '#6b4a2b'; ctx.fillRect(-5, -7, 10, 14);
+              ctx.strokeStyle = '#3e2a17'; ctx.lineWidth = 1.5;
+              ctx.strokeRect(-5, -7, 10, 14);
+              ctx.beginPath(); ctx.moveTo(-5, -2); ctx.lineTo(5, -2); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(-5, 3); ctx.lineTo(5, 3); ctx.stroke();
+              if (!api.reduceMotion && Math.floor(frame / 3) % 2 === 0) {
+                ctx.fillStyle = '#ffd24d';
+                ctx.beginPath(); ctx.arc(0, -9, 2, 0, Math.PI * 2); ctx.fill();   // the sputtering fuse
+              }
+              ctx.restore();
+            }
             for (const a of arrows) {
               ctx.save();
               const laser = a.kind === 'laser';
@@ -4947,7 +5274,18 @@
               ctx.beginPath(); ctx.arc(b.x, b.y, 3.5, 0, Math.PI * 2); ctx.fill();
               ctx.restore();
             }
-            for (const g of allies) drawChamp(g);
+            for (const g of allies) {
+              // the champion's remaining window, legible at a glance — plan around it
+              if (g.t0) {
+                const p = clamp(g.t / g.t0, 0, 1);
+                ctx.save();
+                ctx.strokeStyle = p < 0.25 ? 'rgba(255,138,101,0.85)' : 'rgba(202,255,160,0.7)';
+                ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+                ctx.beginPath(); ctx.arc(g.x, g.y + 7, 13, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
+                ctx.restore();
+              }
+              drawChamp(g);
+            }
             if (jojoActive && playerStand > 0.05) {   // Star Platinum rises above and behind the hero's shoulder
               const dio = enemies.find(en => en.type === 'dio');
               const sdir = dio && dio.x < player.x ? -1 : 1;
@@ -5124,25 +5462,41 @@
               return '#9b1c1c';
             }
             if (e.type === 'dio') return '#1f1b29';   // drawDio uses its own palette
+            if (e.type === 'shaman') return '#7a9a52'; // sickly moss — the chanting robe
+            if (e.type === 'bomber')
+              return e.mode === 'wind' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#ffb3a0' : '#a1662f';  // powder-brown; flushes as the fuse burns
             if (e.type === 'ogre')
               return e.mode === 'wind' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#a1452f' : '#6d4c41';
-            if (e.type === 'troll') return '#5d4037';
+            if (e.type === 'troll') {
+              if (e.elite) {
+                // bull troll: rust hide; dread troll: near-black — both pulse furnace-red
+                // once enraged (steady when reduced motion)
+                const raging = e.hp <= (e.elite === 2 ? 3 : 2) && (api.reduceMotion || Math.floor(frame / 5) % 2 === 0);
+                if (raging) return e.elite === 2 ? '#e64a19' : '#c0392b';
+                return e.elite === 2 ? '#3e2723' : '#7f3b30';
+              }
+              return '#5d4037';
+            }
             if (e.type === 'archer')
-              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : '#cfc8a0';
+              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : e.elite === 2 ? '#b06858' : e.elite ? '#d8a89a' : '#cfc8a0';
             if (e.type === 'wolf')
-              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : '#546e7a';
-            return '#1b5e20';
+              return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#fff' : e.elite === 2 ? '#e8f4fb' : e.elite ? '#8fc7e8' : '#546e7a';
+            // shield-bearer goblins are bronze; the warlord gleams brass-gold
+            return e.elite === 2 ? '#c9a227' : e.elite ? '#8d6e63' : '#1b5e20';
           }
 
           // shared per-hero movement physics (friction, speed cap, dash trail, charge recharge).
           // Called once per hero per tick; in single-player it's only ever player, so behaviour
           // (and RNG consumption — there is none here) is identical to the old inline block.
           function moveHero(h, ix, iy) {
-            h.vx = h.vx * 0.86 + ix * 0.62;
-            h.vy = h.vy * 0.86 + iy * 0.62;
+            // a frost-wolf chill drags the hero's acceleration and top speed (dash unaffected — the escape valve)
+            const chill = h.chillT > 0 ? 0.55 : 1;
+            if (h.chillT > 0) h.chillT--;
+            h.vx = h.vx * 0.86 + ix * 0.62 * chill;
+            h.vy = h.vy * 0.86 + iy * 0.62 * chill;
             const pv = Math.hypot(h.vx, h.vy);
             // the speed cap lifts during a dash and while reeling from a Force push, so the shove carries
-            if (h.dashT <= 0 && h.stunT <= 0 && (h.choke || 0) <= 0 && pv > 4.3) { h.vx *= 4.3 / pv; h.vy *= 4.3 / pv; }
+            if (h.dashT <= 0 && h.stunT <= 0 && (h.choke || 0) <= 0 && pv > 4.3 * chill) { h.vx *= 4.3 * chill / pv; h.vy *= 4.3 * chill / pv; }
             h.x = clamp(h.x + h.vx, 14, GW - 14);
             h.y = clamp(h.y + h.vy, 40, GH - 10);
             if (pv > 0.4) h.phase += 0.06 + pv * 0.045;
@@ -5350,7 +5704,8 @@
             if (allies.some(g => g.kind === kind)) return;          // one of each kind at a time
             meter -= up.summonCost; meterPrompted = false;          // spend one charge (keep the rest)
             const fromLeft = player.x > GW / 2;
-            const g = { kind, t: Math.round(CHAMP_T * up.champMul), x: fromLeft ? -30 : GW + 30, y: clamp(player.y, 60, GH - 30),
+            const champT = Math.round(CHAMP_T * up.champMul);
+            const g = { kind, t: champT, t0: champT, x: fromLeft ? -30 : GW + 30, y: clamp(player.y, 60, GH - 30),
                         side: fromLeft ? -1 : 1, shotCd: 40, arrived: false,
                         slashCd: 0, slashT: 0, fx: 1, fy: 0, oraT: 0, oraCd: 30, target: null };
             if (kind === 'gandalf') {
@@ -5552,7 +5907,7 @@
             // W on the board view opens the picker (only when some entry has a stored replay)
             if (!alive && (e.key === 'w' || e.key === 'W') && (lbState === 'view' || lbState === 'done')) {
               const list = watchableEntries();
-              if (list.length) { watchSel = { list, idx: 0 }; e.preventDefault(); return; }
+              if (list.length) { watchSel = { list, idx: 0 }; watchErr = ''; e.preventDefault(); return; }
             }
             // entering a name for the leaderboard after death — capture typing, swallow
             // everything else (so letters/digits go into the name, not cheats or the R-restart)
