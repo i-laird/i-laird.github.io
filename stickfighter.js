@@ -127,7 +127,8 @@
               saberPickup, vaderActive, up, paused, upMenu, tokens, swFlash,
               sidiousActive, sidiousCue, sidiousIntroT, ltnBolts, ltnFlash, dlg, dlgT, sidFinale,
               jojoActive, jojoCue, jojoBg, dioStopT, dioStopFx, roadRoller, dioFinale, bossIntro, playerStand,
-              ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned, eliteSeen, dreadSeen, shamanSeen, bomberSeen;
+              ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned, eliteSeen, dreadSeen, shamanSeen, bomberSeen,
+              minions, husks;   // the necromancer's dead (see the SCYTHE block above)
           // online leaderboard ("hall of legends"): lbState drives the death screen
           //   off=worker down/unscored · loading · enter=typing a name · submitting · view/done=show the board
           // lbScores = the all-time board; lbDaily = today's daily-challenge board (null when
@@ -147,7 +148,8 @@
           // upgrades, token balance, lifetime maxwave). A ranked submit ships it; the worker
           // stores it beside the board entry; anyone can then WATCH the run — the deterministic
           // sim replays it bit-exactly. Event codes: 0 mask · 1 dashP1 · 2 atkP1 · 3 dashP2 ·
-          // 4 atkP2 · 5 summon · 6 mash · 7 buy · 8 shop-continue · 9 intro-advance · 10 ian.
+          // 4 atkP2 · 5 summon · 6 mash · 7 buy · 8 shop-continue · 9 intro-advance · 10 ian ·
+          // 11 spell-cycle (arg = hero index; the wizard's page selection is sim state).
           let replayMode = false;      // watching someone else's run (read game-wide: gates saves/achievements)
           let replay = null;           // { d: replay data, i: next event index, name, score }
           let repMask = 0;             // the replayed held-direction mask
@@ -176,19 +178,55 @@
           //   ranged = the bow is always strung — the attack key looses arrows at the nearest foe
           //   caster = the attack key hurls arcing lightning; SORCERY adds auto-cast nova & fireball
           //   Each hero picks independently in co-op; each class has its own upgrade tree.
-          const CLASSES   = ['melee', 'ranged', 'caster'];
-          const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨' };
+          const CLASSES   = ['melee', 'ranged', 'caster', 'necro'];
+          const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨', necro: '💀' };
           const ARROW_SPD = 7.4;   // player arrows fly this fast (px/tick)
-          const ZAP_R     = 170;   // caster bolt reaches this far — deliberately short; position matters
+          const ZAP_R     = 170;   // arcane bolt reaches this far — deliberately short; position matters
           const ZAP_HOP   = 180;   // each chain jump reaches this far
-          const CAST_T    = 14;    // ticks the caster's bolt charges before it fires (the wind-up)
-          const NOVA_R    = 130;   // caster auto frost nova (smaller than the powerup's FROST_R)
-          const FIREB_R   = 120;   // caster auto fireball (smaller than the powerup's FIRE_R)
+          const CAST_T    = 14;    // fallback incantation length (each spell carries its own `cast`)
+          const NOVA_R    = 130;   // frost nova ring (smaller than the powerup's FROST_R)
+          const FIREB_R   = 120;   // fireball blast (smaller than the powerup's FIRE_R)
+          const FIRE_TGT_R = 210;  // how far a fireball can be hurled
+          const STORM_R    = 240;  // the tempest's first arc reaches this far
+          const STORM_HOP  = 200;  // ...and leaps this far between marks
+          const MANA_MAX   = 100;  // the wizard's base pool
+          const MANA_REGEN = 0.25; // mana per tick (15/s) — casting outruns it; kills feed it
+          /* the wizard's SPELLBOOK: the attack key casts the SELECTED page (the cycle key
+             turns pages — C solo, '.' for P1 / E for P2 in co-op). Every cast drinks mana
+             up front; each kill sparks +4 back, so bold play sustains itself. The deeper
+             pages unlock in the SORCERY tree (nova/fireball/tempest → up.spells). */
+          const SPELLS = {
+            bolt:  { name: 'ARCANE BOLT', icon: '⚡', cost: 18, cast: 14, col: '#ce93d8' },
+            nova:  { name: 'FROST NOVA',  icon: '❄',  cost: 34, cast: 10, col: '#80deea' },
+            fire:  { name: 'FIREBALL',    icon: '☄',  cost: 46, cast: 20, col: '#ff8a3c' },
+            storm: { name: 'TEMPEST',     icon: '🌩', cost: 70, cast: 26, col: '#b39ddb' },
+          };
+          /* the necromancer: one key, two verbs — the soul SCYTHE reaps the living in a
+             wide arc, and any HUSK caught in the sweep RISES as a minion (souls permitting).
+             Grunts felled while a necromancer stands leave husks; kills feed the soul well.
+             Minions hunt the horde and body-block it (hordeTarget treats them as bait);
+             a boss room banishes the lot — "your dead abandon you". */
+          const SCYTHE_R   = 82;    // the reaping arc's reach
+          const RAISE_R    = 90;    // a husk this close (and in front) joins the sweep's raise
+          const SOULS_MAX  = 100;
+          const SOUL_KILL  = 6;     // souls per scythe kill (Reaper adds 3)
+          const SOUL_MKILL = 3;     // souls per kill a minion lands
+          const HUSK_T     = 620;   // ticks a husk lingers before crumbling
+          const MINION_T   = 1400;  // a raised minion's lifespan (~21s)
+          const HUSK_CAP   = 12;    // the field never drowns in husks
+          const NECRO_COL  = '#64ffda';  // soul-fire teal (distinct from P2's soft green)
           const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
           const KEG_R     = 42;    // the bombardier's powder-keg blast radius
           const KEG_AIR   = 62;    // ticks a lobbed keg hangs in the air (the dodge window)
-          let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, 2);
-          let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, 2);
+          let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, CLASSES.length - 1);
+          let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, CLASSES.length - 1);
+          // HARD MODE — unlocked forever by sparing Ian (finishIanSpare). Once earned, every
+          // normal run starts hard: enemy types arrive a wave early, elites stalk from wave 1,
+          // the support pieces join at 4/6. DAILY runs stay normal (one shared sim for the
+          // board), and replays carry the flag in their header (`hd`) so they re-sim correctly.
+          let hardUnlocked = false;
+          try { hardUnlocked = localStorage.getItem('ilaird_sf_hard') === '1'; } catch (_) { /* private mode */ }
+          let hardMode = false;   // this RUN is hard (set per run in init — daily/replay aware)
           let introRow = 0;   // intro chooser: 0 = mode row, 1 = P1 class, 2 = P2 class (2P only)
           // ── per-tick input capture ──
           // Edge-triggered combat inputs (dash / attack / summon / choke-mash) are QUEUED here
@@ -198,7 +236,7 @@
           // recorder captures {keys, pend} per tick; a replayer / lockstep peer injects them.
           let pend = null;   // built by resetPend() in init()
           function resetPend() {
-            pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, summon: null, prompt: false, mash: 0 };
+            pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, cycleP1: false, cycleP2: false, summon: null, prompt: false, mash: 0 };
           }
           // ── daily challenge ──
           // One shared seed per UTC day: everyone who picks DAILY plays the identical run
@@ -225,10 +263,10 @@
             player = { x: GW / 2, y: GH / 2, vx: 0, vy: 0, phase: 0,
                        fx: 1, fy: 0, dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0, shield: false,
                        swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-                       cls: CLASSES[classSel], novaCd: 0, fireCd: 0, castT: 0, chillT: 0 };
+                       cls: CLASSES[classSel], castT: 0, castMax: 0, casting: null, mana: 0, spellSel: 0, souls: 25, chillT: 0 };
             p2 = null;
             enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
-            bolts = []; arrows = []; kegs = [];
+            bolts = []; arrows = []; kegs = []; minions = []; husks = [];
             score = 0; mult = 1; wave = 1; alive = true; started = false; frame = 0;
             keys = {}; freezeT = 0; banner = ''; bannerSub = ''; bannerT = 0;
             deadT = 0; shake = 0; newBest = false;
@@ -254,7 +292,9 @@
                    champs: { gandalf: false, luke: false, jotaro: false },
                    champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false,
                    shotMs: 500, shotDmg: 1, shotCount: 1, shotPierce: 0,          // BOW (ranged)
-                   zapMs: 800, zapJumps: 1, nova: false, fire: false, spellCd: 1,  // SORCERY (caster)
+                   zapMs: 800, zapJumps: 1, spells: ['bolt'], manaMax: MANA_MAX, manaRegen: 1,  // SORCERY (caster)
+                   scytheMs: 520, minionCap: 2, raiseCost: 25, huskMul: 1,                      // GRAVE (necro)
+                   minionHp: 2, minionDmg: 1, minionBoom: false, trueForms: false, reaper: false,
                    dashStrike: false, secondWind: false,                           // DASH extras
                    vanguard: false, medic: false,                                  // ALLIES extras
                    swordMul: 1, riposte: false,                                    // BLADE extras
@@ -267,22 +307,27 @@
               // start exactly where the recorded run started (applied in definition order)
               tokens = replay.d.tk0 | 0;
               runMaxwave = replay.d.mw0 | 0;
+              hardMode = !!replay.d.hd;        // the recording's difficulty, not the watcher's unlock
               const owned = new Set(replay.d.up0 || []);
               for (const u of UPGRADES) if (owned.has(u.id)) { up.owned.add(u.id); u.apply(); }
             } else {
-              tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
-              runMaxwave = parseInt(localStorage.getItem('ilaird_sf_maxwave') || '0', 10) || 0;
+              hardMode = hardUnlocked && !dailyRun;   // mercy's price — daily stays one fair shared sim
+              tokens = parseInt(loadProfileItem('ilaird_sf_tokens') || '0', 10) || 0;   // this class's own credits
+              // no legacy seed here: each profile climbs its own token ladder from wave 1
+              // (seeding the old global record would starve a fresh class of income)
+              runMaxwave = parseInt(loadProfileItem('ilaird_sf_maxwave', false) || '0', 10) || 0;
               applySavedUpgrades();            // unlocked upgrades are permanent — re-apply across runs
               // arm the recorder: the header is every piece of persistent state the sim just
               // read. `v` is the SIM-BALANCE version — bump it on ANY gameplay-affecting
               // change (damage, speeds, AI, economy), or old replays re-simulate under new
               // rules and silently diverge from their recorded scores.
               recEv = []; recLastM = -1; recOverflow = false;
-              recHdr = { v: 2, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop,
+              recHdr = { v: 3, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
                          up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
             }
             player.dashCharges = up.dashMax; player.rechargeT = 0;
             player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
+            player.mana = up.manaMax;          // the wizard starts with a full well (after Deep Well applies)
             if (coop) setupCoop();             // a second hero joins; both share allies, meter & upgrades
           }
 
@@ -295,7 +340,7 @@
                    dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
                    shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
                    swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-                   cls: CLASSES[classSel2], novaCd: 0, fireCd: 0, castT: 0, chillT: 0 };
+                   cls: CLASSES[classSel2], castT: 0, castMax: 0, casting: null, mana: up.manaMax, spellSel: 0, souls: 25, chillT: 0 };
           }
           // each hero arms independently — the blade (Excalibur / lightsaber) lives on the hero,
           // not the run. helpers for the scripted interlude transitions that arm/disarm everyone.
@@ -326,14 +371,17 @@
             if (p2 && !p2.down) return p2;
             return player;                 // both down — the run is ending anyway
           }
-          // the goblin shaman's ritual circle: grunts inside are hastened 1.3×. ≤2 shamans
-          // afield keeps this scan trivial; a frozen shaman's circle gutters out.
+          // the goblin shaman's ritual circle: grunts inside are hastened 1.3× — 1.55×
+          // while the shaman is mid frenzy-shriek. ≤2 shamans afield keeps this scan
+          // trivial; a frozen shaman's circle gutters out.
           function shamanHaste(e) {
+            let hz = 1;
             for (const s of enemies) {
               if (s.type === 'shaman' && !s.dead && !(s.frozen > 0) &&
-                  Math.hypot(s.x - e.x, s.y - e.y) < SHAMAN_R) return 1.3;
+                  Math.hypot(s.x - e.x, s.y - e.y) < SHAMAN_R)
+                hz = Math.max(hz, s.frenzyT > 0 ? 1.55 : 1.3);
             }
-            return 1;
+            return hz;
           }
           // who a horde grunt chases. The scripted boss/set-piece foes lock onto bossTarget()
           // (P1, or the survivor); the open-field horde splits aggro to the nearest standing hero —
@@ -344,25 +392,45 @@
             const scripted = t === 'wraith' || t === 'witchking' || t === 'vader' || t === 'sidious' ||
                              t === 'dio' || t === 'guard' || t === 'trooper' || t === 'ian';
             if (bossActive || nineActive || scripted) return coop ? bossTarget() : player;
+            // a raised minion in a grunt's face is bait — the body-block is the necromancer's point
+            for (const m of minions) if (Math.hypot(m.x - e.x, m.y - e.y) < 130) return m;
             if (up.vanguard) {
               for (const g of allies) if (Math.hypot(g.x - e.x, g.y - e.y) < 200) return g;
             }
             return coop ? nearestLiveHero(e.x, e.y) : player;
           }
 
-          /* unlocked upgrades persist (like achievements): saved by id in localStorage and
-             re-applied on every run, so progress in the tree carries across the whole session. */
+          /* unlocked upgrades persist (like achievements) and re-apply every run — but the
+             whole progression ledger (upgrades + tokens + the token-paying maxwave) is
+             kept PER PARTY PROFILE: solo runs save under the class name, co-op under the
+             sorted duo ('caster+melee'). Each class earns and spends its own credits —
+             what melee buys, the caster never sees. The legacy un-suffixed keys seed a
+             profile's FIRST load (so pre-split progress carries into every class once),
+             then the profile diverges on its own key. Replays are untouched: the sim
+             reads its start state from the recording's header, never from storage. */
           const SF_UP_KEY = 'ilaird_sf_upgrades';
+          function upProfile() {
+            const c1 = CLASSES[classSel];
+            if (!coop) return c1;
+            return [c1, CLASSES[classSel2]].sort().join('+');
+          }
+          const profKey = (base) => base + '_' + upProfile();
+          function loadProfileItem(base, legacy = true) {
+            try {
+              const v = localStorage.getItem(profKey(base));
+              return v !== null || !legacy ? v : localStorage.getItem(base);   // legacy global value seeds the first load
+            } catch (_) { return null; }
+          }
           function loadSavedUpgrades() {
-            try { return new Set(JSON.parse(localStorage.getItem(SF_UP_KEY) || '[]')); } catch (_) { return new Set(); }
+            try { return new Set(JSON.parse(loadProfileItem(SF_UP_KEY) || '[]')); } catch (_) { return new Set(); }
           }
           function saveUpgrades() {
             if (replayMode) return;    // a watched run must never touch the watcher's profile
-            try { localStorage.setItem(SF_UP_KEY, JSON.stringify([...up.owned])); } catch (_) {}
+            try { localStorage.setItem(profKey(SF_UP_KEY), JSON.stringify([...up.owned])); } catch (_) {}
           }
           function saveTokens() {
             if (replayMode) return;
-            try { localStorage.setItem('ilaird_sf_tokens', String(tokens)); } catch (_) {}
+            try { localStorage.setItem(profKey('ilaird_sf_tokens'), String(tokens)); } catch (_) {}
           }
           function applySavedUpgrades() {
             const saved = loadSavedUpgrades();
@@ -387,7 +455,7 @@
             if (level <= runMaxwave) return false;
             runMaxwave = level;
             tokens++; saveTokens();
-            if (!replayMode) try { localStorage.setItem('ilaird_sf_maxwave', String(level)); } catch (_) {}
+            if (!replayMode) try { localStorage.setItem(profKey('ilaird_sf_maxwave'), String(level)); } catch (_) {}
             return true;
           }
           // the story bosses (Witch-king, Vader, Sidious, DIO) pay out on EVERY kill, not just
@@ -396,6 +464,10 @@
 
           /* ── upgrades: a token-based skill tree. Each cleared wave grants a token;
              spend tokens (1 each) on unlocked nodes, or save them to grab several at once. ── */
+          // a SORCERY node teaches a spellbook page (idempotent — saved ids re-apply every run);
+          // learn order = cycle order, and it's deterministic: definition order for saved ids,
+          // buy order (a recorded event) within a run
+          function learnSpell(k) { if (!up.spells.includes(k)) up.spells.push(k); }
           const UPGRADES = [
             { id: 'dash',        tree: 'DASH',   name: 'Dash',            desc: 'unlock the dash — SPACE / Shift',    icon: '💨', req: null,         apply: () => { up.dashMax = 1; player.dashCharges = 1; } },
             { id: 'dash_long',   tree: 'DASH',   name: 'Longer Dash',     desc: 'dash farther, longer invincibility', icon: '📏', req: 'dash',       apply: () => { up.dashLen = 20; } },
@@ -430,17 +502,26 @@
             { id: 'bow_far',     tree: 'BOW',    cls: 'ranged', name: 'Long Draw',       desc: 'arrows fly faster and farther',      icon: '🎯', req: null,         apply: () => { up.arrowSpd = 1.35; } },
             { id: 'bow_bounce',  tree: 'BOW',    cls: 'ranged', name: 'Ricochet',        desc: 'arrows bank off the screen edge',    icon: '📐', req: 'bow_dmg',    apply: () => { up.ricochet = true; } },
             { id: 'bow_master',  tree: 'BOW',    cls: 'ranged', name: 'Legolas',         desc: 'three piercing arrows · rapid fire', icon: '🧝', req: 'bow_multi',  cost: 2, apply: () => { up.shotCount = 3; up.shotPierce = 2; up.shotMs = Math.min(up.shotMs, 250); } },
-            { id: 'zap_fast',    tree: 'SORCERY', cls: 'caster', name: 'Quick Cast',     desc: 'bolts come faster',                  icon: '⚡', req: null,         apply: () => { up.zapMs = Math.min(up.zapMs, 560); } },
+            { id: 'zap_fast',    tree: 'SORCERY', cls: 'caster', name: 'Quick Cast',     desc: 'spells come faster',                 icon: '⚡', req: null,         apply: () => { up.zapMs = Math.min(up.zapMs, 560); } },
             { id: 'zap_chain',   tree: 'SORCERY', cls: 'caster', name: 'Chain Arc',      desc: 'bolts leap to a second foe',         icon: '🔗', req: null,         apply: () => { up.zapJumps = Math.max(up.zapJumps, 2); } },
             { id: 'zap_chain2',  tree: 'SORCERY', cls: 'caster', name: 'Storm Arc',      desc: 'bolts leap to three foes',           icon: '🌩️', req: 'zap_chain',  apply: () => { up.zapJumps = Math.max(up.zapJumps, 3); } },
-            { id: 'nova',        tree: 'SORCERY', cls: 'caster', name: 'Frost Nova',     desc: 'auto: an ice ring when foes close in', icon: '❄️', req: null,       apply: () => { up.nova = true; } },
-            { id: 'fireball',    tree: 'SORCERY', cls: 'caster', name: 'Fireball',       desc: 'auto: erupt when the mob presses',   icon: '☄️', req: 'nova',       apply: () => { up.fire = true; } },
+            { id: 'mana_pool',   tree: 'SORCERY', cls: 'caster', name: 'Deep Well',      desc: 'half again as much mana',            icon: '🔮', req: null,         apply: () => { up.manaMax = Math.max(up.manaMax, 150); } },
+            { id: 'mana_font',   tree: 'SORCERY', cls: 'caster', name: 'Font of Power',  desc: 'mana returns much faster',           icon: '⛲', req: 'mana_pool',  apply: () => { up.manaRegen = Math.max(up.manaRegen, 1.6); } },
+            { id: 'nova',        tree: 'SORCERY', cls: 'caster', name: 'Frost Nova',     desc: 'SPELL: an ice ring freezes the pack', icon: '❄️', req: null,        apply: () => { learnSpell('nova'); } },
+            { id: 'fireball',    tree: 'SORCERY', cls: 'caster', name: 'Fireball',       desc: 'SPELL: hurl fire that erupts on the mob', icon: '☄️', req: 'nova',  apply: () => { learnSpell('fire'); } },
             { id: 'nova_shatter',tree: 'SORCERY', cls: 'caster', name: 'Shatter',        desc: 'frozen foes burst, freezing others', icon: '🧊', req: 'nova',       apply: () => { up.shatter = true; } },
-            { id: 'zap_refund',  tree: 'SORCERY', cls: 'caster', name: 'Overcharge',     desc: 'a killing bolt recovers much faster', icon: '🔋', req: 'zap_fast',   apply: () => { up.overcharge = true; } },
-            { id: 'zap_master',  tree: 'SORCERY', cls: 'caster', name: 'Archmage',       desc: 'five-fold arcs · spells recover fast', icon: '🧙‍♂️', req: 'zap_chain2', cost: 2, apply: () => { up.zapJumps = 5; up.zapMs = Math.min(up.zapMs, 420); up.spellCd = 0.6; } },
+            { id: 'zap_refund',  tree: 'SORCERY', cls: 'caster', name: 'Overcharge',     desc: 'a killing cast refunds much of its mana', icon: '🔋', req: 'zap_fast', apply: () => { up.overcharge = true; } },
+            { id: 'zap_master',  tree: 'SORCERY', cls: 'caster', name: 'Archmage',       desc: 'five-fold arcs · SPELL: the TEMPEST', icon: '🧙‍♂️', req: 'zap_chain2', cost: 2, apply: () => { up.zapJumps = 5; up.zapMs = Math.min(up.zapMs, 420); learnSpell('storm'); } },
+            { id: 'grave_cap',   tree: 'GRAVE',  cls: 'necro',  name: 'Restless Dead',   desc: 'command a third minion',             icon: '🧟', req: null,         apply: () => { up.minionCap = Math.max(up.minionCap, 3); } },
+            { id: 'grave_cheap', tree: 'GRAVE',  cls: 'necro',  name: 'Grave Pact',      desc: 'raising costs far fewer souls',      icon: '🤝', req: null,         apply: () => { up.raiseCost = Math.min(up.raiseCost, 16); } },
+            { id: 'grave_last',  tree: 'GRAVE',  cls: 'necro',  name: 'Preservation',    desc: 'husks linger half again as long',    icon: '⚰️', req: null,         apply: () => { up.huskMul = Math.max(up.huskMul, 1.5); } },
+            { id: 'grave_reap',  tree: 'GRAVE',  cls: 'necro',  name: 'Reaper',          desc: 'faster sweeps · kills feed more souls', icon: '🌾', req: null,      apply: () => { up.scytheMs = Math.min(up.scytheMs, 380); up.reaper = true; } },
+            { id: 'grave_boom',  tree: 'GRAVE',  cls: 'necro',  name: 'Deathburst',      desc: 'falling minions erupt in soul-fire', icon: '💥', req: 'grave_cap',  apply: () => { up.minionBoom = true; } },
+            { id: 'grave_true',  tree: 'GRAVE',  cls: 'necro',  name: 'True Forms',      desc: 'wolves lope · archers loose spectral arrows', icon: '🐺', req: 'grave_cap', apply: () => { up.trueForms = true; } },
+            { id: 'grave_master',tree: 'GRAVE',  cls: 'necro',  name: 'Lord of the Fallen', desc: 'a fourth minion · the dead rise harder', icon: '👑', req: 'grave_boom', cost: 2, apply: () => { up.minionCap = Math.max(up.minionCap, 4); up.minionHp = 3; up.minionDmg = 2; } },
           ];
           const upCost = (u) => u.cost || 1;   // most nodes cost 1 token; capstones cost more
-          const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8' };
+          const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8', GRAVE: NECRO_COL };
           function availableUpgrades() {
             // class trees only show for classes actually in the party (DASH/ALLIES have no cls and
             // always show); coopOnly nodes (Medic) only show in a 2-player run
@@ -561,6 +642,57 @@
             ctx.restore();
             ctx.textAlign = 'left';
           }
+          // the class resource gauges (bottom-right, mirroring the summon gauge): one slim
+          // bar per resource hero — the wizard's MANA (selected page, its cost as a notch,
+          // the cycle key) and the necromancer's SOULS (raise cost notch, minion slots as
+          // pips). Both dim gray while the next action is unaffordable.
+          function drawManaGauge() {
+            if (!started || !alive || paused || bossIntro || ianActive) return;
+            const bearers = heroesAll().filter(h => h.cls === 'caster' || h.cls === 'necro');
+            if (!bearers.length) return;
+            let y = GH - 22;
+            ctx.save();
+            for (const h of bearers) {
+              const necro = h.cls === 'necro';
+              const sp = necro ? null : SPELLS[curSpell(h)];
+              const pool = necro ? SOULS_MAX : up.manaMax;
+              const have = necro ? h.souls : h.mana;
+              const cost = necro ? up.raiseCost : sp.cost;
+              const ok = have >= cost && !h.down;
+              const barW = 150, barH = 12, x = GW - barW - 14;
+              const frac = clamp(have / pool, 0, 1);
+              const who = coop ? (h === p2 ? 'P2 · ' : 'P1 · ') : '';
+              const label = necro
+                ? who + '💀 SOULS · raise ' + cost + '  ·  ' + '●'.repeat(minions.length) + '○'.repeat(Math.max(0, up.minionCap - minions.length))
+                : who + sp.icon + ' ' + sp.name + ' · ' + cost + (heroSpells().length > 1 ? '  ·  ' + (coop ? (h === p2 ? 'E' : '.') : 'C') + ' turns' : '');
+              ctx.textAlign = 'right';
+              ctx.font = 'bold 11px Tahoma,Arial';
+              ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
+              ctx.fillStyle = h.down ? '#7a7a7a' : ok ? (necro ? NECRO_COL : sp.col) : '#8a93a5';
+              ctx.fillText(label, x + barW, y - 6);
+              ctx.shadowBlur = 0;
+              ctx.fillStyle = 'rgba(10,16,24,0.82)';
+              roundRectPath(x, y, barW, barH, 3); ctx.fill();
+              if (frac > 0) {
+                ctx.save();
+                roundRectPath(x, y, barW, barH, 3); ctx.clip();
+                const grd = ctx.createLinearGradient(x, y, x, y + barH);
+                if (necro) { grd.addColorStop(0, ok ? '#7dfadf' : '#7ba8a0'); grd.addColorStop(1, ok ? '#0f9b82' : '#3a5a54'); }
+                else { grd.addColorStop(0, ok ? '#b39ddb' : '#8090b8'); grd.addColorStop(1, ok ? '#5e35b1' : '#3a4668'); }
+                ctx.fillStyle = grd; ctx.fillRect(x, y, barW * frac, barH);
+                ctx.restore();
+              }
+              const notch = x + barW * clamp(cost / pool, 0, 1);          // the price line
+              ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(notch, y - 1); ctx.lineTo(notch, y + barH + 1); ctx.stroke();
+              ctx.strokeStyle = ok ? (necro ? 'rgba(100,255,218,0.75)' : 'rgba(179,157,219,0.75)') : 'rgba(150,160,180,0.4)';
+              ctx.lineWidth = 1.5;
+              roundRectPath(x, y, barW, barH, 3); ctx.stroke();
+              y -= 38;
+            }
+            ctx.restore();
+            ctx.textAlign = 'left';
+          }
           function drawUpgradePanel() {
             const rows = availableUpgrades();
             ctx.fillStyle = 'rgba(0,0,0,0.82)'; ctx.fillRect(0, 0, GW, GH);
@@ -668,6 +800,107 @@
             ctx.restore();
           }
 
+          /* a HERO body — stickFigure plus the class garb, so the three kits read at a
+             glance: melee wears a gold headband (tails streaming) and a sash, ranged a
+             leaf-green hood + feather with a quiver slung on the back, caster a wizard
+             hat and a flowing robe in place of legs. `dir` mirrors the garb to the
+             facing; `mono` draws the garb in the body color only (dash ghosts, the
+             downed gray) so tinted figures keep their silhouette without color pops.
+             Animation is phase/frame-driven — no rnd(), same rule as all draw code. */
+          function heroFigure(x, y, phase, color, cls, dir = 1, scale = 1, alpha = 1, lean = 0, glow = 0, mono = false) {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.translate(x, y);
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.beginPath(); ctx.ellipse(0, 3, 12 * scale, 4 * scale, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.rotate(lean);
+            ctx.scale(scale, scale);
+            if (glow) { ctx.shadowColor = glow; ctx.shadowBlur = 8; }
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            const s = Math.sin(phase);
+            ctx.beginPath(); ctx.arc(0, -34, 8, 0, Math.PI * 2); ctx.stroke();       // head
+            ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, -6); ctx.stroke();    // torso
+            ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(-14, -20 + s * 8); ctx.stroke();  // arms
+            ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo( 14, -20 - s * 8); ctx.stroke();
+            if (cls !== 'caster' && cls !== 'necro') {                               // legs (robed classes cover them)
+              ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(-10, 12 + s * 10); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo( 10, 12 - s * 10); ctx.stroke();
+            }
+            // garb, drawn in facing space (+x = forward)
+            ctx.scale(dir, 1);
+            const gc = (c) => (mono ? color : c);
+            ctx.fillStyle = cls === 'necro' && !mono ? NECRO_COL : color;            // an eye, so they face somewhere (the necro's burns soul-teal)
+            ctx.beginPath(); ctx.arc(3.5, -35, cls === 'necro' ? 1.5 : 1.2, 0, Math.PI * 2); ctx.fill();
+            if (cls === 'melee') {
+              ctx.strokeStyle = gc('#ffd24d'); ctx.lineWidth = 2.5;                  // headband
+              ctx.beginPath(); ctx.moveTo(-7.5, -37); ctx.lineTo(7.5, -37); ctx.stroke();
+              const f1 = Math.sin(phase * 1.7) * 2, f2 = Math.sin(phase * 1.7 + 1.3) * 2.5;
+              ctx.lineWidth = 1.8;                                                   // its two streaming tails
+              ctx.beginPath(); ctx.moveTo(-7, -37); ctx.quadraticCurveTo(-13, -36 + f1, -17, -33 + f1 * 1.5); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(-7, -37); ctx.quadraticCurveTo(-12, -33 + f2, -16, -28 + f2 * 1.5); ctx.stroke();
+              ctx.lineWidth = 2;                                                     // waist sash
+              ctx.beginPath(); ctx.moveTo(-4, -8); ctx.lineTo(4, -10); ctx.stroke();
+            } else if (cls === 'ranged') {
+              ctx.strokeStyle = gc('#6b4a2b'); ctx.lineWidth = 4;                    // quiver on the back
+              ctx.beginPath(); ctx.moveTo(-7, -25); ctx.lineTo(-11, -12); ctx.stroke();
+              ctx.strokeStyle = gc('#9ccc65'); ctx.lineWidth = 1.5;                  // fletchings poking out
+              ctx.beginPath(); ctx.moveTo(-7, -25); ctx.lineTo(-5.5, -30); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(-8.5, -26); ctx.lineTo(-8, -31); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(-6, -24); ctx.lineTo(-3.5, -28.5); ctx.stroke();
+              ctx.fillStyle = gc('#7cb342');                                         // peaked hood, point trailing back
+              ctx.beginPath();
+              ctx.moveTo(8.5, -36);
+              ctx.quadraticCurveTo(6, -45, -2, -45.5);
+              ctx.quadraticCurveTo(-12, -45, -16.5, -38.5);
+              ctx.quadraticCurveTo(-10.5, -40.5, -8.5, -36);
+              ctx.closePath(); ctx.fill();
+              ctx.strokeStyle = gc('#f5f5dc'); ctx.lineWidth = 1.5;                  // a feather in it
+              ctx.beginPath(); ctx.moveTo(-1, -44.5); ctx.quadraticCurveTo(3, -50, 8, -51); ctx.stroke();
+            } else if (cls === 'caster') {
+              const sway = Math.sin(phase) * 2.5;                                    // robe hem sways against the stride
+              ctx.fillStyle = mono ? color : 'rgba(126,87,194,0.35)';
+              ctx.strokeStyle = color; ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(-4.5, -10);
+              ctx.quadraticCurveTo(-8, 0, -10 + sway, 11);
+              ctx.quadraticCurveTo(0, 14, 10 + sway * 0.5, 11);
+              ctx.quadraticCurveTo(8, 0, 4.5, -10);
+              ctx.closePath(); ctx.fill(); ctx.stroke();
+              ctx.fillStyle = gc('#7e57c2');                                         // the hat cone, tip swept back
+              ctx.beginPath();
+              ctx.moveTo(-7, -39);
+              ctx.quadraticCurveTo(-7, -50, -13, -56);
+              ctx.quadraticCurveTo(-2, -54, 2, -47);
+              ctx.quadraticCurveTo(5, -42, 7, -39);
+              ctx.closePath(); ctx.fill();
+              ctx.strokeStyle = gc('#7e57c2'); ctx.lineWidth = 3;                    // wide brim
+              ctx.beginPath(); ctx.moveTo(-12.5, -38.5); ctx.lineTo(12.5, -38.5); ctx.stroke();
+              ctx.strokeStyle = gc('#ffd24d'); ctx.lineWidth = 1.6;                  // hat band
+              ctx.beginPath(); ctx.moveTo(-6.5, -40.5); ctx.lineTo(6.5, -40.5); ctx.stroke();
+            } else if (cls === 'necro') {
+              const sway = Math.sin(phase) * 2;                                      // ragged grave-robe, torn hem
+              ctx.fillStyle = mono ? color : 'rgba(74,68,96,0.55)';
+              ctx.strokeStyle = color; ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(-4.5, -10);
+              ctx.quadraticCurveTo(-8.5, 0, -10.5 + sway, 12);
+              ctx.lineTo(-6.5 + sway, 8); ctx.lineTo(-2.5, 12.5); ctx.lineTo(1.5, 8); ctx.lineTo(5.5, 12.5); ctx.lineTo(9.5 + sway * 0.5, 8.5);
+              ctx.quadraticCurveTo(8.5, 0, 4.5, -10);
+              ctx.closePath(); ctx.fill(); ctx.stroke();
+              ctx.fillStyle = gc('#4a4458');                                         // a deep grave-cowl, drooping behind
+              ctx.beginPath();
+              ctx.moveTo(9, -35);
+              ctx.quadraticCurveTo(7, -46, -2, -46);
+              ctx.quadraticCurveTo(-13, -45.5, -18, -36);
+              ctx.quadraticCurveTo(-15, -30, -9, -33);
+              ctx.quadraticCurveTo(-6, -30, 0, -31);
+              ctx.closePath(); ctx.fill();
+            }
+            ctx.restore();
+          }
+
           // the creator himself — an unarmed, bespectacled stick figure. modes:
           //   'plead' standing tall with both hands up (the intro card), 'idle' kneeling in plea (the scene),
           //   'rise' standing in relief (spared), 'dying' kneeling as he crumbles.
@@ -763,10 +996,15 @@
 
           function drawShaman(e, col) {
             ctx.save(); ctx.translate(e.x, e.y);
-            // the ritual circle IS the haste zone — telegraphed exactly (gutters out while iced)
+            // the ritual circle IS the haste zone — telegraphed exactly (gutters out while
+            // iced); it flares hot while the frenzy-shriek has the pack sprinting
             if (!(e.frozen > 0)) {
-              const a = api.reduceMotion ? 0.3 : 0.2 + 0.12 * Math.sin(frame * 0.07);
-              ctx.strokeStyle = 'rgba(140,220,120,' + a.toFixed(2) + ')'; ctx.lineWidth = 2;
+              const fz = e.frenzyT > 0;
+              const a = api.reduceMotion ? (fz ? 0.55 : 0.3)
+                : fz ? 0.45 + 0.25 * Math.sin(frame * 0.22)
+                     : 0.2 + 0.12 * Math.sin(frame * 0.07);
+              ctx.strokeStyle = (fz ? 'rgba(200,255,140,' : 'rgba(140,220,120,') + a.toFixed(2) + ')';
+              ctx.lineWidth = fz ? 3 : 2;
               ctx.setLineDash([6, 8]);
               ctx.beginPath(); ctx.arc(0, -8, SHAMAN_R, 0, Math.PI * 2); ctx.stroke();
               ctx.setLineDash([]);
@@ -2169,7 +2407,7 @@
             // the sword-arm: a real forearm from the shoulder down to the hand (angled apart from the blade,
             // so the weapon clearly reads as held rather than sprouting from the torso)
             ctx.lineJoin = 'round';
-            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
+            ctx.strokeStyle = heroTint(h); ctx.lineWidth = 2.5;
             ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
             // the blade geometry now grows out of the hand
             const ux = Math.cos(ang), uy = Math.sin(ang), px = -Math.sin(ang), py = Math.cos(ang);
@@ -2192,7 +2430,7 @@
               ctx.strokeStyle = '#eaffff'; ctx.lineWidth = 3.4;                // white-hot core
               ctx.beginPath(); ctx.moveTo(b0x, b0y); ctx.lineTo(b1x, b1y); ctx.stroke();
               ctx.shadowBlur = 0;
-              ctx.fillStyle = '#f2f2f2';                                 // fist on the hilt
+              ctx.fillStyle = heroTint(h);                               // fist on the hilt
               ctx.beginPath(); ctx.arc(handX, handY, 2.8, 0, Math.PI * 2); ctx.fill();
               ctx.restore();
               return;
@@ -2225,7 +2463,7 @@
             ctx.moveTo(handX + ux * bb - px * hw, handY + uy * bb - py * hw);
             ctx.lineTo(handX + ux * (bt - 9) - px * hw * 0.8, handY + uy * (bt - 9) - py * hw * 0.8);
             ctx.stroke();
-            ctx.fillStyle = '#f2f2f2';                                  // fist on the grip
+            ctx.fillStyle = heroTint(h);                                // fist on the grip
             ctx.beginPath(); ctx.arc(handX, handY, 2.8, 0, Math.PI * 2); ctx.fill();
             ctx.restore();
           }
@@ -2240,7 +2478,7 @@
             const drawn = h.swingT > 0 ? (h.swingT / 8) : 0;   // 1 = just loosed
             ctx.save();
             ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;      // the bow arm
+            ctx.strokeStyle = heroTint(h); ctx.lineWidth = 2.5; // the bow arm
             ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
             ctx.strokeStyle = '#a5d6a7'; ctx.lineWidth = 3;     // the stave
             ctx.beginPath();
@@ -2258,40 +2496,123 @@
               ctx.strokeStyle = '#f5f5dc'; ctx.lineWidth = 2;
               ctx.beginPath(); ctx.moveTo(handX - ux * pull, handY - uy * pull); ctx.lineTo(handX + ux * 12, handY + uy * 12); ctx.stroke();
             }
-            ctx.fillStyle = '#f2f2f2';
+            ctx.fillStyle = heroTint(h);
             ctx.beginPath(); ctx.arc(handX, handY, 2.6, 0, Math.PI * 2); ctx.fill();
             ctx.restore();
           }
-          // the caster's staff: held upright with a glowing violet orb — it swells through
-          // the incantation (h.castT counting down) and flares as the bolt looses
+          // the caster's staff: held upright with a glowing orb in the SELECTED spell's
+          // color — it swells through the incantation (h.castT counting down, normalized
+          // by the spell's own cast length) and flares as the spell looses
           function drawHeldStaff(h) {
             const fl = Math.hypot(h.fx, h.fy) || 1;
             const ux = h.fx / fl;
             const side = ux >= 0 ? 1 : -1;
             const gx = h.x + side * 10, gy = h.y - 13;
-            const charge = h.castT > 0 ? 1 - h.castT / CAST_T : 0;
+            const charge = h.castT > 0 ? 1 - h.castT / (h.castMax || CAST_T) : 0;
             const flare = (h.swingT > 0 ? h.swingT / 10 : 0) + charge;
+            const sp = SPELLS[h.casting || curSpell(h)] || SPELLS.bolt;
             ctx.save();
             ctx.lineCap = 'round';
-            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;      // the staff arm
+            ctx.strokeStyle = heroTint(h); ctx.lineWidth = 2.5; // the staff arm
             ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(gx, gy); ctx.stroke();
             ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 3;     // the staff itself
             ctx.beginPath(); ctx.moveTo(gx + side * 2, gy + 12); ctx.lineTo(gx + side * 5, gy - 24); ctx.stroke();
             const pulse = api.reduceMotion ? 0.5 : 0.4 + 0.25 * Math.sin(frame * 0.15);
-            ctx.fillStyle = '#e1bee7';
-            ctx.shadowColor = '#ce93d8'; ctx.shadowBlur = 10 + flare * 14;
+            ctx.fillStyle = sp.col;
+            ctx.shadowColor = sp.col; ctx.shadowBlur = 10 + flare * 14;
             ctx.globalAlpha = Math.min(1, pulse + 0.35 + flare * 0.6);
             ctx.beginPath(); ctx.arc(gx + side * 5.5, gy - 27, 3.4 + flare * 2.2, 0, Math.PI * 2); ctx.fill();
             ctx.globalAlpha = 1; ctx.shadowBlur = 0;
-            ctx.fillStyle = '#f2f2f2';
+            ctx.fillStyle = heroTint(h);
             ctx.beginPath(); ctx.arc(gx, gy, 2.6, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+          // the necromancer's scythe: a long dark snath with a crescent soul-steel blade —
+          // rested on the shoulder at ease, whirled through a teal reaping wedge on the swing
+          function drawHeldScythe(h) {
+            const fl = Math.hypot(h.fx, h.fy) || 1;
+            const fxn = h.fx / fl, fyn = h.fy / fl;
+            const baseAng = Math.atan2(fyn, fxn);
+            const swinging = h.swingT > 0;
+            const a0 = baseAng - 1.9, sweepA = (1 - h.swingT / 10) * 3.8;
+            const ang = swinging ? a0 + sweepA : baseAng + 0.55;
+            const hx = h.x, hy = h.y - 20;
+            ctx.save();
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            if (swinging) {                                   // the reaping wedge
+              ctx.fillStyle = 'rgba(100,255,218,' + (h.swingT / 40).toFixed(2) + ')';
+              ctx.beginPath(); ctx.moveTo(hx, hy);
+              ctx.arc(hx, hy, SCYTHE_R * 0.95, a0, a0 + sweepA);
+              ctx.closePath(); ctx.fill();
+              ctx.strokeStyle = 'rgba(100,255,218,' + (h.swingT / 14).toFixed(2) + ')';
+              ctx.lineWidth = 4;
+              ctx.beginPath(); ctx.arc(hx, hy, SCYTHE_R * 0.95, a0, a0 + sweepA); ctx.stroke();
+            }
+            const handX = h.x + fxn * 11, handY = h.y - 13 + fyn * 5;
+            ctx.strokeStyle = heroTint(h); ctx.lineWidth = 2.5;                 // the scythe arm
+            ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(handX, handY); ctx.stroke();
+            const ux = Math.cos(ang), uy = Math.sin(ang), px = -Math.sin(ang), py = Math.cos(ang);
+            const at = (dd) => [handX + ux * dd, handY + uy * dd];
+            const [s0x, s0y] = at(-14), [s1x, s1y] = at(30);
+            ctx.strokeStyle = '#3e2f23'; ctx.lineWidth = 3.2;                   // the snath
+            ctx.beginPath(); ctx.moveTo(s0x, s0y); ctx.lineTo(s1x, s1y); ctx.stroke();
+            const glow = api.reduceMotion ? 0.5 : 0.35 + 0.25 * Math.sin(frame * 0.09);
+            ctx.shadowColor = NECRO_COL; ctx.shadowBlur = 6 + glow * 8;         // the crescent, soul-lit
+            ctx.strokeStyle = '#cfe8e4'; ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(s1x, s1y);
+            ctx.quadraticCurveTo(s1x + px * 16 + ux * 4, s1y + py * 16 + uy * 4,
+                                 s1x + px * 24 - ux * 8, s1y + py * 24 - uy * 8);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = heroTint(h);                                        // fist on the snath
+            ctx.beginPath(); ctx.arc(handX, handY, 2.8, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+          // a fallen grunt's husk: a bone mound with a soul wisp curling off it — fades out
+          // over its final beats so the raise window is legible
+          function drawHusk(k) {
+            const fade = Math.min(1, k.t / 120) * 0.85;
+            ctx.save();
+            ctx.globalAlpha = fade;
+            ctx.translate(k.x, k.y);
+            ctx.strokeStyle = '#8a93a5'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(-2, -4); ctx.stroke();   // slumped bones
+            ctx.beginPath(); ctx.moveTo(7, -1); ctx.lineTo(1, -4); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(-4, -1); ctx.lineTo(5, -2); ctx.stroke();
+            ctx.fillStyle = '#aab2bb';
+            ctx.beginPath(); ctx.arc(-6, -5, 3, 0, Math.PI * 2); ctx.fill();        // the skull
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(-7.2, -5.6, 1.2, 1.2); ctx.fillRect(-4.4, -5.6, 1.2, 1.2);
+            const wispA = api.reduceMotion ? 0.5 : 0.35 + 0.2 * Math.sin(frame * 0.11 + k.y);
+            const bob = api.reduceMotion ? 0 : Math.sin(frame * 0.08 + k.x) * 2;    // the wisp
+            ctx.fillStyle = NECRO_COL; ctx.globalAlpha = fade * wispA;
+            ctx.beginPath(); ctx.arc(bob, -13 + Math.sin(frame * 0.06 + k.x * 0.7) * 3, 1.6, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+          // a raised minion: its living sprite redrawn in spectral soul-teal, with a
+          // draining life-ring at its feet — the raise is a loan, and the ring is the clock
+          function drawMinion(m) {
+            ctx.save();
+            ctx.globalAlpha = 0.85;
+            const fk = { x: m.x, y: m.y, phase: m.phase, vx: m.fx || 1, elite: 0, hp: 1,
+                         mode: 'lunge', lx: m.fx || 1, st: 0 };
+            const col = '#57e6c4';
+            if (m.src === 'wolf') drawWolf(fk, col);
+            else if (m.src === 'archer') drawArcher(fk, col);
+            else if (m.src === 'troll') drawTroll(fk, col, 0);
+            else drawGoblin(fk, col);
+            ctx.globalAlpha = 1;
+            const fr = clamp(m.t / MINION_T, 0, 1);
+            ctx.strokeStyle = 'rgba(100,255,218,0.55)'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(m.x, m.y + 2, 12, -Math.PI / 2, -Math.PI / 2 + fr * Math.PI * 2); ctx.stroke();
             ctx.restore();
           }
 
           // the intro's living mannequin: the hero as currently built — weapon in hand, gently
           // scanning — over a class-colored spotlight. `hot` marks the row being edited.
           function drawClassPreview(x, y, cls, color, hot, label) {
-            const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8' }[cls];
+            const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL }[cls];
             ctx.save();
             // light pool under the feet
             ctx.globalAlpha = hot ? 0.5 : 0.26;
@@ -2303,11 +2624,12 @@
             // the hero at 1.3× — a fake hero object drives the same weapon draws the game uses,
             // its facing swaying slowly so the weapon reads as alive, not a museum piece
             ctx.translate(x, y); ctx.scale(1.3, 1.3); ctx.translate(-x, -y);
-            stickFigure(x, y, frame * 0.05, color, 1, 1, 0, hot ? cc : 0);
+            heroFigure(x, y, frame * 0.05, color, cls, 1, 1, 1, 0, hot ? cc : 0);
             const fake = { x, y, fx: 1, fy: Math.sin(frame * 0.02) * 0.22, swingT: 0, castT: 0,
-                           swordT: 1e9, heldSaber: false, cls };
+                           swordT: 1e9, heldSaber: false, cls, tint: color };
             if (cls === 'ranged') drawHeldBow(fake);
             else if (cls === 'caster') drawHeldStaff(fake);
+            else if (cls === 'necro') drawHeldScythe(fake);
             else drawHeldSword(fake);
             ctx.restore();
             ctx.save();
@@ -2317,13 +2639,226 @@
             ctx.restore(); ctx.textAlign = 'left';
           }
 
-          // draw one hero (figure + Aegis bubble + held blade). baseColor distinguishes P1
-          // (white) from P2 (green). A downed hero is drawn fallen with a revive ring instead.
-          function drawHero(h, baseColor) {
+          /* the title scene: a night field with the horde marching the ridge in silhouette,
+             a gold wordmark, and pill-style mode/class selectors around the mannequin stage.
+             Deliberately rnd()-free — every animation runs off `frame`, so pumping title
+             frames can never advance the seeded sim stream. Pulses are steady (never
+             flashing) under prefers-reduced-motion. */
+          function drawIntroScreen() {
+            const RM = api.reduceMotion;
+            // deterministic per-index jitter (a hash, NOT rnd() — see the note above)
+            const ih = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+            const rr = (x, y, w, h, r) => {
+              ctx.beginPath(); ctx.moveTo(x + r, y);
+              ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+              ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+            };
+            ctx.clearRect(0, 0, GW, GH);
+            ctx.save();
+
+            /* ── the night scene ── */
+            const gy = Math.round(GH * 0.3);                    // the ridge line
+            let g = ctx.createLinearGradient(0, 0, 0, gy);
+            g.addColorStop(0, '#04060c'); g.addColorStop(0.7, '#0b1220'); g.addColorStop(1, '#151017');
+            ctx.fillStyle = g; ctx.fillRect(0, 0, GW, gy);
+            g = ctx.createLinearGradient(0, gy, 0, GH);
+            g.addColorStop(0, '#11161d'); g.addColorStop(1, '#07090d');
+            ctx.fillStyle = g; ctx.fillRect(0, gy, GW, GH - gy);
+            for (let i = 0; i < 46; i++) {                      // starfield (steady when RM)
+              const sx = ih(i) * GW, sy = ih(i + 97) * (gy - 28) + 6;
+              const tw = RM ? 0.5 : 0.35 + 0.28 * Math.sin(frame * 0.045 + i * 1.7);
+              ctx.fillStyle = 'rgba(215,230,255,' + Math.max(0.12, tw).toFixed(2) + ')';
+              const sz = i % 7 === 0 ? 2 : 1.4;
+              ctx.fillRect(sx, sy, sz, sz);
+            }
+            // ember glow over the ridge — the horde's fires, just out of sight. Peaks AT the
+            // ridge line and fades both ways, so the marchers read as backlit silhouettes
+            g = ctx.createLinearGradient(0, gy - 56, 0, gy + 26);
+            g.addColorStop(0, 'rgba(255,120,40,0)'); g.addColorStop(0.7, 'rgba(255,130,45,0.26)'); g.addColorStop(1, 'rgba(255,120,40,0)');
+            ctx.fillStyle = g; ctx.fillRect(0, gy - 56, GW, 82);
+            // the horde on the march — real sprites, scaled down and silhouetted (frozen when RM)
+            // (no archers — drawArcher faces the live `player`, which would break the march)
+            const parade = ['goblin', 'wolf', 'goblin', 'troll', 'wolf', 'goblin', 'wolf', 'goblin', 'troll'];
+            const span = GW + 160, step = span / parade.length;
+            const xoff = RM ? 0 : (frame * 0.32) % span;
+            ctx.save(); ctx.globalAlpha = 0.85;
+            for (let i = 0; i < parade.length; i++) {
+              const x = ((i * step + ih(i + 41) * 44 - xoff) % span + span) % span - 80;
+              const sc = 0.5 + ih(i + 13) * 0.14;
+              const fk = { x: 0, y: 0, phase: RM ? ih(i + 71) * 6.28 : frame * 0.11 + i * 1.9,
+                           vx: -1, mode: 'lunge', lx: -1 };    // vx/lx pin the facing to the march
+              ctx.save(); ctx.translate(x, gy + 2); ctx.scale(sc, sc);
+              if (parade[i] === 'goblin') drawGoblin(fk, '#0d1218');
+              else if (parade[i] === 'wolf') drawWolf(fk, '#0d1218');
+              else drawTroll(fk, '#0d1218', 0);
+              ctx.restore();
+            }
+            ctx.restore();
+            // vignette so the scene falls away at the edges
+            g = ctx.createRadialGradient(GW / 2, GH * 0.44, Math.min(GW, GH) * 0.32, GW / 2, GH * 0.44, Math.max(GW, GH) * 0.72);
+            g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.5)');
+            ctx.fillStyle = g; ctx.fillRect(0, 0, GW, GH);
+
+            /* ── the wordmark ── */
+            ctx.textAlign = 'center';
+            const blade = (bx, by, ang) => {                    // a crest of crossed swords behind the title
+              ctx.save(); ctx.translate(bx, by); ctx.rotate(ang); ctx.globalAlpha = 0.55;
+              ctx.lineCap = 'round';
+              ctx.strokeStyle = '#6e7f8f'; ctx.lineWidth = 5;
+              ctx.beginPath(); ctx.moveTo(0, 40); ctx.lineTo(0, -46); ctx.stroke();
+              ctx.strokeStyle = '#cdd8e2'; ctx.lineWidth = 1.5;
+              ctx.beginPath(); ctx.moveTo(0, 36); ctx.lineTo(0, -42); ctx.stroke();
+              ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 4;
+              ctx.beginPath(); ctx.moveTo(-10, 40); ctx.lineTo(10, 40); ctx.stroke();
+              ctx.fillStyle = '#c9a227';
+              ctx.beginPath(); ctx.arc(0, 49, 3.6, 0, Math.PI * 2); ctx.fill();
+              ctx.restore();
+            };
+            blade(GW / 2, 52, -0.62); blade(GW / 2, 52, 0.62);
+            const breathe = RM ? 0 : Math.sin(frame * 0.05);    // a slow glow, not a flash
+            ctx.lineJoin = 'round';
+            ctx.font = 'bold ' + Math.min(44, Math.round(GW / 11)) + 'px Tahoma,Arial';
+            ctx.strokeStyle = '#120d02'; ctx.lineWidth = 7;
+            ctx.strokeText('STICK FIGHTER', GW / 2, 62);
+            g = ctx.createLinearGradient(0, 24, 0, 66);
+            g.addColorStop(0, '#fff7dc'); g.addColorStop(0.55, '#ffd24d'); g.addColorStop(1, '#9a7a1f');
+            ctx.shadowColor = '#ffb300'; ctx.shadowBlur = 14 + 6 * breathe;
+            ctx.fillStyle = g;
+            ctx.fillText('STICK FIGHTER', GW / 2, 62);
+            ctx.shadowBlur = 0;
+            // the 2000 plate, knocked slightly askew — very Y2K
+            ctx.save();
+            ctx.translate(GW / 2, 84); ctx.rotate(-0.045);
+            rr(-52, -14, 104, 27, 6);
+            ctx.fillStyle = '#160a06'; ctx.fill();
+            ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 1.5; ctx.stroke();
+            g = ctx.createLinearGradient(0, -12, 0, 12);
+            g.addColorStop(0, '#ffe4b3'); g.addColorStop(0.5, '#ff8a3c'); g.addColorStop(1, '#c62828');
+            ctx.font = 'bold 20px Tahoma,Arial'; ctx.fillStyle = g;
+            ctx.fillText('2 0 0 0', 0, 7);
+            ctx.restore();
+            ctx.font = 'italic 13px Tahoma,Arial'; ctx.fillStyle = '#d9a44a';
+            ctx.fillText('the horde approaches.  RUN.  (and fight)', GW / 2, 116);
+
+            /* ── the selectors ── */
+            const pill = (x, y, w, h, label, sel, active, col, font) => {
+              rr(x, y, w, h, h / 2);
+              if (sel) {
+                if (active) { ctx.shadowColor = col; ctx.shadowBlur = RM ? 10 : 8 + 4 * Math.sin(frame * 0.09); }
+                ctx.fillStyle = active ? col : '#77828c';
+                ctx.fill(); ctx.shadowBlur = 0;
+                ctx.fillStyle = '#10141a';
+              } else {
+                ctx.strokeStyle = active ? '#4b5a6a' : '#333d48'; ctx.lineWidth = 1.5; ctx.stroke();
+                ctx.fillStyle = active ? '#93a3b3' : '#5c6773';
+              }
+              ctx.font = (sel ? 'bold ' : '') + (font || '13px Tahoma,Arial');
+              ctx.fillText(label, x + w / 2, y + h / 2 + 4.5);
+            };
+            const modes = ['1 PLAYER', '2 PLAYERS', '☀ DAILY'];
+            const modeCol = ['#ffd24d', P2_COL, '#ffb300'];
+            const mw = 108, mh = 26, mgap = 12;
+            const mx0 = GW / 2 - (mw * 3 + mgap * 2) / 2;
+            for (let i = 0; i < 3; i++) pill(mx0 + i * (mw + mgap), 132, mw, mh, modes[i], modeSel === i, introRow === 0, modeCol[i]);
+            if (modeSel === 2) {
+              ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = '#ffb300';
+              ctx.fillText('☀ ' + dailyDayPretty() + ' — one seed for everyone · today\'s own board · resets at UTC midnight', GW / 2, 174);
+            } else if (hardUnlocked) {
+              ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ff6e6e';
+              ctx.fillText('☠ HARD MODE — earned by mercy · elites from the first wave, everything comes early', GW / 2, 174);
+            }
+            // the mannequin stage: a podium per hero, then the live preview(s) on top
+            const py = clamp(Math.round(GH * 0.47), 216, 292);
+            const podium = (x) => {
+              ctx.fillStyle = 'rgba(10,14,19,0.7)';
+              ctx.beginPath(); ctx.ellipse(x, py + 7, 58, 15, 0, 0, Math.PI * 2); ctx.fill();
+              ctx.strokeStyle = 'rgba(120,140,160,0.35)'; ctx.lineWidth = 1.5;
+              ctx.beginPath(); ctx.ellipse(x, py + 7, 58, 15, 0, 0, Math.PI * 2); ctx.stroke();
+            };
+            if (modeSel !== 1) {
+              podium(GW / 2);
+              drawClassPreview(GW / 2, py, CLASSES[classSel], 'white', introRow === 1);
+            } else {
+              podium(GW / 2 - 85); podium(GW / 2 + 85);
+              drawClassPreview(GW / 2 - 85, py, CLASSES[classSel], 'white', introRow === 1, 'P1');
+              drawClassPreview(GW / 2 + 85, py, CLASSES[classSel2], P2_COL, introRow === 2, 'P2');
+            }
+            ctx.textAlign = 'center';
+            const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL };
+            const nCls = CLASSES.length, cw = 86, ch = 22, cgap = 8;
+            const clsRow = (y, sel, active, lbl, lblCol) => {
+              const x0 = GW / 2 - (cw * nCls + cgap * (nCls - 1)) / 2;
+              if (lbl) {
+                ctx.textAlign = 'right'; ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = lblCol;
+                ctx.fillText(lbl, x0 - 12, y + ch / 2 + 4.5); ctx.textAlign = 'center';
+              }
+              for (let i = 0; i < nCls; i++) {
+                pill(x0 + i * (cw + cgap), y, cw, ch, CLASS_ICON[CLASSES[i]] + ' ' + CLASSES[i].toUpperCase(),
+                     sel === i, active, clsCol[CLASSES[i]], '12px Tahoma,Arial');
+              }
+            };
+            let cy = py + 48;
+            if (modeSel !== 1) {
+              clsRow(cy, classSel, introRow === 1);
+            } else {
+              clsRow(cy, classSel, introRow === 1, 'P1', '#fff');
+              cy += 28;
+              clsRow(cy, classSel2, introRow === 2, 'P2', P2_COL);
+            }
+            const CLASS_BLURB = {
+              melee:  'run over the stone to seize the sword — X cleaves all before you',
+              ranged: 'hold a direction and X looses an arrow that way — diagonals work',
+              caster: 'X casts the chosen page — C turns the spellbook · spells drink mana, kills give it back',
+              necro:  'X reaps a wide arc — husks caught in the sweep RISE as minions · kills feed the soul well',
+            };
+            ctx.font = 'italic 12px Tahoma,Arial'; ctx.fillStyle = '#aeb9c4';
+            ctx.fillText(CLASS_BLURB[CLASSES[introRow === 2 ? classSel2 : classSel]], GW / 2, cy + 40);
+
+            /* ── footer: control hints on a dimmed bar, BEGIN pulsing above it ── */
+            const hints = [];
+            if (modeSel !== 1) {
+              hints.push(['move: WASD / arrows   ·   dash: Space / Shift   ·   attack: X / F', '#c8d2da']);
+            } else {
+              hints.push(['Player 1 (white):  arrows move  ·  Right-Shift dash  ·  /  attack', '#fff']);
+              hints.push(['Player 2 (green):  WASD move  ·  Left-Shift dash  ·  F  attack', P2_COL]);
+              hints.push(['allies & upgrades are shared — revive a downed partner by standing close', '#9fb0c0']);
+            }
+            hints.push(['◀ ▶ choose   ·   ↑ ↓ switch row   ·   1 / 2 / 3 jump to a mode', '#9fb0c0']);
+            hints.push(['coins raise your multiplier  ·  graze foes for bonus  ·  clear waves for tokens', '#8494a4']);
+            const barH = hints.length * 17 + 14;
+            ctx.fillStyle = 'rgba(5,8,12,0.55)'; ctx.fillRect(0, GH - barH, GW, barH);
+            ctx.strokeStyle = 'rgba(90,110,130,0.25)'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(0, GH - barH); ctx.lineTo(GW, GH - barH); ctx.stroke();
+            let hy = GH - barH + 19;
+            ctx.font = '12px Tahoma,Arial';
+            for (const [text, color] of hints) { ctx.fillStyle = color; ctx.fillText(text, GW / 2, hy); hy += 17; }
+            const pulse = RM ? 0.5 : 0.5 + 0.5 * Math.sin(frame * 0.07);   // a fade, never a flash
+            const bw = 250, bh = 30, byy = GH - barH - 44;
+            rr(GW / 2 - bw / 2, byy, bw, bh, bh / 2);
+            ctx.fillStyle = 'rgba(255,210,77,' + (0.1 + 0.08 * pulse).toFixed(3) + ')'; ctx.fill();
+            ctx.strokeStyle = 'rgba(255,210,77,' + (0.55 + 0.4 * pulse).toFixed(3) + ')'; ctx.lineWidth = 2; ctx.stroke();
+            ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
+            ctx.fillText('⚔  Z / ENTER — BEGIN', GW / 2, byy + 20);
+
+            ctx.restore(); ctx.textAlign = 'left';
+          }
+
+          // the hero's current body color: P1 white / P2 green, overridden by the dash
+          // cyan and the frost-wolf chill. The intro mannequins pass their display color
+          // through `h.tint`. Used by the body draw AND the weapon arms/fists, so P2's
+          // bow arm is green like the rest of P2.
+          function heroTint(h) {
+            if (h.tint) return h.tint;
+            const base = coop && p2 && h === p2 ? P2_COL : 'white';
+            return h.dashT > 0 ? '#80deea' : h.chillT > 0 ? '#a8d8e8' : base;
+          }
+          // draw one hero (class-dressed figure + Aegis bubble + held weapon). A downed
+          // hero is drawn fallen with a revive ring instead.
+          function drawHero(h) {
             if (h.down) { drawDownedHero(h); return; }
             const lean = clamp(h.vx * 0.04, -0.3, 0.3);
-            const col = h.dashT > 0 ? '#80deea' : h.chillT > 0 ? '#a8d8e8' : baseColor;
-            stickFigure(h.x, h.y, h.phase, col, 1, 1, lean, h.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
+            const col = heroTint(h);
+            heroFigure(h.x, h.y, h.phase, col, h.cls, h.fx >= 0 ? 1 : -1, 1, 1, lean, h.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
             // the Aegis: a soft hex-bubble around the hero while it holds; a bright flash as it breaks
             if (h.shield || h.iframe > 0) {
               const breaking = !h.shield && h.iframe > 0;
@@ -2340,11 +2875,12 @@
             }
             if (h.cls === 'ranged') drawHeldBow(h);
             else if (h.cls === 'caster') drawHeldStaff(h);
+            else if (h.cls === 'necro') drawHeldScythe(h);
             else if (h.swordT > 0 || h.heldSaber) drawHeldSword(h);
           }
           // a fallen co-op hero: a prone figure with a revive ring that fills as a partner stands by
           function drawDownedHero(h) {
-            stickFigure(h.x, h.y, 0, '#7a7a7a', 1, 0.7, Math.PI / 2, 'rgba(160,160,160,0.4)');
+            heroFigure(h.x, h.y, 0, '#7a7a7a', h.cls, h.fx >= 0 ? 1 : -1, 1, 0.7, Math.PI / 2, 'rgba(160,160,160,0.4)', true);
             const p = clamp(h.reviveT / reviveNeed(), 0, 1);
             ctx.save();
             ctx.translate(h.x, h.y - 18);
@@ -2390,6 +2926,11 @@
             if (e.type === 'dio' && e.mode !== 'dying') { startDioFinale(e); return; }
             e.dead = true;
             kills++;
+            // a necromancer in the party harvests the fallen: grunts leave husks to raise
+            if ((e.type === 'goblin' || e.type === 'wolf' || e.type === 'archer' || e.type === 'troll') &&
+                !champsBanned() && husks.length < HUSK_CAP && heroesAll().some(h => h.cls === 'necro')) {
+              husks.push({ src: e.type, x: e.x, y: e.y, t: Math.round(HUSK_T * up.huskMul), elite: e.elite || 0 });
+            }
             // Shatter: a foe killed while frozen bursts into an ice nova-let, freezing its neighbors
             if (up.shatter && e.frozen > 0) {
               sfSfx.freeze();
@@ -2605,7 +3146,7 @@
                 const rd = d && d.replay;
                 // v must match the CURRENT sim-balance version — an older recording would
                 // re-simulate under new rules and play back a different run than it claims
-                if (!rd || rd.v !== 2 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+                if (!rd || rd.v !== 3 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
                 startReplay(rd, item.entry);
               })
               .catch(() => { watchSel = null; watchErr = 'replay unavailable — recorded on an older build, or expired'; });
@@ -2616,7 +3157,7 @@
             watchSel = null;
             replayMode = true;
             replay = { d, i: 0, name: String(entry.name || 'AAA'), score: entry.score | 0 };
-            classSel = clamp(d.c1 | 0, 0, 2); classSel2 = clamp(d.c2 | 0, 0, 2);
+            classSel = clamp(d.c1 | 0, 0, CLASSES.length - 1); classSel2 = clamp(d.c2 | 0, 0, CLASSES.length - 1);
             coop = !!d.coop; dailyRun = false;
             sfSeedOverride = d.seed >>> 0;
             repMask = 0;
@@ -2771,23 +3312,26 @@
           }
 
           function rollType() {
-            // the goblin SHAMAN (endless, wave 8+): a rare support piece — it never attacks,
-            // it makes everything else worse (see the shaman branch + shamanHaste). At most
-            // two afield (counting pending warns), so it stays a priority target, not a wall.
-            if (endless && wave >= 8 &&
+            // the goblin SHAMAN (endless wave 8+ / hard mode wave 4+): a rare support piece —
+            // it never attacks, it makes everything else worse (see the shaman branch +
+            // shamanHaste). At most two afield (counting pending warns), so it stays a
+            // priority target, not a wall.
+            if ((endless || hardMode) && wave >= (hardMode ? 4 : 8) &&
                 enemies.filter(s => s.type === 'shaman' && !s.dead).length +
                 warns.filter(w => w.type === 'shaman').length < 2 &&
                 rnd() < 0.08) return 'shaman';
-            // the goblin BOMBARDIER (endless, wave 10+): long-range area denial — its kegs
-            // make the floor itself unsafe (and wound the horde too: bait the shot). ≤2 afield.
-            if (endless && wave >= 10 &&
+            // the goblin BOMBARDIER (endless wave 10+ / hard mode wave 6+): long-range area
+            // denial — its kegs make the floor itself unsafe (and wound the horde too: bait
+            // the shot). ≤2 afield.
+            if ((endless || hardMode) && wave >= (hardMode ? 6 : 10) &&
                 enemies.filter(s => s.type === 'bomber' && !s.dead).length +
                 warns.filter(w => w.type === 'bomber').length < 2 &&
                 rnd() < 0.07) return 'bomber';
             const r = rnd();
-            if (wave >= 4 && r < 0.15) return 'troll';
-            if (wave >= 3 && r < 0.35) return 'archer';
-            if (wave >= 2 && r < 0.6) return 'wolf';
+            // hard mode: every type phases in one wave early (wolves join the very first band)
+            if (wave >= (hardMode ? 3 : 4) && r < 0.15) return 'troll';
+            if (wave >= (hardMode ? 2 : 3) && r < 0.35) return 'archer';
+            if (wave >= (hardMode ? 1 : 2) && r < 0.6) return 'wolf';
             return 'goblin';
           }
 
@@ -2800,10 +3344,13 @@
           //           (the chill is a 90px AURA) · deadeye (five faster arrows) · dread
           //           troll (8 HP, roars into a harder enrage)
           function rollElite() {
-            if (!endless) return 0;
-            if (rnd() >= Math.min(0.5, 0.06 * (wave - 5))) return 0;
+            if (!endless && !hardMode) return 0;
+            // hard mode runs the elite math five waves deep: elites stalk from wave 1
+            // (gently), and the dread tier arrives by wave 4 instead of 9
+            const w = wave + (hardMode ? 5 : 0);
+            if (rnd() >= Math.min(0.5, 0.06 * (w - 5))) return 0;
             // a rolled elite may ascend to the dread tier — rarer, and only in deep waves
-            return wave >= 9 && rnd() < Math.min(0.25, 0.04 * (wave - 8)) ? 2 : 1;
+            return w >= 9 && rnd() < Math.min(0.25, 0.04 * (w - 8)) ? 2 : 1;
           }
 
           function makeEnemy(type, x, y, elite) {
@@ -2814,11 +3361,13 @@
             if (type === 'archer') { e.spd = 1.5; e.kr = 12; e.mode = 'approach'; e.st = 40; }
             if (type === 'troll')  { e.spd = Math.min(1.5, 0.8 + wave * 0.06); e.kr = 26; e.hp = 3; }
             if (type === 'shaman') {
-              // endless support: harmless to touch, shy, 2 HP — kill it first or fight a hasted horde
-              e.spd = 1.1; e.kr = 0; e.hp = 2; e.st = 90;
+              // endless support: harmless to touch, 2 HP — it rides with the warband,
+              // shrieking the pack into a frenzy and blinking clear of hunters
+              e.spd = 1.35; e.kr = 0; e.hp = 2; e.st = 90;
+              e.blinkCd = 0; e.frenzyT = 0; e.frenzyCd = 160;
               if (!shamanSeen) {
                 shamanSeen = true;
-                banner = 'a goblin SHAMAN chants at the edge'; bannerSub = 'break the ritual circle first'; bannerT = 130;
+                banner = 'a goblin SHAMAN drives the warband'; bannerSub = 'silence it, or fight a frenzied horde'; bannerT = 130;
               }
             }
             if (type === 'bomber') {
@@ -3246,8 +3795,18 @@
             ianActive = false; ianFinale = null; ianChoice = null;
             endless = true; mournful = false;
             try { localStorage.setItem('ilaird_sf_endless', '1'); } catch (_) {}
+            // mercy has a price: HARD MODE unlocks forever — every normal run from here
+            // on starts hard (this run continues as-is; the flag is read per run in init)
+            if (!replayMode && !hardUnlocked) {
+              hardUnlocked = true;
+              try { localStorage.setItem('ilaird_sf_hard', '1'); } catch (_) {}
+              banner = 'ENDLESS MODE  ·  ☠ HARD MODE UNLOCKED';
+              bannerSub = 'the horde never ends — and from now on, every run remembers your mercy';
+            } else {
+              banner = 'ENDLESS MODE'; bannerSub = 'the horde never ends — survive as long as you can';
+            }
             arrows = []; warns = []; dlg = []; dlgT = 0;
-            banner = 'ENDLESS MODE'; bannerSub = 'the horde never ends — survive as long as you can'; bannerT = 230;
+            bannerT = 230;
             breatherT = BREATHER;
           }
           function drawIanChoice() {
@@ -3350,18 +3909,81 @@
               if (sp > e.spd * hz) { e.vx = e.vx / sp * e.spd * hz; e.vy = e.vy / sp * e.spd * hz; }
               e.x += e.vx; e.y += e.vy; e.phase += 0.22;
             } else if (e.type === 'shaman') {
-              // the shaman never attacks — it keeps its distance and channels: grunts inside
-              // its ritual circle are hastened (shamanHaste), and each beat it knits one
-              // wounded troll within the circle back together, heart by heart
+              // the shaman still never attacks, but it rides WITH the warband: it shepherds
+              // the pack from just behind the front line so the ritual circle covers the
+              // chase, shrieks the kin into a frenzy when enough crowd the ring, mends
+              // wounded trolls (and re-raises elite bucklers), and BLINKS clear in a puff
+              // of chant-light when a hero closes in — hunting it down is a real chase now
               e.st--;
-              if (d < 240) { e.x -= dx / d * e.spd; e.y -= dy / d * e.spd; }   // shy — it backs away
-              e.phase += 0.07;
+              if (e.blinkCd > 0) e.blinkCd--;
+              if (e.frenzyT > 0) e.frenzyT--;
+              if (e.frenzyCd > 0) e.frenzyCd--;
+              // the pack it wards: centroid of the live open-field grunts
+              let px = 0, py = 0, pn = 0;
+              for (const g of enemies) {
+                if (g === e || g.dead) continue;
+                if (g.type === 'goblin' || g.type === 'wolf' || g.type === 'archer' || g.type === 'troll') { px += g.x; py += g.y; pn++; }
+              }
+              if (d < 120 && e.blinkCd <= 0) {
+                // blink: reappear behind the pack (or anywhere clear of heroes if it has none)
+                let bx = e.x, by = e.y, ok = false;
+                for (let i = 0; i < 8 && !ok; i++) {
+                  if (pn) {
+                    const cx = px / pn, cy = py / pn;
+                    const hx = tgt.x - cx, hy = tgt.y - cy, hl = Math.hypot(hx, hy) || 1;
+                    bx = cx - hx / hl * (60 + rnd() * 60) + (rnd() - 0.5) * 70;
+                    by = cy - hy / hl * (60 + rnd() * 60) + (rnd() - 0.5) * 70;
+                  } else {
+                    const a = rnd() * Math.PI * 2;
+                    bx = e.x + Math.cos(a) * (220 + rnd() * 80);
+                    by = e.y + Math.sin(a) * (220 + rnd() * 80);
+                  }
+                  bx = clamp(bx, 26, GW - 26); by = clamp(by, 48, GH - 16);
+                  ok = true;
+                  for (const h of heroesLive()) if (Math.hypot(h.x - bx, h.y - by) < 190) ok = false;
+                }
+                if (ok) {
+                  sparks.push({ x: e.x, y: e.y - 24, t: 20, color: '#a5e88a', txt: '✦' });
+                  e.x = bx; e.y = by;
+                  sparks.push({ x: e.x, y: e.y - 24, t: 20, color: '#a5e88a', txt: '✦' });
+                  sfSfx.zap();
+                  e.blinkCd = 150;
+                } else e.blinkCd = 40;     // nowhere safe to land — try again shortly
+              } else if (d < 190) {
+                e.x -= dx / d * e.spd * 1.2; e.y -= dy / d * e.spd * 1.2; e.phase += 0.11;
+              } else if (pn) {
+                // shepherd: hold station just behind the pack, relative to its quarry
+                const cx = px / pn, cy = py / pn;
+                const hx = tgt.x - cx, hy = tgt.y - cy, hl = Math.hypot(hx, hy) || 1;
+                const wx = clamp(cx - hx / hl * 70, 26, GW - 26);
+                const wy = clamp(cy - hy / hl * 70, 48, GH - 16);
+                const sx2 = wx - e.x, sy2 = wy - e.y, sl = Math.hypot(sx2, sy2) || 1;
+                if (sl > 24) { e.x += sx2 / sl * e.spd * 1.15; e.y += sy2 / sl * e.spd * 1.15; e.phase += 0.1; }
+                else e.phase += 0.07;
+              } else e.phase += 0.07;
+              // the frenzy shriek: three kin in the ring → whip them into a sprint
+              if (e.frenzyT <= 0 && e.frenzyCd <= 0) {
+                let kin = 0;
+                for (const g of enemies) {
+                  if (g === e || g.dead || g.frozen > 0) continue;
+                  if ((g.type === 'goblin' || g.type === 'wolf' || g.type === 'archer' || g.type === 'troll') &&
+                      Math.hypot(g.x - e.x, g.y - e.y) < SHAMAN_R) kin++;
+                }
+                if (kin >= 3) {
+                  e.frenzyT = 110; e.frenzyCd = 340;
+                  sparks.push({ x: e.x, y: e.y - 52, t: 26, color: '#c8ff9a', txt: 'RA-KA!' });
+                  shake = Math.max(shake, 5); sfSfx.screech();
+                }
+              }
+              // the mending beat: one heart per beat — wounded trolls, or an elite's broken buckler
               if (e.st <= 0) {
                 e.st = 90;
                 for (const t of enemies) {
-                  if (t.type !== 'troll' || t.dead || !(t.hp > 0)) continue;
-                  const mx = t.elite === 2 ? 8 : t.elite ? 5 : 3;
-                  if (t.hp < mx && Math.hypot(t.x - e.x, t.y - e.y) < SHAMAN_R) {
+                  if (t.dead || !(t.hp > 0)) continue;
+                  let mhp = 0;
+                  if (t.type === 'troll') mhp = t.elite === 2 ? 8 : t.elite ? 5 : 3;
+                  else if (t.type === 'goblin' && t.elite) mhp = t.elite === 2 ? 3 : 2;
+                  if (mhp && t.hp < mhp && Math.hypot(t.x - e.x, t.y - e.y) < SHAMAN_R) {
                     t.hp++;
                     sparks.push({ x: t.x, y: t.y - 62, t: 22, color: '#8fdc78', txt: '✚' });
                     break;                                   // one heart per beat
@@ -4047,79 +4669,15 @@
                   case 8: if (upMenu) finishUpgrades(); break;
                   case 9: if (bossIntro) advanceBossIntro(); break;
                   case 10: if (ianChoice) chooseIan(e[2] ? 1 : 0); break;
+                  case 11: if (e[2]) pend.cycleP2 = true; else pend.cycleP1 = true; break;
                 }
               }
             }
 
-            /* intro screen — character creation: live hero preview(s) + the 1P/2P and class
-               rows (see the onKey intro handler for the row navigation) */
+            /* intro screen — a proper title scene + character creation (see drawIntroScreen;
+               the onKey intro handler owns the row navigation) */
             if (!started) {
-              ctx.clearRect(0, 0, GW, GH);
-              ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, GW, GH);
-              ctx.save();
-              ctx.textAlign = 'center';
-              ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
-              ctx.font = 'bold 36px Tahoma,Arial'; ctx.fillStyle = 'white';
-              ctx.fillText('STICK FIGHTER 2000', GW / 2, 58);
-              ctx.font = '15px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
-              ctx.fillText('⚔  the horde approaches.  RUN.  (and fight)  ⚔', GW / 2, 86);
-              // one line per chooser row: the selected value gets ▶ ◀, the active row gets color
-              const pickLine = (opts, sel) => opts.map((o, i) => i === sel ? '▶ ' + o.toUpperCase() + ' ◀' : o).join('     ');
-              const rowCol = (r, activeCol) => introRow === r ? activeCol : '#77828c';
-              ctx.font = 'bold 18px Tahoma,Arial';
-              ctx.fillStyle = rowCol(0, modeSel === 1 ? P2_COL : modeSel === 2 ? '#ffb300' : '#ffd24d');
-              ctx.fillText(pickLine(['1 player', '2 player', '☀ daily'], modeSel), GW / 2, 120);
-              // the hero(es) being built, weapon in hand
-              const py = clamp(Math.round(GH * 0.42), 196, 252);
-              if (modeSel !== 1) {
-                drawClassPreview(GW / 2, py, CLASSES[classSel], 'white', introRow === 1);
-              } else {
-                drawClassPreview(GW / 2 - 85, py, CLASSES[classSel], 'white', introRow === 1, 'P1');
-                drawClassPreview(GW / 2 + 85, py, CLASSES[classSel2], P2_COL, introRow === 2, 'P2');
-              }
-              // class pick rows under the mannequins
-              ctx.textAlign = 'center';
-              const clsOpts = CLASSES.map(c => CLASS_ICON[c] + ' ' + c);
-              let cy = py + 60;
-              ctx.font = 'bold 14px Tahoma,Arial';
-              if (modeSel !== 1) {
-                ctx.fillStyle = rowCol(1, '#ffd24d');
-                ctx.fillText(pickLine(clsOpts, classSel), GW / 2, cy);
-              } else {
-                ctx.fillStyle = rowCol(1, '#fff');
-                ctx.fillText('P1   ' + pickLine(clsOpts, classSel), GW / 2, cy);
-                cy += 24;
-                ctx.fillStyle = rowCol(2, P2_COL);
-                ctx.fillText('P2   ' + pickLine(clsOpts, classSel2), GW / 2, cy);
-              }
-              // hints & controls, stacked up from the bottom edge
-              const CLASS_BLURB = {
-                melee:  'run over the stone to seize the sword — X cleaves all before you',
-                ranged: 'hold a direction and X looses an arrow that way — diagonals work',
-                caster: 'X charges a bolt that arcs to the nearest foe — frost & fire come with practice',
-              };
-              const blurbCls = CLASSES[introRow === 2 ? classSel2 : classSel];
-              const bottom = [['◀ ▶ choose   ·   ↑ ↓ switch row   (or 1 / 2 / 3 for the mode)', '12px Tahoma,Arial', '#9fb0c0']];
-              if (modeSel === 2) {
-                bottom.push(['☀ ' + dailyDayPretty() + ' — one seed for everyone · today\'s own board · resets at UTC midnight', '12px Tahoma,Arial', '#ffb300']);
-              }
-              if (modeSel !== 1) {
-                bottom.push(['move: WASD / arrows   ·   dash: Space / Shift   ·   attack: X / F', '13px Tahoma,Arial', '#ccc']);
-              } else {
-                bottom.push(['Player 1 (white):  arrows move  ·  Right-Shift dash  ·  /  attack', '13px Tahoma,Arial', '#fff']);
-                bottom.push(['Player 2 (green):  WASD move  ·  Left-Shift dash  ·  F  attack', '13px Tahoma,Arial', P2_COL]);
-                bottom.push(['allies & upgrades are shared — revive a downed partner by standing close', '12px Tahoma,Arial', '#9fb0c0']);
-              }
-              bottom.push([CLASS_BLURB[blurbCls], '12px Tahoma,Arial', '#ccc']);
-              bottom.push(['coins raise your multiplier  ·  graze foes for bonus  ·  clear waves for tokens', '12px Tahoma,Arial', '#ccc']);
-              bottom.push(['▶  Z / Enter to begin  ◀', '14px Tahoma,Arial', 'white']);
-              let by = GH - 22 - (bottom.length - 1) * 21;
-              for (const [text, font, color] of bottom) {
-                ctx.font = font; ctx.fillStyle = color;
-                ctx.fillText(text, GW / 2, by);
-                by += 21;
-              }
-              ctx.restore(); ctx.textAlign = 'left';
+              drawIntroScreen();
               hud.innerHTML = 'BEST: ' + best + ' · ' + (modeSel === 1 ? '2-PLAYER' : modeSel === 2 ? '☀ DAILY' : '1-PLAYER') + '<br>double-click icon to quit';
               frame++;
               return;
@@ -4132,8 +4690,8 @@
               if (stone) drawStone();
               for (const e of enemies) drawEnemy(e);
               const fall = Math.min(1, deadT / 28);
-              stickFigure(player.x, player.y, 0, 'white', 1, 1 - fall * 0.4, fall * Math.PI / 2);
-              if (coop && p2) stickFigure(p2.x, p2.y, 0, P2_COL, 1, 1 - fall * 0.4, fall * Math.PI / 2);
+              heroFigure(player.x, player.y, 0, 'white', player.cls, player.fx >= 0 ? 1 : -1, 1, 1 - fall * 0.4, fall * Math.PI / 2);
+              if (coop && p2) heroFigure(p2.x, p2.y, 0, P2_COL, p2.cls, p2.fx >= 0 ? 1 : -1, 1, 1 - fall * 0.4, fall * Math.PI / 2);
               if (deadT > 34) {
                 drawDeathScreen();
                 hud.innerHTML = replayMode               ? '▶ replay over · Q to return'
@@ -4164,10 +4722,12 @@
                sim's complete input surface for this tick (the replay/lockstep capture point) */
             if (pend.dashP1) { pend.dashP1 = false; recPush([tick, 1]); tryDash(player); }
             if (pend.atkP1)  { pend.atkP1 = false;  recPush([tick, 2]); tryAttack(player); }
+            if (pend.cycleP1) { pend.cycleP1 = false; recPush([tick, 11, 0]); cycleSpell(player); }
             if (coop && p2) {
               if (pend.dashP2) { pend.dashP2 = false; recPush([tick, 3]); tryDash(p2); }
               if (pend.atkP2)  { pend.atkP2 = false;  recPush([tick, 4]); tryAttack(p2); }
-            } else { pend.dashP2 = false; pend.atkP2 = false; }
+              if (pend.cycleP2) { pend.cycleP2 = false; recPush([tick, 11, 1]); cycleSpell(p2); }
+            } else { pend.dashP2 = false; pend.atkP2 = false; pend.cycleP2 = false; }
             if (pend.summon) {
               const sk = pend.summon; pend.summon = null;
               recPush([tick, 5, ['gandalf', 'luke', 'jotaro'].indexOf(sk)]);
@@ -4485,39 +5045,88 @@
             }
             for (const h of heroesAll()) if (h.swingT > 0) h.swingT--;
 
-            /* the caster's clock: pending incantations resolve, and the auto-spells
-               (frost nova when the mob closes in, fireball when it truly presses) tick */
+            /* the caster's clock: the well refills a sip per tick (kills top it up in
+               resolveCast — see soul sparks), and pending incantations resolve */
             if (!sidFinale && !dioFinale && dioStopT <= 0 && !ianActive) {
               for (const h of heroesLive()) {
                 if (h.cls !== 'caster') continue;
-                if (h.castT > 0 && --h.castT === 0) resolveZap(h);
-                if (h.novaCd > 0) h.novaCd--;
-                if (h.fireCd > 0) h.fireCd--;
-                if (up.nova && h.novaCd <= 0 &&
-                    enemies.some(e => !untouchable(e) && e.kr > 0 && !e.frozen && Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R * 0.7)) {
-                  h.novaCd = Math.round(720 * up.spellCd);
-                  sfSfx.freeze();
-                  blasts.push({ kind: 'frost', x: h.x, y: h.y, r: 0, t: 0, life: 26, rMax: NOVA_R });
-                  let n = 0;
+                h.mana = Math.min(up.manaMax, h.mana + MANA_REGEN * up.manaRegen);
+                if (h.castT > 0 && --h.castT === 0) resolveCast(h);
+              }
+            }
+
+            /* the necromancer's dead: husks crumble on their timers; minions hunt the
+               horde, claw it (rangedHit rules), soak contact in return, and fall when
+               their hp or time runs out. Boss rooms banish the lot, like champions. */
+            if (champsBanned()) {
+              if (minions.length || husks.length) {
+                if (minions.length) sparks.push({ x: player.x, y: player.y - 46, t: 28, color: NECRO_COL, txt: 'your dead abandon you' });
+                minions = []; husks = [];
+              }
+            } else if (!sidFinale && !dioFinale && dioStopT <= 0) {
+              for (let i = husks.length - 1; i >= 0; i--) if (--husks[i].t <= 0) husks.splice(i, 1);
+              for (let i = minions.length - 1; i >= 0; i--) {
+                const m = minions[i];
+                m.t--;
+                if (m.hitCd > 0) m.hitCd--;
+                if (m.hurtCd > 0) m.hurtCd--;
+                if (m.shotCd > 0) m.shotCd--;
+                if (m.t <= 0 || m.hp <= 0) {
+                  if (up.minionBoom) {                       // Deathburst — soul-fire on the way out
+                    blasts.push({ kind: 'frost', x: m.x, y: m.y, r: 0, t: 0, life: 18, rMax: 62 });
+                    knockback(m.x, m.y, 58, 90, 24);
+                    sfSfx.freeze();
+                  }
+                  sparks.push({ x: m.x, y: m.y - 24, t: 14, color: NECRO_COL, txt: '…' });
+                  minions.splice(i, 1); continue;
+                }
+                // hunt the nearest of the horde (support pieces are fair game; bosses are not its business)
+                let prey = null, pd = 1e9;
+                for (const e of enemies) {
+                  if (e.dead || untouchable(e)) continue;
+                  const t2 = e.type;
+                  if (!(t2 === 'goblin' || t2 === 'wolf' || t2 === 'archer' || t2 === 'troll' || t2 === 'shaman' || t2 === 'bomber' || t2 === 'ogre')) continue;
+                  const dd = Math.hypot(e.x - m.x, e.y - m.y);
+                  if (dd < pd) { pd = dd; prey = e; }
+                }
+                if (prey) {
+                  const dx = prey.x - m.x, dy = prey.y - m.y, d = pd || 1;
+                  const lope = up.trueForms && m.src === 'wolf' ? 2.3 : 1.55;   // True Forms: wolves remember how to run
+                  if (d > prey.kr + 10) { m.x += dx / d * lope; m.y += dy / d * lope; m.phase += 0.16; m.fx = dx / d || 1; }
+                  if (d < prey.kr + 16 && m.hitCd <= 0) {                        // claw the mark
+                    m.hitCd = 42;
+                    const k0 = kills;
+                    rangedHit(prey, up.minionDmg, dx / d, dy / d);
+                    if (kills > k0) {                                            // a minion's kill still feeds the master
+                      const boss = heroesLive().find(hh => hh.cls === 'necro');
+                      if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + SOUL_MKILL * (kills - k0));
+                    }
+                  }
+                  if (up.trueForms && m.src === 'archer' && m.shotCd <= 0 && d > 60 && d < 340) {
+                    m.shotCd = 105;                                              // spectral arrow — hero-safe, horde-lethal
+                    arrows.push({ x: m.x, y: m.y - 16, kind: 'parrow', vx: dx / d * 4.4, vy: dy / d * 4.4, t: 130, dmg: 1, pierce: 0, bounces: 0, hitSet: null });
+                    sfSfx.arrow();
+                  }
+                } else {                                                         // no prey — shamble home to the master
+                  const necro = heroesLive().find(hh => hh.cls === 'necro') || player;
+                  const dx = necro.x - m.x, dy = necro.y - m.y, d = Math.hypot(dx, dy) || 1;
+                  if (d > 60) { m.x += dx / d * 1.3; m.y += dy / d * 1.3; m.phase += 0.12; m.fx = dx / d || 1; }
+                  else m.phase += 0.05;
+                }
+                // the horde claws back — a grunt pressing on the minion wounds it
+                if (m.hurtCd <= 0) {
                   for (const e of enemies) {
-                    // same immunities as the frost powerup — the great bosses shrug off the cold
-                    if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
-                    if (untouchable(e)) continue;
-                    if (Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R) { e.frozen = 240; e.vx = 0; e.vy = 0; n++; }  // briefer than the powerup's FROST_DUR
-                  }
-                  sparks.push({ x: h.x, y: h.y - 36, t: 24, color: '#8fd8ff', txt: n ? 'FROZEN x' + n : 'frost nova' });
-                }
-                if (up.fire && h.fireCd <= 0) {
-                  let n = 0;
-                  for (const e of enemies) if (!untouchable(e) && Math.hypot(e.x - h.x, e.y - h.y) < FIREB_R) n++;
-                  if (n >= 3) {                            // only when genuinely mobbed
-                    h.fireCd = Math.round(900 * up.spellCd);
-                    sfSfx.bomb(); shake = Math.max(shake, 10);
-                    blasts.push({ kind: 'fire', x: h.x, y: h.y, r: 0, t: 0, life: 30, rMax: FIREB_R });
-                    knockback(h.x, h.y, FIREB_R, 180, 40);
-                    sparks.push({ x: h.x, y: h.y - 36, t: 24, color: '#ff8a65', txt: 'FWOOSH' });
+                    if (e.dead || e.frozen > 0 || e.stun > 0 || untouchable(e) || !(e.kr > 0)) continue;
+                    if (Math.hypot(e.x - m.x, e.y - m.y) < e.kr + 10) {
+                      m.hp--; m.hurtCd = 50;
+                      const bx = m.x - e.x, by = m.y - e.y, bd = Math.hypot(bx, by) || 1;
+                      m.x = clamp(m.x + bx / bd * 26, 14, GW - 14); m.y = clamp(m.y + by / bd * 26, 44, GH - 12);
+                      sparks.push({ x: m.x, y: m.y - 22, t: 10, color: '#ff8a80', txt: '·' });
+                      break;
+                    }
                   }
                 }
+                m.x = clamp(m.x, 14, GW - 14); m.y = clamp(m.y, 44, GH - 12);
               }
             }
 
@@ -5012,6 +5621,8 @@
             if (stone) drawStone();
             if (saberPickup) drawSaberPickup();
             for (const c of corpses) drawCorpse(c);
+            for (const k of husks) drawHusk(k);       // the necromancer's larder, under the living
+            for (const m of minions) drawMinion(m);
             if (bossRiseT > 0) {
               // a fallen body stirs: a dark shape pulls itself upright in a swelling red haze
               const p = clamp(1 - bossRiseT / 90, 0, 1);  // long hold, then rise over the final ~90 frames
@@ -5129,7 +5740,7 @@
             for (let i = ghosts.length - 1; i >= 0; i--) {
               const g = ghosts[i];
               if (--g.t <= 0) { ghosts.splice(i, 1); continue; }
-              stickFigure(g.x, g.y, g.phase, '#80deea', 1, g.t / 32);
+              heroFigure(g.x, g.y, g.phase, '#80deea', g.cls, g.dir || 1, 1, g.t / 32, 0, 0, true);
             }
             for (const e of enemies) {
               if (e.mode === 'aim' && freezeT <= 0 && e.stun <= 0 && !(e.frozen > 0)) {
@@ -5294,8 +5905,8 @@
               drawStarPlatinum(sdir, playerStand, player.swingT > 0);
               ctx.restore();
             }
-            if (coop && p2) drawHero(p2, P2_COL);   // P2 first so P1 reads on top when they overlap
-            drawHero(player, 'white');
+            if (coop && p2) drawHero(p2);   // P2 first so P1 reads on top when they overlap
+            drawHero(player);
             if (sidFinale) drawSidiousFinale();             // the death cutscene plays over the scene
             if (roadRoller) drawRoadRoller(roadRoller);     // the road roller, on top of everything
             // stopped-time wash: a sepia overlay + a clock motif while DIO acts in frozen time
@@ -5367,6 +5978,7 @@
             if (ianChoice) drawIanChoice();
             ctx.restore();
             drawSummonMeter();   // the ally charge gauge sits in the UI layer, unaffected by screen shake
+            drawManaGauge();     // ...and the wizard's well mirrors it bottom-right
 
             if (swFadeT > 0) {
               // cross-fade through black hides the cut to the corridor
@@ -5382,7 +5994,7 @@
               'SCORE ' + score + ' · BEST ' + best + '<br>' +
               (mournful
                 ? '<span style="color:#8fd8ff">the world mourns · they will not fight</span> · KILLS ' + kills
-                : 'WAVE ' + wave + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
+                : 'WAVE ' + wave + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (hardMode ? ' · <span style="color:#ff6e6e">☠ HARD</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
               (up.dashMax === 0
                 ? '<span style="color:#666">DASH 🔒 locked</span>'
                 : '<span style="color:#80deea">DASH ' + '◆'.repeat(player.dashCharges) +
@@ -5393,9 +6005,15 @@
               (player.cls === 'ranged'
                 ? '<span style="color:#9ccc65">🏹 bow · X fires your held direction</span>'
                 : player.cls === 'caster'
-                ? '<span style="color:#ce93d8">✨ arcana · X charges a bolt' +
-                  (up.nova ? (player.novaCd <= 0 ? ' · ❄ ready' : ' · ❄ ' + Math.ceil(player.novaCd / 60) + 's') : '') +
-                  (up.fire ? (player.fireCd <= 0 ? ' · ☄ ready' : ' · ☄ ' + Math.ceil(player.fireCd / 60) + 's') : '') + '</span>'
+                ? (() => {
+                    const sp = SPELLS[curSpell(player)], m = Math.floor(player.mana);
+                    return '<span style="color:#ce93d8">' + sp.icon + ' ' + sp.name + ' · X casts' +
+                      (heroSpells().length > 1 ? ' · ' + (coop ? '.' : 'C') + ' turns the page' : '') +
+                      ' · <span style="color:' + (m >= sp.cost ? '#b39ddb' : '#e57373') + '">🔮 ' + m + '</span></span>';
+                  })()
+                : player.cls === 'necro'
+                ? '<span style="color:#64ffda">💀 scythe · X reaps & raises · souls ' + Math.floor(player.souls) +
+                  ' · dead ' + minions.length + '/' + up.minionCap + (husks.length ? ' · husks ' + husks.length : '') + '</span>'
                 : player.heldSaber
                 ? '<span style="color:#5ac8ff">⚔ lightsaber · X strikes</span>'
                 : saberPickup ? '<span style="color:#5ac8ff">⚔ a lightsaber waits ahead</span>'
@@ -5502,7 +6120,7 @@
             if (pv > 0.4) h.phase += 0.06 + pv * 0.045;
             if (h.dashT > 0) {
               h.dashT--;
-              ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16 });
+              ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
               // Phantom Strike: dashing through a foe staggers it (the no-flinch bosses shrug it off)
               if (up.dashStrike) {
                 for (const e of enemies) {
@@ -5596,7 +6214,8 @@
           function tryAttack(h) {
             if (!h) return;
             if (h.cls === 'ranged') return tryShoot(h);
-            if (h.cls === 'caster') return tryZap(h);
+            if (h.cls === 'caster') return tryCast(h);
+            if (h.cls === 'necro') return tryScythe(h);
             return trySwing(h);
           }
           // foes the player cannot damage yet (scripted intros) — mirrors trySwing's skip rules
@@ -5643,36 +6262,85 @@
                             bounces: up.ricochet ? 1 : 0, hitSet: null });
             }
           }
-          // caster: a deliberate spell, not a trigger — the attack key begins a short
-          // incantation (CAST_T ticks, the staff orb swells), then the bolt arcs to the
-          // nearest foe and chains. Short reach (ZAP_R): the mage fights up close and
-          // trades wind-up time for aim-free area damage. A dry press fizzles free.
-          function tryZap(h) {
-            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || h.castT > 0 || tick < h.swingReadyTick) return;
-            let t = null, bd = ZAP_R;
+          /* ── the wizard's spellbook (see SPELLS) ──
+             The attack key casts the SELECTED page: a deliberate incantation — mana is
+             drunk up front, the staff orb swells in the spell's color for `cast` ticks,
+             then resolveCast() fires it. A press with no mana or no mark in reach fizzles
+             free (no cooldown, no mana); a cast whose mark dies mid-incantation refunds
+             half. Kills spark +4 mana each (Overcharge refunds much of a killing cast),
+             so bold play sustains itself where hiding runs dry. */
+          function heroSpells() { return up.spells; }     // the party's known pages, in learn order
+          function curSpell(h) { return heroSpells()[(h.spellSel || 0) % heroSpells().length] || 'bolt'; }
+          // the cycle key turns the page — queued through pend like every combat input,
+          // recorded as opcode 11 (the selection changes what the attack key DOES)
+          function cycleSpell(h) {
+            if (!h || h.cls !== 'caster' || h.down || !started || !alive || paused ||
+                sidFinale || dioFinale || dioStopT > 0 || ianActive || h.castT > 0) return;
+            const n = heroSpells().length;
+            if (n < 2) { sparks.push({ x: h.x, y: h.y - 42, t: 14, color: '#ce93d8', txt: 'one page…' }); return; }
+            h.spellSel = ((h.spellSel || 0) + 1) % n;
+            const sp = SPELLS[curSpell(h)];
+            sparks.push({ x: h.x, y: h.y - 44, t: 20, color: sp.col, txt: sp.icon + ' ' + sp.name });
+            sfSfx.blip();
+          }
+          function nearestFoe(h, r) {
+            let t = null, bd = r;
             for (const e of enemies) {
               if (untouchable(e)) continue;
               const d = Math.hypot(e.x - h.x, e.y - h.y);
               if (d < bd) { bd = d; t = e; }
             }
-            if (!t) { sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: '·' }); return; }
+            return t;
+          }
+          function tryCast(h) {
+            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || h.castT > 0 || tick < h.swingReadyTick) return;
+            const key = curSpell(h), sp = SPELLS[key];
+            if (h.mana < sp.cost) {                       // the well is dry — fizzle free
+              sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 12, color: '#7986cb', txt: 'no mana' });
+              sfSfx.blip();
+              return;
+            }
+            // every page but the nova needs a mark in reach at the moment of the press
+            const reach = key === 'bolt' ? ZAP_R : key === 'fire' ? FIRE_TGT_R : STORM_R;
+            if (key !== 'nova' && !nearestFoe(h, reach)) {
+              sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: '·' });
+              return;
+            }
+            h.mana -= sp.cost;                            // committed — the incantation drinks up front
             h.swingReadyTick = tick + Math.round(up.zapMs * SIM_HZ / 1000);
-            h.castT = CAST_T;                             // the incantation begins — resolveZap() fires it
+            h.castT = sp.cast; h.castMax = sp.cast; h.casting = key;
             sfSfx.bolt();
           }
-          // the wind-up completes: the arc leaps to whatever is nearest NOW (with a little
-          // grace past ZAP_R, since the foe had CAST_T ticks to drift)
-          function resolveZap(h) {
-            let t = null, bd = ZAP_R + 40;
-            for (const e of enemies) {
-              if (untouchable(e)) continue;
-              const d = Math.hypot(e.x - h.x, e.y - h.y);
-              if (d < bd) { bd = d; t = e; }
-            }
-            if (!t) { sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: 'fzzt' }); return; }
-            h.swingT = 10;
-            sfSfx.zap();
+          // the wind-up completes: the spell resolves against the field as it is NOW
+          // (each targeted page re-marks with a little grace, since foes had `cast`
+          // ticks to drift). Returns are routed so a slipped mark refunds half.
+          function resolveCast(h) {
+            const key = h.casting || 'bolt', sp = SPELLS[key];
+            h.casting = null;
             const kills0 = kills;
+            let landed = true;
+            if (key === 'nova') castNova(h);
+            else if (key === 'fire') landed = castFire(h);
+            else if (key === 'storm') landed = castStorm(h);
+            else landed = castBolt(h);
+            if (!landed) {                                // the mark slipped away mid-incantation
+              h.mana = Math.min(up.manaMax, h.mana + Math.round(sp.cost / 2));
+              sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: 'fzzt' });
+              return;
+            }
+            h.swingT = 10;
+            const slain = kills - kills0;                 // soul sparks: kills feed the well
+            if (slain > 0) {
+              const back = slain * 4 + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
+              h.mana = Math.min(up.manaMax, h.mana + back);
+              sparks.push({ x: h.x, y: h.y - 34, t: 12, color: '#b39ddb', txt: '🔮+' + back });
+            }
+          }
+          // ARCANE BOLT — the signature: arcs to the nearest foe and chains up.zapJumps hops
+          function castBolt(h) {
+            const t = nearestFoe(h, ZAP_R + 40);
+            if (!t) return false;
+            sfSfx.zap();
             const pts = [{ x: h.x, y: h.y - 16 }];
             const hit = new Set();
             let from = t;
@@ -5691,10 +6359,102 @@
               from = nx;
             }
             blasts.push({ kind: 'chain', pts, t: 0, life: 16 });
-            // Overcharge: a bolt that killed recovers much faster (refund 40% of what remains)
-            if (up.overcharge && kills > kills0) {
-              h.swingReadyTick = tick + Math.round(Math.max(0, h.swingReadyTick - tick) * 0.6);
-              sparks.push({ x: h.x, y: h.y - 34, t: 12, color: '#ce93d8', txt: '⚡+' });
+            return true;
+          }
+          // FROST NOVA — an ice ring around the caster; always erupts (positioning IS the aim)
+          function castNova(h) {
+            sfSfx.freeze();
+            blasts.push({ kind: 'frost', x: h.x, y: h.y, r: 0, t: 0, life: 26, rMax: NOVA_R });
+            let n = 0;
+            for (const e of enemies) {
+              // same immunities as the frost powerup — the great bosses shrug off the cold
+              if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+              if (untouchable(e)) continue;
+              if (Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R) { e.frozen = 240; e.vx = 0; e.vy = 0; n++; }  // briefer than the powerup's FROST_DUR
+            }
+            sparks.push({ x: h.x, y: h.y - 36, t: 24, color: '#8fd8ff', txt: n ? 'FROZEN x' + n : 'frost nova' });
+          }
+          // FIREBALL — hurled at the nearest mark; erupts THERE (kill + shove, like the powerup)
+          function castFire(h) {
+            const t = nearestFoe(h, FIRE_TGT_R + 40);
+            if (!t) return false;
+            const cx = t.x, cy = t.y;                     // the eruption outlives its mark
+            sfSfx.bomb(); shake = Math.max(shake, 10);
+            blasts.push({ kind: 'fire', x: cx, y: cy, r: 0, t: 0, life: 30, rMax: FIREB_R });
+            knockback(cx, cy, FIREB_R, 180, 40);
+            sparks.push({ x: cx, y: cy - 36, t: 24, color: '#ff8a65', txt: 'FWOOSH' });
+            return true;
+          }
+          // TEMPEST — the Archmage's page: a great arc that leaps six marks, striking twice as hard
+          function castStorm(h) {
+            const t0 = nearestFoe(h, STORM_R + 40);
+            if (!t0) return false;
+            sfSfx.zap(); shake = Math.max(shake, 8);
+            const pts = [{ x: h.x, y: h.y - 16 }];
+            const hit = new Set();
+            let from = t0;
+            for (let j = 0; j < 6 && from; j++) {
+              hit.add(from);
+              const prev = pts[pts.length - 1];
+              const dv = Math.hypot(from.x - prev.x, (from.y - 14) - prev.y) || 1;
+              pts.push({ x: from.x, y: from.y - 14 });
+              rangedHit(from, 2, (from.x - prev.x) / dv, ((from.y - 14) - prev.y) / dv);
+              let nx = null, nd = STORM_HOP;
+              for (const e of enemies) {
+                if (untouchable(e) || hit.has(e)) continue;
+                const dd = Math.hypot(e.x - from.x, e.y - from.y);
+                if (dd < nd) { nd = dd; nx = e; }
+              }
+              from = nx;
+            }
+            blasts.push({ kind: 'chain', pts, t: 0, life: 20 });
+            return true;
+          }
+          /* ── the necromancer's soul scythe ──
+             One press, two verbs. First the REAP: a wide arc in front (rangedHit rules —
+             bosses stagger, grunts shove), every kill feeding the soul well. Then the
+             RAISE: husks caught in the sweep stand up as minions while souls and the
+             cap allow (banned wherever champions are banned — boss rooms are yours alone). */
+          function tryScythe(h) {
+            if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || tick < h.swingReadyTick) return;
+            h.swingReadyTick = tick + Math.round(up.scytheMs * SIM_HZ / 1000);
+            h.swingT = 10;
+            sfSfx.swing();
+            const fd = Math.hypot(h.fx, h.fy) || 1;
+            const fx = h.fx / fd, fy = h.fy / fd;
+            const kills0 = kills;
+            for (const e of enemies) {
+              // the same scripted-intro protections as the blade
+              if (e.type === 'dio' && (e.mode === 'troll' || e.mode === 'dying')) continue;
+              if ((e.type === 'sidious' || e.type === 'guard') && sidiousIntroT > 0) continue;
+              const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
+              if (d > SCYTHE_R + (e.type === 'troll' ? 14 : e.type === 'ogre' ? 20 : 0)) continue;
+              if ((dx / d) * fx + (dy / d) * fy < -0.1) continue;   // a wide reaping arc in front
+              rangedHit(e, 1, dx / d, dy / d);
+            }
+            enemies = enemies.filter(e => !e.dead);
+            const slain = kills - kills0;
+            if (slain > 0) {
+              const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0));
+              h.souls = Math.min(SOULS_MAX, h.souls + gain);
+              sparks.push({ x: h.x, y: h.y - 36, t: 14, color: NECRO_COL, txt: '+' + gain + ' souls' });
+              shake = Math.max(shake, Math.min(8, 2 + slain * 2));
+            }
+            // the raise — nearest-pushed-last order doesn't matter; any husk in the sweep rises
+            if (!champsBanned()) {
+              for (let i = husks.length - 1; i >= 0; i--) {
+                if (minions.length >= up.minionCap || h.souls < up.raiseCost) break;
+                const k = husks[i];
+                const dx = k.x - h.x, dy = k.y - h.y, d = Math.hypot(dx, dy) || 1;
+                if (d > RAISE_R || (dx / d) * fx + (dy / d) * fy < -0.3) continue;
+                husks.splice(i, 1);
+                h.souls -= up.raiseCost;
+                minions.push({ src: k.src, x: k.x, y: k.y, hp: up.minionHp + (k.elite ? 1 : 0), t: MINION_T,
+                               phase: 0, fx: 1, hitCd: 20, hurtCd: 30, shotCd: 60, elite: k.elite });
+                blasts.push({ kind: 'frost', x: k.x, y: k.y, r: 0, t: 0, life: 16, rMax: 44 });
+                sparks.push({ x: k.x, y: k.y - 30, t: 22, color: NECRO_COL, txt: 'RISE' });
+                sfSfx.ignite();
+              }
             }
           }
 
@@ -5932,9 +6692,10 @@
               if (e.key === '3') { modeSel = 2; if (introRow === 2) introRow = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
               if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 const d = e.key === 'ArrowRight' ? 1 : -1;
+                const nc = CLASSES.length;
                 if (introRow === 0)      modeSel = (modeSel + d + 3) % 3;
-                else if (introRow === 1) classSel  = (classSel  + d + 3) % 3;
-                else                     classSel2 = (classSel2 + d + 3) % 3;
+                else if (introRow === 1) classSel  = (classSel  + d + nc) % nc;
+                else                     classSel2 = (classSel2 + d + nc) % nc;
                 if (sfSfx.killE) sfSfx.killE();
                 e.preventDefault(); return;
               }
@@ -5948,8 +6709,8 @@
                 init();                     // fresh state on the chosen seed (init reads classSel/coop)
                 beginRunProof();            // stamp the start time for the leaderboard's proof check
                 started = true; frame = 0;
-                banner = dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1';
-                bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : '';
+                banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
+                bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
                 bannerT = 90;
                 startSfMusic();
               }
@@ -6030,11 +6791,14 @@
             if (!coop) {
               if (e.key === ' ' || e.key === 'Shift') pend.dashP1 = true;
               if (e.key === 'x' || e.key === 'X' || e.key === 'f' || e.key === 'F') pend.atkP1 = true;
+              if (e.key === 'c' || e.key === 'C' || e.key === 'e' || e.key === 'E') pend.cycleP1 = true;  // the wizard turns a spellbook page
             } else {
               if (e.code === 'ShiftRight') pend.dashP1 = true;
               if (e.code === 'Slash') pend.atkP1 = true;
+              if (e.code === 'Period') pend.cycleP1 = true;      // beside '/' — P1's spell page
               if (e.code === 'ShiftLeft') pend.dashP2 = true;
               if (e.key === 'f' || e.key === 'F') pend.atkP2 = true;
+              if (e.key === 'e' || e.key === 'E') pend.cycleP2 = true;  // beside F — P2's spell page
             }
             if (e.key === 'g' || e.key === 'G') pend.prompt = true;
             if (e.key === '1') pend.summon = 'gandalf';
@@ -6045,8 +6809,8 @@
               init();
               beginRunProof();
               started = true;
-              banner = dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1';
-              bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : '';
+              banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
+              bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
               bannerT = 90; startSfMusic();
             }
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
