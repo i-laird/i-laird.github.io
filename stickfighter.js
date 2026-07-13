@@ -195,7 +195,12 @@
                    champs: { gandalf: false, luke: false, jotaro: false },
                    champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false,
                    shotMs: 500, shotDmg: 1, shotCount: 1, shotPierce: 0,          // BOW (ranged)
-                   zapMs: 800, zapJumps: 1, nova: false, fire: false, spellCd: 1 }; // SORCERY (caster)
+                   zapMs: 800, zapJumps: 1, nova: false, fire: false, spellCd: 1,  // SORCERY (caster)
+                   dashStrike: false, secondWind: false,                           // DASH extras
+                   vanguard: false, medic: false,                                  // ALLIES extras
+                   swordMul: 1, riposte: false,                                    // BLADE extras
+                   arrowSpd: 1, ricochet: false,                                   // BOW extras
+                   shatter: false, overcharge: false };                            // SORCERY extras
             paused = false; upMenu = null;
             tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
             applySavedUpgrades();              // unlocked upgrades are permanent — re-apply across runs
@@ -222,6 +227,8 @@
           // the active heroes; in single-player this is just [player], so co-op code stays a no-op
           function heroesAll()  { return (coop && p2) ? [player, p2] : [player]; }
           function heroesLive() { return heroesAll().filter(h => !h.down); }
+          // frames a partner must stand by to revive — halved by the Medic upgrade
+          function reviveNeed() { return up.medic ? Math.round(REVIVE_T * 0.5) : REVIVE_T; }
           // nearest hero still standing (for horde aggro & pickups); falls back to P1
           function nearestLiveHero(x, y) {
             let best = null, bd = Infinity;
@@ -243,14 +250,18 @@
             return player;                 // both down — the run is ending anyway
           }
           // who a horde grunt chases. The scripted boss/set-piece foes lock onto bossTarget()
-          // (P1, or the survivor); the open-field horde splits aggro to the nearest standing hero.
+          // (P1, or the survivor); the open-field horde splits aggro to the nearest standing hero —
+          // unless Vanguard is owned and a summoned ally stands close, in which case the grunt
+          // turns on the ally (harmless to it, and Luke/Gandalf cut the mob down where it clusters).
           function hordeTarget(e) {
-            if (!coop) return player;
-            if (bossActive || nineActive) return bossTarget();
             const t = e.type;
-            if (t === 'wraith' || t === 'witchking' || t === 'vader' || t === 'sidious' ||
-                t === 'dio' || t === 'guard' || t === 'trooper' || t === 'ian') return bossTarget();
-            return nearestLiveHero(e.x, e.y);
+            const scripted = t === 'wraith' || t === 'witchking' || t === 'vader' || t === 'sidious' ||
+                             t === 'dio' || t === 'guard' || t === 'trooper' || t === 'ian';
+            if (bossActive || nineActive || scripted) return coop ? bossTarget() : player;
+            if (up.vanguard) {
+              for (const g of allies) if (Math.hypot(g.x - e.x, g.y - e.y) < 200) return g;
+            }
+            return coop ? nearestLiveHero(e.x, e.y) : player;
           }
 
           /* unlocked upgrades persist (like achievements): saved by id in localStorage and
@@ -275,7 +286,7 @@
           function grantAllUpgrades() {
             // only the trees the party can use — other classes' nodes stay locked (and unsaved)
             const present = new Set(heroesAll().map(h => h.cls));
-            for (const u of UPGRADES) { if ((!u.cls || present.has(u.cls)) && !up.owned.has(u.id)) { up.owned.add(u.id); u.apply(); } }
+            for (const u of UPGRADES) { if ((!u.cls || present.has(u.cls)) && (!u.coopOnly || coop) && !up.owned.has(u.id)) { up.owned.add(u.id); u.apply(); } }
             saveUpgrades();
             banner = 'ALL UPGRADES UNLOCKED'; bannerSub = 'every tree your party can use'; bannerT = 150;
             if (typeof sfSfx !== 'undefined' && sfSfx.summon) sfSfx.summon();
@@ -289,6 +300,9 @@
             try { localStorage.setItem('ilaird_sf_maxwave', String(level)); } catch (_) {}
             return true;
           }
+          // the story bosses (Witch-king, Vader, Sidious, DIO) pay out on EVERY kill, not just
+          // the first — the trees grew too deep to live off first-clears alone
+          function grantBossToken() { tokens++; saveTokens(); return true; }
 
           /* ── upgrades: a token-based skill tree. Each cleared wave grants a token;
              spend tokens (1 each) on unlocked nodes, or save them to grab several at once. ── */
@@ -298,7 +312,9 @@
             { id: 'dash_2',      tree: 'DASH',   name: 'Second Dash',     desc: 'a second dash charge',               icon: '✌️', req: 'dash',       apply: () => { up.dashMax = 2; player.dashCharges = up.dashMax; } },
             { id: 'dash_3',      tree: 'DASH',   name: 'Third Dash',      desc: 'a third dash charge',                icon: '🔋', req: 'dash_2',     apply: () => { up.dashMax = 3; player.dashCharges = up.dashMax; } },
             { id: 'dash_cd',     tree: 'DASH',   name: 'Quick Feet',      desc: 'dashes recharge faster',             icon: '🌀', req: 'dash_2',     apply: () => { up.dashCd = 46; } },
+            { id: 'dash_strike', tree: 'DASH',   name: 'Phantom Strike', desc: 'dash through foes to stagger them',  icon: '👻', req: 'dash',       apply: () => { up.dashStrike = true; } },
             { id: 'shield',      tree: 'DASH',   name: 'Aegis Shield',    desc: 'block one hit · refreshes each wave', icon: '🛡️', req: null,         apply: () => { up.shield = true; player.shield = true; } },
+            { id: 'dash_wind',   tree: 'DASH',   name: 'Second Wind',     desc: 'Aegis break refills your dashes',    icon: '🌬️', req: 'shield',     apply: () => { up.secondWind = true; } },
             { id: 'dash_master', tree: 'DASH',   name: 'Blink Master',    desc: '4th charge · far · near-instant cd',  icon: '🌌', req: 'dash_3',     cost: 3, apply: () => { up.dashMax = 4; player.dashCharges = up.dashMax; up.dashLen = 26; up.dashCd = 30; } },
             { id: 'gandalf',     tree: 'ALLIES', name: 'Summon Gandalf',  desc: 'press 1 — staff bolts',              icon: '🧙', req: null,         apply: () => { up.champs.gandalf = true; } },
             { id: 'luke',        tree: 'ALLIES', name: 'Summon Luke',     desc: 'press 2 — a green saber',            icon: '⚔️', req: 'gandalf',    apply: () => { up.champs.luke = true; } },
@@ -307,30 +323,40 @@
             { id: 'champ_long2', tree: 'ALLIES', name: 'Eternal Allies',  desc: 'allies fight far longer still',      icon: '♾️', req: 'champ_long', apply: () => { up.champMul = 2.4; } },
             { id: 'champ_fast',  tree: 'ALLIES', name: 'Quick Summon',    desc: 'meter charges 50% faster',           icon: '⏩', req: 'gandalf',    apply: () => { up.meterMul = 1.5; } },
             { id: 'champ_cost',  tree: 'ALLIES', name: 'Cheap Summon',    desc: 'allies cost less meter to call',     icon: '🪙', req: 'gandalf',    apply: () => { up.summonCost = Math.round(METER_MAX * 0.7); } },
+            { id: 'ally_taunt',  tree: 'ALLIES', name: 'Vanguard',        desc: 'nearby foes turn on your allies',    icon: '🚩', req: 'gandalf',    apply: () => { up.vanguard = true; } },
+            { id: 'ally_medic',  tree: 'ALLIES', name: 'Medic',           desc: 'revive twice as fast · longer mercy', icon: '⛑️', req: null, coopOnly: true, apply: () => { up.medic = true; } },
             { id: 'champ_master',tree: 'ALLIES', name: 'The Fellowship',  desc: 'allies linger · charge fast · cheap', icon: '💍', req: 'champ_long2', cost: 3, apply: () => { up.champMul = 4; up.meterMul = 2.2; up.summonCost = Math.round(METER_MAX * 0.5); } },
             { id: 'swing_fast',  tree: 'BLADE',  cls: 'melee',  name: 'Swift Blade',     desc: 'swing more often',                   icon: '🗡️', req: null,         apply: () => { up.swingMs = 440; } },
             { id: 'swing_fast2', tree: 'BLADE',  cls: 'melee',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = 300; } },
             { id: 'swing_wide',  tree: 'BLADE',  cls: 'melee',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = 150; } },
             { id: 'swing_wide2', tree: 'BLADE',  cls: 'melee',  name: 'Great Cleave',    desc: 'even wider reach',                   icon: '⭕', req: 'swing_wide', apply: () => { up.swingR = 195; } },
+            { id: 'swing_long',  tree: 'BLADE',  cls: 'melee',  name: 'Keen Edge',       desc: 'Excalibur lasts half again as long', icon: '⌛', req: null,         apply: () => { up.swordMul = 1.5; } },
+            { id: 'swing_riposte',tree: 'BLADE', cls: 'melee',  name: 'Riposte',         desc: 'batted shots return as your own',    icon: '🔄', req: 'swing_fast', apply: () => { up.riposte = true; } },
             { id: 'swing_master',tree: 'BLADE',  cls: 'melee',  name: 'Andúril',         desc: 'huge reach · blistering swing speed', icon: '🔥', req: 'swing_wide2', cost: 2, apply: () => { up.swingR = 250; up.swingMs = 210; } },
             { id: 'bow_fast',    tree: 'BOW',    cls: 'ranged', name: 'Rapid Shot',      desc: 'loose arrows more often',            icon: '🏹', req: null,         apply: () => { up.shotMs = Math.min(up.shotMs, 360); } },
             { id: 'bow_fast2',   tree: 'BOW',    cls: 'ranged', name: 'Arrow Storm',     desc: 'a blistering rate of fire',          icon: '🌪️', req: 'bow_fast',   apply: () => { up.shotMs = Math.min(up.shotMs, 280); } },
             { id: 'bow_dmg',     tree: 'BOW',    cls: 'ranged', name: 'Power Shot',      desc: 'arrows strike twice as hard',        icon: '💪', req: null,         apply: () => { up.shotDmg = 2; } },
             { id: 'bow_multi',   tree: 'BOW',    cls: 'ranged', name: 'Split Shot',      desc: 'loose two arrows in a fan',          icon: '🔱', req: 'bow_dmg',    apply: () => { up.shotCount = Math.max(up.shotCount, 2); } },
+            { id: 'bow_far',     tree: 'BOW',    cls: 'ranged', name: 'Long Draw',       desc: 'arrows fly faster and farther',      icon: '🎯', req: null,         apply: () => { up.arrowSpd = 1.35; } },
+            { id: 'bow_bounce',  tree: 'BOW',    cls: 'ranged', name: 'Ricochet',        desc: 'arrows bank off the screen edge',    icon: '📐', req: 'bow_dmg',    apply: () => { up.ricochet = true; } },
             { id: 'bow_master',  tree: 'BOW',    cls: 'ranged', name: 'Legolas',         desc: 'three piercing arrows · rapid fire', icon: '🧝', req: 'bow_multi',  cost: 2, apply: () => { up.shotCount = 3; up.shotPierce = 2; up.shotMs = Math.min(up.shotMs, 250); } },
             { id: 'zap_fast',    tree: 'SORCERY', cls: 'caster', name: 'Quick Cast',     desc: 'bolts come faster',                  icon: '⚡', req: null,         apply: () => { up.zapMs = Math.min(up.zapMs, 560); } },
             { id: 'zap_chain',   tree: 'SORCERY', cls: 'caster', name: 'Chain Arc',      desc: 'bolts leap to a second foe',         icon: '🔗', req: null,         apply: () => { up.zapJumps = Math.max(up.zapJumps, 2); } },
             { id: 'zap_chain2',  tree: 'SORCERY', cls: 'caster', name: 'Storm Arc',      desc: 'bolts leap to three foes',           icon: '🌩️', req: 'zap_chain',  apply: () => { up.zapJumps = Math.max(up.zapJumps, 3); } },
             { id: 'nova',        tree: 'SORCERY', cls: 'caster', name: 'Frost Nova',     desc: 'auto: an ice ring when foes close in', icon: '❄️', req: null,       apply: () => { up.nova = true; } },
             { id: 'fireball',    tree: 'SORCERY', cls: 'caster', name: 'Fireball',       desc: 'auto: erupt when the mob presses',   icon: '☄️', req: 'nova',       apply: () => { up.fire = true; } },
+            { id: 'nova_shatter',tree: 'SORCERY', cls: 'caster', name: 'Shatter',        desc: 'frozen foes burst, freezing others', icon: '🧊', req: 'nova',       apply: () => { up.shatter = true; } },
+            { id: 'zap_refund',  tree: 'SORCERY', cls: 'caster', name: 'Overcharge',     desc: 'a killing bolt recovers much faster', icon: '🔋', req: 'zap_fast',   apply: () => { up.overcharge = true; } },
             { id: 'zap_master',  tree: 'SORCERY', cls: 'caster', name: 'Archmage',       desc: 'five-fold arcs · spells recover fast', icon: '🧙‍♂️', req: 'zap_chain2', cost: 2, apply: () => { up.zapJumps = 5; up.zapMs = Math.min(up.zapMs, 420); up.spellCd = 0.6; } },
           ];
           const upCost = (u) => u.cost || 1;   // most nodes cost 1 token; capstones cost more
           const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8' };
           function availableUpgrades() {
-            // class trees only show for classes actually in the party (DASH/ALLIES have no cls and always show)
+            // class trees only show for classes actually in the party (DASH/ALLIES have no cls and
+            // always show); coopOnly nodes (Medic) only show in a 2-player run
             const present = new Set(heroesAll().map(h => h.cls));
-            return UPGRADES.filter(u => (!u.cls || present.has(u.cls)) && !up.owned.has(u.id) && (!u.req || up.owned.has(u.req)));
+            return UPGRADES.filter(u => (!u.cls || present.has(u.cls)) && (!u.coopOnly || coop) &&
+                                        !up.owned.has(u.id) && (!u.req || up.owned.has(u.req)));
           }
           // open the shop if there's actually something to spend on; returns whether it opened
           function openUpgradeMenu(title) {
@@ -2118,7 +2144,7 @@
           // a fallen co-op hero: a prone figure with a revive ring that fills as a partner stands by
           function drawDownedHero(h) {
             stickFigure(h.x, h.y, 0, '#7a7a7a', 1, 0.7, Math.PI / 2, 'rgba(160,160,160,0.4)');
-            const p = clamp(h.reviveT / REVIVE_T, 0, 1);
+            const p = clamp(h.reviveT / reviveNeed(), 0, 1);
             ctx.save();
             ctx.translate(h.x, h.y - 18);
             ctx.strokeStyle = 'rgba(120,120,120,0.55)'; ctx.lineWidth = 3;
@@ -2163,6 +2189,18 @@
             if (e.type === 'dio' && e.mode !== 'dying') { startDioFinale(e); return; }
             e.dead = true;
             kills++;
+            // Shatter: a foe killed while frozen bursts into an ice nova-let, freezing its neighbors
+            if (up.shatter && e.frozen > 0) {
+              sfSfx.freeze();
+              blasts.push({ kind: 'frost', x: e.x, y: e.y, r: 0, t: 0, life: 20, rMax: 70 });
+              let n = 0;
+              for (const o of enemies) {
+                if (o === e || untouchable(o) || o.frozen > 0) continue;
+                if (o.type === 'witchking' || o.type === 'vader' || o.type === 'sidious' || o.type === 'dio' || o.type === 'wraith') continue;
+                if (Math.hypot(o.x - e.x, o.y - e.y) < 70) { o.frozen = 180; o.vx = 0; o.vy = 0; n++; }
+              }
+              if (n) sparks.push({ x: e.x, y: e.y - 30, t: 18, color: '#8fd8ff', txt: 'SHATTER' });
+            }
             const pts = (e.type === 'dio' ? 500 : e.type === 'sidious' ? 400 : e.type === 'vader' ? 300 : e.type === 'witchking' ? 200 : e.type === 'ogre' ? 120 : e.type === 'troll' ? 40 : e.type === 'wraith' ? 30 : e.type === 'guard' ? 25 : e.type === 'trooper' ? 20 : 15) * mult;
             score += pts;
             addMeter(7);
@@ -2171,7 +2209,7 @@
             if (e.type === 'witchking') {
               unlockAchievement('witch-king');
               bossActive = false; nineDone = true; corpses = [];
-              const gotTok = grantLevelToken(5);   // first Witch-king kill earns an upgrade token
+              const gotTok = grantBossToken();   // every Witch-king kill earns an upgrade token
               banner = 'the Witch-king is no more'; bannerSub = '+1000' + (gotTok ? '  ·  token earned' : ''); bannerT = 160;
               score += 1000;
               addMeter(40);
@@ -2193,7 +2231,7 @@
               arrows = []; player.choke = 0; player.stunT = 0; swFlash = 0;  // clear in-flight saber / Force effects
               banner = 'the dark lord falls'; bannerSub = '+1500'; bannerT = 170;
               score += 1500; addMeter(40); shake = 18;
-              grantLevelToken(6);                 // Vader's fall earns an upgrade before the Emperor
+              grantBossToken();                   // Vader's fall earns an upgrade before the Emperor
               // a breath, an upgrade, then the Emperor reveals himself
               if (!openUpgradeMenu('DARTH VADER FALLS')) sidiousCue = 110;
             } else if (e.type === 'sidious') {
@@ -2225,6 +2263,10 @@
               shake = Math.max(shake, 12); sfSfx.shieldBreak();
               sparks.push({ x: h.x, y: h.y - 32, t: 30, color: '#7fd8ff', txt: 'SHIELD BROKEN' });
               knockback(h.x, h.y, 0, 130, 16);
+              if (up.secondWind && up.dashMax > 0) {   // Second Wind: the break refills every dash
+                h.dashCharges = up.dashMax; h.rechargeT = 0;
+                sparks.push({ x: h.x, y: h.y - 48, t: 24, color: '#80deea', txt: 'SECOND WIND' });
+              }
               return;
             }
             downHero(h);
@@ -2245,7 +2287,7 @@
             lbBegin();
           }
           function reviveHero(h) {
-            h.down = false; h.reviveT = 0; h.iframe = 70;   // up again, with a beat of mercy invulnerability
+            h.down = false; h.reviveT = 0; h.iframe = up.medic ? 120 : 70;   // up again, with a beat of mercy invulnerability (longer with a Medic)
             h.shield = up.shield; h.vx = 0; h.vy = 0;
             sfSfx.summon();
             sparks.push({ x: h.x, y: h.y - 32, t: 34, color: P2_COL, txt: 'REVIVED!' });
@@ -2600,7 +2642,7 @@
             arrows = []; ltnBolts = []; ltnFlash = 0; player.choke = 0; player.stunT = 0; swFlash = 0;
             banner = 'the Emperor is no more'; bannerSub = '+3000  ·  borne into the dark'; bannerT = 190;
             score += 3000; addMeter(50); shake = 16;
-            grantLevelToken(7);
+            grantBossToken();
             jojoCue = 150;                                 // ...but a stranger aura gathers in the dark
           }
 
@@ -2728,7 +2770,7 @@
             clearBlades();                        // the lightsaber stays behind, back to the horde
             banner = 'DIO is no more'; bannerSub = '+3000  ·  the bizarre night ends'; bannerT = 190;
             score += 3000; addMeter(50); shake = 14;
-            grantLevelToken(8);
+            grantBossToken();
             ianCue = 150;                                  // ...and one last figure remains to face: the creator
           }
 
@@ -3661,7 +3703,7 @@
               for (const h of heroesAll()) {
                 if (!h.down) continue;
                 const helper = heroesLive().find(o => Math.hypot(o.x - h.x, o.y - h.y) < 34);
-                if (helper) { if (++h.reviveT >= REVIVE_T) reviveHero(h); }
+                if (helper) { if (++h.reviveT >= reviveNeed()) reviveHero(h); }
                 else h.reviveT = Math.max(0, h.reviveT - 1);
               }
             }
@@ -3877,7 +3919,7 @@
             if (stoneGrabber) {
               stone = null; stoneCd = 150;   // a beat before the next stone (lets a co-op partner arm too, but not instantly)
               unlockAchievement('excalibur');
-              stoneGrabber.swordT = SWORD_T;
+              stoneGrabber.swordT = Math.round(SWORD_T * up.swordMul);   // Keen Edge holds the blade longer
               banner = '⚔ EXCALIBUR ⚔'; bannerSub = 'X — swing the blade'; bannerT = 100;
               sfSfx.sword(); shake = 8;
               knockback(stoneGrabber.x, stoneGrabber.y, 0, 0, 30);  // a stunned beat — nobody moves, nobody is shoved
@@ -4119,10 +4161,19 @@
               const a = arrows[i];
               if (dioStopT > 0) continue;                // knives hang in stopped time
               a.x += a.vx; a.y += a.vy;
+              // Ricochet: a player arrow with a bounce left banks off the screen edge
+              if (a.kind === 'parrow' && a.bounces > 0 && (a.x < 8 || a.x > GW - 8 || a.y < 30 || a.y > GH - 8)) {
+                a.bounces--;
+                if (a.x < 8 || a.x > GW - 8) a.vx = -a.vx;
+                if (a.y < 30 || a.y > GH - 8) a.vy = -a.vy;
+                a.x = clamp(a.x, 8, GW - 8); a.y = clamp(a.y, 30, GH - 8);
+                sparks.push({ x: a.x, y: a.y, t: 10, color: '#c5e1a5', txt: '✦' });
+              }
               if (--a.t <= 0 || a.x < -20 || a.x > GW + 20 || a.y < -20 || a.y > GH + 20) { arrows.splice(i, 1); continue; }
               if (a.reflected) {
                 // a bolt you deflected — harmless to you, kills any trooper it strikes
                 let struck = false;
+                const before = arrows;      // a boss kill inside killEnemy resets arrows[] wholesale
                 for (const e of enemies) {
                   if (e.dead) continue;
                   if (Math.hypot(a.x - e.x, a.y - (e.y - 14)) < 15) {
@@ -4130,12 +4181,14 @@
                     struck = true; break;
                   }
                 }
+                if (arrows !== before) break;   // the field was swept — stop iterating the stale array
                 if (struck) arrows.splice(i, 1);
                 continue;  // never harms the player
               }
               if (a.kind === 'parrow') {
                 // a hero's arrow — harmless to heroes, strikes the first foe in its path
                 let spent = false;
+                const before = arrows;      // killing Vader/Sidious/DIO resets arrows[] wholesale
                 for (const e of enemies) {
                   if (untouchable(e) || (a.hitSet && a.hitSet.has(e))) continue;
                   if (Math.hypot(a.x - e.x, a.y - (e.y - 14)) < (e.type === 'troll' || e.type === 'ogre' ? 20 : 15)) {
@@ -4146,6 +4199,7 @@
                     break;
                   }
                 }
+                if (arrows !== before) break;   // the field was swept — stop iterating the stale array
                 if (spent) arrows.splice(i, 1);
                 continue;
               }
@@ -4727,7 +4781,7 @@
               // a per-hero status line: dash charges, Aegis, and the downed/reviving state
               const hero = (h, label, col) => {
                 if (h.down) {
-                  const pct = Math.round(clamp(h.reviveT / REVIVE_T, 0, 1) * 100);
+                  const pct = Math.round(clamp(h.reviveT / reviveNeed(), 0, 1) * 100);
                   return '<span style="color:#ff5252">' + label + ' DOWN' + (pct ? ' · reviving ' + pct + '%' : ' · stand close to revive') + '</span>';
                 }
                 const dash = up.dashMax === 0 ? '' : ' ◆' + h.dashCharges;
@@ -4795,6 +4849,17 @@
             if (h.dashT > 0) {
               h.dashT--;
               ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16 });
+              // Phantom Strike: dashing through a foe staggers it (the no-flinch bosses shrug it off)
+              if (up.dashStrike) {
+                for (const e of enemies) {
+                  if (untouchable(e) || e.frozen > 0 || e.stun > 0) continue;
+                  if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') continue;
+                  if (Math.hypot(e.x - h.x, e.y - h.y) < 22) {
+                    e.stun = 20; e.vx = 0; e.vy = 0;
+                    sparks.push({ x: e.x, y: e.y - 28, t: 12, color: '#80deea', txt: '✦' });
+                  }
+                }
+              }
             }
             if (h.iframe > 0) h.iframe--;   // post-shield invulnerability beat
             if (h.dashCharges < up.dashMax && h.rechargeT > 0 && --h.rechargeT <= 0) {
@@ -4861,6 +4926,11 @@
                   const spd = Math.hypot(a.vx, a.vy) || 5.2;
                   a.vx = Math.cos(ang) * spd; a.vy = Math.sin(ang) * spd;
                   a.reflected = true; a.t = 240;
+                } else if (up.riposte && a.kind !== 'vsaber') {
+                  // Riposte: the batted shot is yours now — it flies on away from you
+                  a.kind = 'parrow'; a.dmg = 1; a.pierce = 0; a.hitSet = null;
+                  a.bounces = up.ricochet ? 1 : 0;
+                  a.vx = dx / d * 6.5; a.vy = dy / d * 6.5; a.t = 120;
                 } else {
                   arrows.splice(i, 1);  // ordinary arrows are just batted out of the air
                 }
@@ -4909,12 +4979,14 @@
             const fd = Math.hypot(h.fx, h.fy) || 1;
             const ux = h.fx / fd, uy = h.fy / fd;
             const n = up.shotCount, spread = 0.16;
+            const spd = ARROW_SPD * up.arrowSpd;                       // Long Draw: faster, farther
             for (let i = 0; i < n; i++) {
               const off = (i - (n - 1) / 2) * spread;
               const ca = Math.cos(off), sa = Math.sin(off);
               arrows.push({ x: h.x + ux * 12, y: h.y - 18 + uy * 12, kind: 'parrow',
-                            vx: (ux * ca - uy * sa) * ARROW_SPD, vy: (ux * sa + uy * ca) * ARROW_SPD,
-                            t: 110, dmg: up.shotDmg, pierce: up.shotPierce, hitSet: null });
+                            vx: (ux * ca - uy * sa) * spd, vy: (ux * sa + uy * ca) * spd,
+                            t: Math.round(110 * up.arrowSpd), dmg: up.shotDmg, pierce: up.shotPierce,
+                            bounces: up.ricochet ? 1 : 0, hitSet: null });
             }
           }
           // caster: a deliberate spell, not a trigger — the attack key begins a short
@@ -4946,6 +5018,7 @@
             if (!t) { sparks.push({ x: h.x + h.fx * 16, y: h.y - 24, t: 10, color: '#ce93d8', txt: 'fzzt' }); return; }
             h.swingT = 10;
             sfSfx.zap();
+            const kills0 = kills;
             const pts = [{ x: h.x, y: h.y - 16 }];
             const hit = new Set();
             let from = t;
@@ -4964,6 +5037,11 @@
               from = nx;
             }
             blasts.push({ kind: 'chain', pts, t: 0, life: 16 });
+            // Overcharge: a bolt that killed recovers much faster (refund 40% of what remains)
+            if (up.overcharge && kills > kills0) {
+              h.swingReadyTick = tick + Math.round(Math.max(0, h.swingReadyTick - tick) * 0.6);
+              sparks.push({ x: h.x, y: h.y - 34, t: 12, color: '#ce93d8', txt: '⚡+' });
+            }
           }
 
           function trySummon(kind) {
