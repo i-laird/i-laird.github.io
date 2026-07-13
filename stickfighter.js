@@ -21,7 +21,9 @@
           // refs are destructured here (call sites unchanged); the runtime-varying flags
           // (soundEnabled / reduceMotion) and the shared, game-mutated activeMusic are
           // read/written through `api` live (api.soundEnabled, api.activeMusic = …, etc.).
-          const { unlockAchievement, _chirp, makeRng, HAL_WORKER_URL } = api;
+          const { unlockAchievement: _unlockAch, _chirp, makeRng, HAL_WORKER_URL } = api;
+          // a watched replay must never unlock the WATCHER's achievements
+          const unlockAchievement = (id) => { if (!replayMode) _unlockAch(id); };
 
           const GW = xp.offsetWidth;
           const GH = xp.offsetHeight - 40;
@@ -128,14 +130,45 @@
               ianCue, ianActive, ianChoice, ianFinale, mournful, endless, ianBg, wraithLunged, ogreSpawned;
           // online leaderboard ("hall of legends"): lbState drives the death screen
           //   off=worker down/unscored · loading · enter=typing a name · submitting · view/done=show the board
-          let lbScores = null, lbState = 'off', lbName = '', lbRank = -1, lbScore = 0, lbWave = 0;
+          // lbScores = the all-time board; lbDaily = today's daily-challenge board (null when
+          // the worker predates daily boards — the daily column simply doesn't render).
+          // A daily run qualifies/submits against lbDaily, a normal run against lbScores;
+          // the death screen shows both side by side either way.
+          let lbScores = null, lbDaily = null, lbState = 'off', lbName = '', lbRank = -1, lbScore = 0, lbWave = 0;
+          // minimal proof-of-play: a worker-signed token minted when the run starts (fetched
+          // fire-and-forget so starting never blocks); the submit presents it + the run's
+          // {ticks, kills} so the worker can hold the claim against wall-clock time and the
+          // game's own rule invariants. `cheated` (any warp / grant-all cheat) unranks the run.
+          let runToken = null, cheated = false, lbTicks = 0, lbKills = 0;
+          // ── replay recording & playback ──
+          // Every live run records its complete per-tick input surface (held-direction mask
+          // changes, the pend actions at consumption, shop buys, boss-intro advances, the Ian
+          // choice) plus the initial persistent state the sim reads (seed, classes, owned
+          // upgrades, token balance, lifetime maxwave). A ranked submit ships it; the worker
+          // stores it beside the board entry; anyone can then WATCH the run — the deterministic
+          // sim replays it bit-exactly. Event codes: 0 mask · 1 dashP1 · 2 atkP1 · 3 dashP2 ·
+          // 4 atkP2 · 5 summon · 6 mash · 7 buy · 8 shop-continue · 9 intro-advance · 10 ian.
+          let replayMode = false;      // watching someone else's run (read game-wide: gates saves/achievements)
+          let replay = null;           // { d: replay data, i: next event index, name, score }
+          let repMask = 0;             // the replayed held-direction mask
+          let repSaved = null;         // the watcher's own intro selections, restored on exit
+          let recEv = [], recLastM = -1, recHdr = null, recOverflow = false;
+          let runMaxwave = 0;          // lifetime-deepest wave, loaded per run (replay uses the recorder's)
+          const REC_MAX_EV = 50000;    // endless marathons stop recording rather than ballooning
+          function recPush(ev) {
+            if (replayMode || recOverflow) return;
+            if (recEv.length >= REC_MAX_EV) { recOverflow = true; return; }
+            recEv.push(ev);
+          }
           // ── local couch co-op (chosen on the intro screen; persists across R-restarts) ──
           //   coop=false → the classic single-player game, byte-for-byte unchanged (every co-op
           //   branch is gated on `coop`, so the deterministic sim and its tests are untouched).
           //   P1 = arrows (move) · Right-Shift (dash) · '/' (swing).  P2 = WASD · Left-Shift · F.
           //   Allies/meter/upgrades are shared; a felled hero is DOWN and a partner revives them
           //   by standing close — the run only ends when both are down.
-          let coop = false, coopSel = 0, p2 = null;
+          // modeSel is the intro's mode row: 0 = 1-player, 1 = 2-player co-op, 2 = daily challenge
+          // (solo, on the shared day seed). dailyRun persists across R-restarts like coop.
+          let coop = false, modeSel = 0, dailyRun = false, p2 = null;
           const P2_COL    = '#8fe388';   // P2's stick figure — a soft green, distinct from white P1 and enemy red
           const REVIVE_T  = 150;         // frames a partner must stand by a downed hero to revive them (~2.5s)
           // ── hero classes (chosen on the intro screen; persist across R-restarts & visits) ──
@@ -163,6 +196,18 @@
           let pend = null;   // built by resetPend() in init()
           function resetPend() {
             pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, summon: null, prompt: false, mash: 0 };
+          }
+          // ── daily challenge ──
+          // One shared seed per UTC day: everyone who picks DAILY plays the identical run
+          // and competes on that day's own leaderboard (`lb#sf#<day>` in hal-worker, read
+          // via GET /scores?day=…, written via POST /score with a `day` field).
+          function dailyDayStr() { return new Date().toISOString().slice(0, 10).replace(/-/g, ''); }  // e.g. '20260712' (UTC)
+          function dailyDayPretty() { const d = dailyDayStr(); return d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6); }
+          function dailySeed() {
+            const s = 'sf-daily-' + dailyDayStr();
+            let h = 5381 >>> 0;
+            for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
+            return h >>> 0;
           }
 
           function init() {
@@ -200,7 +245,8 @@
             bossIntro = null;
             ianCue = 0; ianActive = false; ianChoice = null; ianFinale = null; mournful = false; endless = false; ianBg = [];
             wraithLunged = false; ogreSpawned = false;
-            lbScores = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
+            lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
+            cheated = false; lbTicks = 0; lbKills = 0;
             up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
                    champs: { gandalf: false, luke: false, jotaro: false },
                    champMul: 1, meterMul: 1, summonCost: METER_MAX, swingMs: SWING_MS, swingR: SWING_R, shield: false,
@@ -213,8 +259,22 @@
                    shatter: false, overcharge: false };                            // SORCERY extras
             paused = false; upMenu = null;
             resetPend();                       // no queued input crosses a restart
-            tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
-            applySavedUpgrades();              // unlocked upgrades are permanent — re-apply across runs
+            if (replayMode && replay) {
+              // the RECORDED player's persistent state, not the watcher's — the sim must
+              // start exactly where the recorded run started (applied in definition order)
+              tokens = replay.d.tk0 | 0;
+              runMaxwave = replay.d.mw0 | 0;
+              const owned = new Set(replay.d.up0 || []);
+              for (const u of UPGRADES) if (owned.has(u.id)) { up.owned.add(u.id); u.apply(); }
+            } else {
+              tokens = parseInt(localStorage.getItem('ilaird_sf_tokens') || '0', 10) || 0;  // unspent tokens persist too
+              runMaxwave = parseInt(localStorage.getItem('ilaird_sf_maxwave') || '0', 10) || 0;
+              applySavedUpgrades();            // unlocked upgrades are permanent — re-apply across runs
+              // arm the recorder: the header is every piece of persistent state the sim just read
+              recEv = []; recLastM = -1; recOverflow = false;
+              recHdr = { v: 1, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop,
+                         up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
+            }
             player.dashCharges = up.dashMax; player.rechargeT = 0;
             player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
             if (coop) setupCoop();             // a second hero joins; both share allies, meter & upgrades
@@ -282,9 +342,11 @@
             try { return new Set(JSON.parse(localStorage.getItem(SF_UP_KEY) || '[]')); } catch (_) { return new Set(); }
           }
           function saveUpgrades() {
+            if (replayMode) return;    // a watched run must never touch the watcher's profile
             try { localStorage.setItem(SF_UP_KEY, JSON.stringify([...up.owned])); } catch (_) {}
           }
           function saveTokens() {
+            if (replayMode) return;
             try { localStorage.setItem('ilaird_sf_tokens', String(tokens)); } catch (_) {}
           }
           function applySavedUpgrades() {
@@ -305,10 +367,12 @@
           /* a token is earned only the FIRST time a given level is beaten (highest cleared
              level persisted) — so permanent upgrades can't be farmed by replaying easy waves. */
           function grantLevelToken(level) {
-            const maxW = parseInt(localStorage.getItem('ilaird_sf_maxwave') || '0', 10) || 0;
-            if (level <= maxW) return false;
+            // gated on the run's in-memory maxwave (loaded in init; a replay uses the
+            // RECORDER's value so token grants re-play identically), persisted live-only
+            if (level <= runMaxwave) return false;
+            runMaxwave = level;
             tokens++; saveTokens();
-            try { localStorage.setItem('ilaird_sf_maxwave', String(level)); } catch (_) {}
+            if (!replayMode) try { localStorage.setItem('ilaird_sf_maxwave', String(level)); } catch (_) {}
             return true;
           }
           // the story bosses (Witch-king, Vader, Sidious, DIO) pay out on EVERY kill, not just
@@ -2300,7 +2364,12 @@
           }
           // the run is over (solo death, or both heroes down in co-op)
           function endRun() {
+            if (replayMode) {                  // the legend falls again — nothing of the watcher's changes
+              alive = false; sfSfx.die(); shake = 14; lbState = 'off';
+              return;
+            }
             alive = false;
+            lbTicks = tick; lbKills = kills;   // the run's proof stats, frozen at death
             if (score > best) { best = score; newBest = true; localStorage.setItem('ilaird_sf_best', String(best)); }
             sfSfx.die(); shake = 14;
             lbBegin();
@@ -2324,18 +2393,43 @@
             try { return (typeof HAL_WORKER_URL === 'string' && HAL_WORKER_URL) ? HAL_WORKER_URL : null; }
             catch (_) { return null; }
           }
-          function lbBegin() {
-            lbScore = score; lbWave = wave; lbRank = -1; lbName = ''; lbScores = null;
+          // stamp the run's true start time with a worker-signed token (fire-and-forget —
+          // starting never waits on the network; no token just means the submit is refused
+          // by a proof-enforcing worker and the death screen stays view-only)
+          function beginRunProof() {
+            runToken = null;
             const base = lbBase();
+            if (!base) return;
+            fetch(base + '/run-start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+              .then(r => r.ok ? r.json() : null)
+              .then(d => { if (d && typeof d.token === 'string') runToken = d.token; })
+              .catch(() => {});
+          }
+          function lbBegin() {
+            lbScore = score; lbWave = wave; lbRank = -1; lbName = ''; lbScores = null; lbDaily = null;
+            watchSel = null;
+            const base = lbBase();
+            if (cheated) { lbState = 'off'; return; }   // warp/grant cheats: a fine playground, not a ranked run
             if (!base || score <= 0) { lbState = 'off'; return; }
             lbState = 'loading';
-            fetch(base + '/scores', { method: 'GET' })
-              .then(r => r.ok ? r.json() : Promise.reject(r.status))
-              .then(d => {
+            const day = dailyDayStr();
+            // fetch both boards: the all-time hall is required; today's board is best-effort
+            // (an old worker without daily support echoes the all-time board WITHOUT a `day`
+            // field, so requiring d.day === day keeps a stale backend from faking a daily list)
+            const allP = fetch(base + '/scores', { method: 'GET' })
+              .then(r => r.ok ? r.json() : Promise.reject(r.status));
+            const dayP = fetch(base + '/scores?day=' + day, { method: 'GET' })
+              .then(r => r.ok ? r.json() : null)
+              .catch(() => null);
+            Promise.all([allP, dayP])
+              .then(([all, dl]) => {
                 if (alive) return;                       // player already restarted — ignore the stale load
-                lbScores = (d && Array.isArray(d.scores)) ? d.scores.slice(0, 10) : [];
-                const lowest = lbScores.length >= 10 ? lbScores[lbScores.length - 1].score : 0;
-                lbState = (lbScores.length < 10 || lbScore > lowest) ? 'enter' : 'view';
+                lbScores = (all && Array.isArray(all.scores)) ? all.scores.slice(0, 10) : [];
+                lbDaily = (dl && dl.day === day && Array.isArray(dl.scores)) ? dl.scores.slice(0, 10) : null;
+                const board = dailyRun ? lbDaily : lbScores;
+                if (board === null) { lbState = 'view'; return; }   // daily run, worker has no daily boards — display only
+                const lowest = board.length >= 10 ? board[board.length - 1].score : 0;
+                lbState = (board.length < 10 || lbScore > lowest) ? 'enter' : 'view';
               })
               .catch(() => { if (!alive) lbState = 'off'; });
           }
@@ -2344,19 +2438,81 @@
             const nm = (lbName.trim() || 'AAA').slice(0, 10);
             if (!base) { lbState = 'off'; return; }
             lbState = 'submitting';
+            // attach the run's recording (header + per-tick events) so the board entry is
+            // watchable — skipped if the recorder overflowed or the encoding is oversized
+            let replayField = {};
+            if (!recOverflow && recHdr) {
+              const rp = { ...recHdr, ev: recEv };
+              if (JSON.stringify(rp).length <= 150000) replayField = { replay: rp };
+            }
             fetch(base + '/score', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ game: 'sf', name: nm, score: lbScore, wave: lbWave }),
+              // a daily run carries its day → the worker writes today's board instead;
+              // token + ticks + kills are the run's minimal proof (see beginRunProof)
+              body: JSON.stringify({ game: 'sf', name: nm, score: lbScore, wave: lbWave,
+                                     token: runToken, ticks: lbTicks, kills: lbKills,
+                                     ...replayField,
+                                     ...(dailyRun ? { day: dailyDayStr() } : {}) }),
             })
               .then(r => r.ok ? r.json() : Promise.reject(r.status))
               .then(d => {
                 if (alive) return;                       // restarted mid-submit — drop the response
-                if (d && Array.isArray(d.scores)) lbScores = d.scores.slice(0, 10);
+                if (d && Array.isArray(d.scores)) {
+                  if (dailyRun) lbDaily = d.scores.slice(0, 10);
+                  else lbScores = d.scores.slice(0, 10);
+                }
                 lbRank = (d && Number.isInteger(d.rank)) ? d.rank : -1;
                 lbState = 'done';
               })
               .catch(() => { if (!alive) lbState = 'view'; });   // show the board we already have
+          }
+
+          /* ── watching a legend: fetch a stored replay and re-simulate it locally ── */
+          let watchSel = null;    // { list: [{entry, daily}], idx } — the death-screen picker
+          function watchableEntries() {
+            const list = [];
+            for (const e of lbScores || []) if (e && typeof e.rp === 'string') list.push({ entry: e, daily: false });
+            for (const e of lbDaily || [])  if (e && typeof e.rp === 'string') list.push({ entry: e, daily: true });
+            return list;
+          }
+          function startWatch(item) {
+            const base = lbBase();
+            if (!base) return;
+            hud.innerHTML = 'fetching the legend…';
+            fetch(base + '/replay?id=' + encodeURIComponent(item.entry.rp))
+              .then(r => r.ok ? r.json() : Promise.reject(r.status))
+              .then(d => {
+                const rd = d && d.replay;
+                if (!rd || rd.v !== 1 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+                startReplay(rd, item.entry);
+              })
+              .catch(() => { hud.innerHTML = 'replay unavailable · press R to play'; });
+          }
+          function startReplay(d, entry) {
+            // impersonate the recorded run's setup; the watcher's own selections return on exit
+            repSaved = { c1: classSel, c2: classSel2, coop, daily: dailyRun, mode: modeSel };
+            watchSel = null;
+            replayMode = true;
+            replay = { d, i: 0, name: String(entry.name || 'AAA'), score: entry.score | 0 };
+            classSel = clamp(d.c1 | 0, 0, 2); classSel2 = clamp(d.c2 | 0, 0, 2);
+            coop = !!d.coop; dailyRun = false;
+            sfSeedOverride = d.seed >>> 0;
+            repMask = 0;
+            init();                 // replayMode: init loads the RECORDER's persistent state
+            started = true; frame = 0;
+            banner = '▶ ' + replay.name + ' — ' + replay.score;
+            bannerSub = 'a legend, replayed · Q to leave'; bannerT = 150;
+          }
+          function stopReplay() {
+            replayMode = false; replay = null;
+            if (repSaved) {
+              classSel = repSaved.c1; classSel2 = repSaved.c2;
+              coop = repSaved.coop; dailyRun = repSaved.daily; modeSel = repSaved.mode;
+              repSaved = null;
+            }
+            sfSeedOverride = null;
+            init();                 // back to the title, the watcher's own setup restored
           }
 
           function panel(lines) {
@@ -2383,9 +2539,12 @@
 
             const cx = GW / 2;
             const board = (lbState === 'view' || lbState === 'done' || lbState === 'submitting');
-            const rows = lbScores || [];
+            // two columns when today's board exists (or this WAS a daily run): all-time + daily
+            const cols = [{ title: 'ALL TIME', rows: lbScores || [], hot: !dailyRun }];
+            if (lbDaily !== null || dailyRun) cols.push({ title: '☀ TODAY · ' + dailyDayPretty(), rows: lbDaily || [], hot: dailyRun });
+            const rowsN = Math.max(1, ...cols.map((c) => c.rows.length));
             // height-aware top so a full 10-row board stays centred and on-screen
-            const blockH = board ? 150 + rows.length * 20 : lbState === 'enter' ? 230 : 150;
+            const blockH = board ? 172 + rowsN * 18 : lbState === 'enter' ? 230 : 150;
             let y = Math.max(46, GH / 2 - blockH / 2);
 
             ctx.font = 'bold 36px Tahoma,Arial'; ctx.fillStyle = 'white';
@@ -2394,9 +2553,26 @@
             ctx.fillText('SCORE ' + score + (newBest ? '   ★ NEW BEST ★' : '   ·   BEST ' + best), cx, y); y += 25;
             ctx.font = '14px Tahoma,Arial'; ctx.fillStyle = '#ccc';
             ctx.fillText('you survived ' + wave + (wave === 1 ? ' wave' : ' waves') +
-                         '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes'), cx, y); y += 30;
+                         '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes'), cx, y); y += 20;
+            if (dailyRun) {
+              ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffb300';
+              ctx.fillText('☀ daily challenge · ' + dailyDayPretty(), cx, y); y += 20;
+            }
+            y += 10;
 
             if (lbState === 'off' || lbState === 'error') {
+              if (replayMode) {
+                ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
+                ctx.fillText('▶ so ends the legend of ' + (replay ? replay.name : '…'), cx, y); y += 24;
+                ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
+                ctx.fillText('Q to return', cx, y);
+                ctx.shadowBlur = 0; ctx.textAlign = 'left';
+                return;
+              }
+              if (cheated) {
+                ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#8a949a';
+                ctx.fillText('cheats were used — this run is unranked', cx, y); y += 22;
+              }
               ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
               ctx.fillText('press R to rise again', cx, y);
               ctx.shadowBlur = 0; ctx.textAlign = 'left';
@@ -2411,31 +2587,50 @@
               ctx.fillText('ranking you among the fallen…', cx, y);
             } else if (lbState === 'enter') {
               ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = '#caffa0';
-              ctx.fillText('A NEW LEGEND IS BORN', cx, y); y += 30;
+              ctx.fillText(dailyRun ? "A LEGEND OF THIS DAY IS BORN" : 'A NEW LEGEND IS BORN', cx, y); y += 30;
               const caret = (Math.floor(deadT / 16) % 2) ? '▍' : ' ';   // deadT, not frame (frozen while dead)
               ctx.font = 'bold 24px "Courier New",monospace'; ctx.fillStyle = '#fff';
               ctx.fillText((lbName || '') + caret, cx, y); y += 26;
               ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#8a949a';
-              ctx.fillText('type your name  ·  ENTER to enshrine it', cx, y);
+              ctx.fillText('type your name  ·  ENTER to enshrine it' + (dailyRun ? "  ·  today's board" : ''), cx, y);
             } else {
-              ctx.font = '15px "Courier New",monospace';
-              if (rows.length === 0) {
-                ctx.fillStyle = '#bbb';
-                ctx.fillText('no legends yet — be the first', cx, y); y += 22;
-              }
-              for (let i = 0; i < rows.length; i++) {
-                const e = rows[i];
-                const isMe = i === lbRank;
-                ctx.fillStyle = isMe ? '#ffd24d' : i < 3 ? '#e8e8e8' : '#9aa3a8';
-                const rk = String(i + 1).padStart(2, ' ');
-                const nm = String(e.name || 'AAA').slice(0, 10).padEnd(10, ' ');
-                const sc = String(e.score).padStart(7, ' ');
-                ctx.fillText((isMe ? '▸ ' : '  ') + rk + '  ' + nm + ' ' + sc + (isMe ? ' ◂' : '  '), cx, y);
-                y += 20;
-              }
-              y += 8;
-              ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
-              ctx.fillText(lbState === 'submitting' ? 'recording your legend…' : 'press R to rise again', cx, y);
+              // the boards, side by side (single centred column when there's no daily board).
+              // the ▸ marker highlights the player's row on the board they submitted to.
+              const colX = cols.length === 1 ? [cx] : [cx - 168, cx + 168];
+              const topY = y;
+              let maxY = y;
+              cols.forEach((col, ci) => {
+                let yy = topY;
+                ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = col.hot ? '#ffd24d' : '#9aa3a8';
+                ctx.fillText(col.title, colX[ci], yy); yy += 22;
+                ctx.font = '13px "Courier New",monospace';
+                if (col.rows.length === 0) {
+                  ctx.fillStyle = '#bbb';
+                  ctx.fillText(col.hot ? 'no legends yet — be the first' : 'no legends yet', colX[ci], yy); yy += 18;
+                }
+                for (let i = 0; i < col.rows.length; i++) {
+                  const e = col.rows[i];
+                  const isMe = col.hot && i === lbRank;
+                  // rows with a stored replay get a ▶; the open watch picker highlights its pick
+                  const wi = watchSel ? watchSel.list.findIndex((w) => w.entry === e) : -1;
+                  const onW = wi !== -1 && wi === watchSel.idx;
+                  ctx.fillStyle = onW ? '#fff' : isMe ? '#ffd24d' : i < 3 ? '#e8e8e8' : '#9aa3a8';
+                  const rk = String(i + 1).padStart(2, ' ');
+                  const nm = String(e.name || 'AAA').slice(0, 10).padEnd(10, ' ');
+                  const sc = String(e.score).padStart(7, ' ');
+                  ctx.fillText((onW ? '» ' : isMe ? '▸ ' : '  ') + rk + ' ' + nm + ' ' + sc +
+                               (e.rp ? ' ▶' : '  ') + (isMe ? '◂' : ''), colX[ci], yy);
+                  yy += 18;
+                }
+                maxY = Math.max(maxY, yy);
+              });
+              y = maxY + 8;
+              ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = watchSel ? '#ffd24d' : '#ccc';
+              ctx.fillText(
+                watchSel ? '↑ ↓ choose a legend  ·  ENTER to watch  ·  Q closes'
+                : lbState === 'submitting' ? 'recording your legend…'
+                : watchableEntries().length ? 'press R to rise again  ·  W to watch a ▶ legend'
+                : 'press R to rise again', cx, y);
             }
             ctx.shadowBlur = 0; ctx.textAlign = 'left';
           }
@@ -3587,6 +3782,30 @@
           function loop() {
             tick++;                          // the deterministic sim clock — advances once per logical tick
 
+            /* replay feeder: apply every recorded event stamped up to this tick, BEFORE any
+               game logic — pend actions land exactly where the pend consumer will eat them,
+               masks land before the input sampler, and menu/cutscene events (buy / continue /
+               intro-advance / Ian) land in the same between-ticks slot they were recorded in */
+            if (replayMode && replay) {
+              const ev = replay.d.ev;
+              while (replay.i < ev.length && ev[replay.i][0] <= tick) {
+                const e = ev[replay.i++];
+                switch (e[1]) {
+                  case 0: repMask = e[2] | 0; break;
+                  case 1: pend.dashP1 = true; break;
+                  case 2: pend.atkP1 = true; break;
+                  case 3: pend.dashP2 = true; break;
+                  case 4: pend.atkP2 = true; break;
+                  case 5: pend.summon = ['gandalf', 'luke', 'jotaro'][e[2]] || null; break;
+                  case 6: pend.mash += e[2] | 0; break;
+                  case 7: { const u = availableUpgrades().find((x) => x.id === e[2]); if (u && upMenu) buyUpgrade(u); break; }
+                  case 8: if (upMenu) finishUpgrades(); break;
+                  case 9: if (bossIntro) advanceBossIntro(); break;
+                  case 10: if (ianChoice) chooseIan(e[2] ? 1 : 0); break;
+                }
+              }
+            }
+
             /* intro screen — character creation: live hero preview(s) + the 1P/2P and class
                rows (see the onKey intro handler for the row navigation) */
             if (!started) {
@@ -3602,11 +3821,12 @@
               // one line per chooser row: the selected value gets ▶ ◀, the active row gets color
               const pickLine = (opts, sel) => opts.map((o, i) => i === sel ? '▶ ' + o.toUpperCase() + ' ◀' : o).join('     ');
               const rowCol = (r, activeCol) => introRow === r ? activeCol : '#77828c';
-              ctx.font = 'bold 18px Tahoma,Arial'; ctx.fillStyle = rowCol(0, coopSel ? P2_COL : '#ffd24d');
-              ctx.fillText(pickLine(['1 player', '2 player'], coopSel), GW / 2, 120);
+              ctx.font = 'bold 18px Tahoma,Arial';
+              ctx.fillStyle = rowCol(0, modeSel === 1 ? P2_COL : modeSel === 2 ? '#ffb300' : '#ffd24d');
+              ctx.fillText(pickLine(['1 player', '2 player', '☀ daily'], modeSel), GW / 2, 120);
               // the hero(es) being built, weapon in hand
               const py = clamp(Math.round(GH * 0.42), 196, 252);
-              if (coopSel === 0) {
+              if (modeSel !== 1) {
                 drawClassPreview(GW / 2, py, CLASSES[classSel], 'white', introRow === 1);
               } else {
                 drawClassPreview(GW / 2 - 85, py, CLASSES[classSel], 'white', introRow === 1, 'P1');
@@ -3617,7 +3837,7 @@
               const clsOpts = CLASSES.map(c => CLASS_ICON[c] + ' ' + c);
               let cy = py + 60;
               ctx.font = 'bold 14px Tahoma,Arial';
-              if (coopSel === 0) {
+              if (modeSel !== 1) {
                 ctx.fillStyle = rowCol(1, '#ffd24d');
                 ctx.fillText(pickLine(clsOpts, classSel), GW / 2, cy);
               } else {
@@ -3634,8 +3854,11 @@
                 caster: 'X charges a bolt that arcs to the nearest foe — frost & fire come with practice',
               };
               const blurbCls = CLASSES[introRow === 2 ? classSel2 : classSel];
-              const bottom = [['◀ ▶ choose   ·   ↑ ↓ switch row   (or 1 / 2 for players)', '12px Tahoma,Arial', '#9fb0c0']];
-              if (coopSel === 0) {
+              const bottom = [['◀ ▶ choose   ·   ↑ ↓ switch row   (or 1 / 2 / 3 for the mode)', '12px Tahoma,Arial', '#9fb0c0']];
+              if (modeSel === 2) {
+                bottom.push(['☀ ' + dailyDayPretty() + ' — one seed for everyone · today\'s own board · resets at UTC midnight', '12px Tahoma,Arial', '#ffb300']);
+              }
+              if (modeSel !== 1) {
                 bottom.push(['move: WASD / arrows   ·   dash: Space / Shift   ·   attack: X / F', '13px Tahoma,Arial', '#ccc']);
               } else {
                 bottom.push(['Player 1 (white):  arrows move  ·  Right-Shift dash  ·  /  attack', '13px Tahoma,Arial', '#fff']);
@@ -3652,7 +3875,7 @@
                 by += 21;
               }
               ctx.restore(); ctx.textAlign = 'left';
-              hud.innerHTML = 'BEST: ' + best + ' · ' + (coopSel === 1 ? '2-PLAYER' : '1-PLAYER') + '<br>double-click icon to quit';
+              hud.innerHTML = 'BEST: ' + best + ' · ' + (modeSel === 1 ? '2-PLAYER' : modeSel === 2 ? '☀ DAILY' : '1-PLAYER') + '<br>double-click icon to quit';
               frame++;
               return;
             }
@@ -3668,7 +3891,9 @@
               if (coop && p2) stickFigure(p2.x, p2.y, 0, P2_COL, 1, 1 - fall * 0.4, fall * Math.PI / 2);
               if (deadT > 34) {
                 drawDeathScreen();
-                hud.innerHTML = lbState === 'enter'      ? 'type your name · ENTER to submit'
+                hud.innerHTML = replayMode               ? '▶ replay over · Q to return'
+                              : watchSel                 ? '↑↓ choose a legend · ENTER to watch'
+                              : lbState === 'enter'      ? 'type your name · ENTER to submit'
                               : lbState === 'loading'    ? 'reaching the hall of legends…'
                               : lbState === 'submitting' ? 'recording your legend…'
                               : 'press R to play again';
@@ -3691,24 +3916,46 @@
             /* per-tick input: queued edge-triggered presses enter the sim only here, on the
                tick boundary (see resetPend) — with the held-key reads just below, this is the
                sim's complete input surface for this tick (the replay/lockstep capture point) */
-            if (pend.dashP1) { pend.dashP1 = false; tryDash(player); }
-            if (pend.atkP1)  { pend.atkP1 = false;  tryAttack(player); }
+            if (pend.dashP1) { pend.dashP1 = false; recPush([tick, 1]); tryDash(player); }
+            if (pend.atkP1)  { pend.atkP1 = false;  recPush([tick, 2]); tryAttack(player); }
             if (coop && p2) {
-              if (pend.dashP2) { pend.dashP2 = false; tryDash(p2); }
-              if (pend.atkP2)  { pend.atkP2 = false;  tryAttack(p2); }
+              if (pend.dashP2) { pend.dashP2 = false; recPush([tick, 3]); tryDash(p2); }
+              if (pend.atkP2)  { pend.atkP2 = false;  recPush([tick, 4]); tryAttack(p2); }
             } else { pend.dashP2 = false; pend.atkP2 = false; }
-            if (pend.summon) { const sk = pend.summon; pend.summon = null; trySummon(sk); }
-            if (pend.prompt) { pend.prompt = false; championPrompt(); }
+            if (pend.summon) {
+              const sk = pend.summon; pend.summon = null;
+              recPush([tick, 5, ['gandalf', 'luke', 'jotaro'].indexOf(sk)]);
+              trySummon(sk);
+            }
+            if (pend.prompt) { pend.prompt = false; championPrompt(); }   // banner only — not recorded
             if (player.choke <= 0) pend.mash = 0;   // mashes only mean anything mid-choke
+
+            /* held-direction sampling — one mask covers every movement source, so it is the
+               exact thing the recorder stores and the replayer feeds back.
+               bits: 1 ← · 2 → · 4 ↑ · 8 ↓ (arrows) · 16 a · 32 d · 64 w · 128 s (WASD) */
+            let im;
+            if (replayMode) im = repMask;
+            else {
+              im = 0;
+              if (keys['ArrowLeft'])  im |= 1;
+              if (keys['ArrowRight']) im |= 2;
+              if (keys['ArrowUp'])    im |= 4;
+              if (keys['ArrowDown'])  im |= 8;
+              if (keys['a'] || keys['A']) im |= 16;
+              if (keys['d'] || keys['D']) im |= 32;
+              if (keys['w'] || keys['W']) im |= 64;
+              if (keys['s'] || keys['S']) im |= 128;
+              if (im !== recLastM) { recPush([tick, 0, im]); recLastM = im; }
+            }
 
             /* input → acceleration + friction (P1) */
             let ix = 0, iy = 0;
             // P1 always reads the arrow keys; in single-player WASD also drives P1 (the classic
             // dual binding), but in co-op WASD is P2's, so it's excluded from P1 here.
-            if (keys['ArrowLeft']  || (!coop && (keys['a'] || keys['A']))) ix = -1;
-            if (keys['ArrowRight'] || (!coop && (keys['d'] || keys['D']))) ix =  1;
-            if (keys['ArrowUp']    || (!coop && (keys['w'] || keys['W']))) iy = -1;
-            if (keys['ArrowDown']  || (!coop && (keys['s'] || keys['S']))) iy =  1;
+            if ((im & 1) || (!coop && (im & 16))) ix = -1;
+            if ((im & 2) || (!coop && (im & 32))) ix =  1;
+            if ((im & 4) || (!coop && (im & 64))) iy = -1;
+            if ((im & 8) || (!coop && (im & 128))) iy =  1;
             if (ix && iy) { ix *= 0.707; iy *= 0.707; }
             if (ix || iy) { player.fx = ix; player.fy = iy; }
             if (sidFinale || dioFinale || ianActive) { ix = 0; iy = 0; } // input locked — watch the cutscene
@@ -3717,7 +3964,7 @@
             // Force choke: held aloft, input locked — break free by struggling (mashes queue in
             // onKey and are applied here, on the tick)
             if (player.choke > 0) {
-              if (pend.mash > 0) { player.chokeBreak += pend.mash; player.swingT = 6; sfSfx.saberHit(); pend.mash = 0; }
+              if (pend.mash > 0) { recPush([tick, 6, pend.mash]); player.chokeBreak += pend.mash; player.swingT = 6; sfSfx.saberHit(); pend.mash = 0; }
               ix = 0; iy = 0; player.choke--;
               if (player.chokeBreak >= 3) {                 // struggled free
                 player.choke = 0; player.stunT = 0;
@@ -3735,10 +3982,10 @@
                cutscene/time-stop locks freeze it too. */
             if (coop && p2 && !p2.down) {
               let jx = 0, jy = 0;
-              if (keys['a'] || keys['A']) jx = -1;
-              if (keys['d'] || keys['D']) jx =  1;
-              if (keys['w'] || keys['W']) jy = -1;
-              if (keys['s'] || keys['S']) jy =  1;
+              if (im & 16)  jx = -1;
+              if (im & 32)  jx =  1;
+              if (im & 64)  jy = -1;
+              if (im & 128) jy =  1;
               if (jx && jy) { jx *= 0.707; jy *= 0.707; }
               if (jx || jy) { p2.fx = jx; p2.fy = jy; }
               if (sidFinale || dioFinale || ianActive || dioStopT > 0) { jx = 0; jy = 0; }
@@ -4793,10 +5040,11 @@
 
             const foesLeft = enemies.length + warns.length + waveQuota;
             hud.innerHTML =
+              (replayMode && replay ? '<span style="color:#ffd24d">▶ REPLAY · ' + replay.name + ' · Q to leave</span><br>' : '') +
               'SCORE ' + score + ' · BEST ' + best + '<br>' +
               (mournful
                 ? '<span style="color:#8fd8ff">the world mourns · they will not fight</span> · KILLS ' + kills
-                : 'WAVE ' + wave + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
+                : 'WAVE ' + wave + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
               (up.dashMax === 0
                 ? '<span style="color:#666">DASH 🔒 locked</span>'
                 : '<span style="color:#80deea">DASH ' + '◆'.repeat(player.dashCharges) +
@@ -5285,6 +5533,27 @@
           const keyName = (k) => (k.length === 1 ? k.toLowerCase() : k);
           function onKey(e) {
             keys[keyName(e.key)] = true;
+            // watching a replay: Q leaves; every other key belongs to the legend, not you
+            if (replayMode) {
+              if (!e.repeat && (e.key === 'q' || e.key === 'Q')) stopReplay();
+              e.preventDefault();
+              return;
+            }
+            // death-screen watch picker: ↑↓ choose a legend, Enter watches, Q/W closes
+            if (!alive && watchSel) {
+              const n = watchSel.list.length;
+              if (e.key === 'ArrowUp')        watchSel.idx = (watchSel.idx + n - 1) % n;
+              else if (e.key === 'ArrowDown') watchSel.idx = (watchSel.idx + 1) % n;
+              else if (e.key === 'Enter' && !e.repeat) startWatch(watchSel.list[watchSel.idx]);
+              else if (['q', 'Q', 'w', 'W', 'Escape'].includes(e.key)) watchSel = null;
+              e.preventDefault();
+              return;
+            }
+            // W on the board view opens the picker (only when some entry has a stored replay)
+            if (!alive && (e.key === 'w' || e.key === 'W') && (lbState === 'view' || lbState === 'done')) {
+              const list = watchableEntries();
+              if (list.length) { watchSel = { list, idx: 0 }; e.preventDefault(); return; }
+            }
             // entering a name for the leaderboard after death — capture typing, swallow
             // everything else (so letters/digits go into the name, not cheats or the R-restart)
             if (!alive && lbState === 'enter') {
@@ -5300,26 +5569,33 @@
             // (1-PLAYER · MELEE) keep the classic run one Enter away. (The headless determinism
             // test starts by dispatching Enter, then holds ArrowRight to move.)
             if (!started) {
-              const nRows = coopSel === 1 ? 3 : 2;
+              const nRows = modeSel === 1 ? 3 : 2;
               if (e.key === 'ArrowUp')   { introRow = (introRow + nRows - 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
               if (e.key === 'ArrowDown') { introRow = (introRow + 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
-              if (e.key === '1') { coopSel = 0; if (introRow === 2) introRow = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
-              if (e.key === '2') { coopSel = 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === '1') { modeSel = 0; if (introRow === 2) introRow = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === '2') { modeSel = 1; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+              if (e.key === '3') { modeSel = 2; if (introRow === 2) introRow = 0; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
               if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 const d = e.key === 'ArrowRight' ? 1 : -1;
-                if (introRow === 0)      coopSel = d > 0 ? 1 : 0;
+                if (introRow === 0)      modeSel = (modeSel + d + 3) % 3;
                 else if (introRow === 1) classSel  = (classSel  + d + 3) % 3;
                 else                     classSel2 = (classSel2 + d + 3) % 3;
                 if (sfSfx.killE) sfSfx.killE();
                 e.preventDefault(); return;
               }
               if (['z', 'Z', 'Enter', ' '].includes(e.key)) {
-                coop = coopSel === 1;
-                player.cls = CLASSES[classSel];
+                coop = modeSel === 1;
+                dailyRun = modeSel === 2;
+                // daily pins the shared per-day seed through the existing MP/replay hook;
+                // a normal run clears it back to fresh entropy
+                sfSeedOverride = dailyRun ? dailySeed() : null;
                 try { localStorage.setItem('ilaird_sf_cls', String(classSel)); localStorage.setItem('ilaird_sf_cls2', String(classSel2)); } catch (_) {}
-                if (coop) setupCoop();
+                init();                     // fresh state on the chosen seed (init reads classSel/coop)
+                beginRunProof();            // stamp the start time for the leaderboard's proof check
                 started = true; frame = 0;
-                banner = coop ? 'CO-OP · WAVE 1' : 'WAVE 1'; bannerT = 90;
+                banner = dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1';
+                bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : '';
+                bannerT = 90;
                 startSfMusic();
               }
               e.preventDefault();
@@ -5332,8 +5608,10 @@
               if (['ArrowUp', 'ArrowLeft', 'w', 'W'].includes(e.key))        { upMenu.sel = (upMenu.sel - 1 + n) % n; sfSfx.killE(); }
               else if (['ArrowDown', 'ArrowRight', 's', 'S'].includes(e.key)) { upMenu.sel = (upMenu.sel + 1) % n; sfSfx.killE(); }
               else if (['z', 'Z', ' ', 'Enter'].includes(e.key)) {           // select the highlighted row
-                if (upMenu.sel >= rows.length) finishUpgrades();             // on Continue → leave
-                else buyUpgrade(rows[upMenu.sel]);                           // on a node → unlock it
+                // UI events happen BETWEEN ticks, so they're stamped tick+1: the replay
+                // feeder applies them at the top of the next tick — the exact same slot
+                if (upMenu.sel >= rows.length) { recPush([tick + 1, 8]); finishUpgrades(); }  // on Continue → leave
+                else { recPush([tick + 1, 7, rows[upMenu.sel].id]); buyUpgrade(rows[upMenu.sel]); }  // on a node → unlock it
               }
               e.preventDefault();
               return;
@@ -5343,21 +5621,23 @@
               if (ianChoice) {
                 if (['ArrowLeft', 'a', 'A'].includes(e.key)) { ianChoice.sel = 0; sfSfx.killE(); }
                 else if (['ArrowRight', 'd', 'D'].includes(e.key)) { ianChoice.sel = 1; sfSfx.killE(); }
-                else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) chooseIan(ianChoice.sel);
+                else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) { recPush([tick + 1, 10, ianChoice.sel]); chooseIan(ianChoice.sel); }
               }
               e.preventDefault();
               return;
             }
-            // cheat: type "nine" to skip straight to the Nazgûl set piece
+            // cheat: type "nine" to skip straight to the Nazgûl set piece.
+            // Every cheat marks the run `cheated` — still a playground, never ranked.
             if (/^[a-z]$/i.test(e.key)) {
               cheatBuf = (cheatBuf + e.key.toLowerCase()).slice(-8);
-              if (cheatBuf.endsWith('nine')) { cheatBuf = ''; skipToTheNine(); }
+              if (cheatBuf.endsWith('nine')) { cheatBuf = ''; cheated = true; skipToTheNine(); }
             }
             // cheat: spam 9 — 3×=ringwraiths, 4×=Witch-king, 5×=east door, 6×=Vader, 7×=Sidious, 8×=DIO
             if (e.key === '9' && !e.repeat) {
               const now = performance.now();
               nineKeyCount = now - last9 > 1500 ? 1 : nineKeyCount + 1;
               last9 = now;
+              if (nineKeyCount >= 3) cheated = true;
               if (nineKeyCount === 3) skipToTheNine();
               else if (nineKeyCount === 4) skipToWitchKing();
               else if (nineKeyCount === 5) skipToPreStarWars();
@@ -5371,12 +5651,12 @@
               const now = performance.now();
               eightKeyCount = now - last8 > 1500 ? 1 : eightKeyCount + 1;
               last8 = now;
-              if (eightKeyCount >= 3) { eightKeyCount = 0; grantAllUpgrades(); }
+              if (eightKeyCount >= 3) { eightKeyCount = 0; cheated = true; grantAllUpgrades(); }
             }
             // boss intro cutscene — confirm advances the card / dialogue; the 8/9 cheats above
             // still warp through, but nothing else responds while the card is up
             if (bossIntro) {
-              if (!e.repeat && ['z', 'Z', 'x', 'X', 'f', 'F', ' ', 'Enter'].includes(e.key)) advanceBossIntro();
+              if (!e.repeat && ['z', 'Z', 'x', 'X', 'f', 'F', ' ', 'Enter'].includes(e.key)) { recPush([tick + 1, 9]); advanceBossIntro(); }
               e.preventDefault();
               return;
             }
@@ -5406,8 +5686,13 @@
             if (e.key === '2') pend.summon = 'luke';
             if (e.key === '3') pend.summon = 'jotaro';
             if ((e.key === 'r' || e.key === 'R') && !alive) {
+              sfSeedOverride = dailyRun ? dailySeed() : null;   // re-pin today's seed (recomputed in case midnight passed)
               init();
-              started = true; banner = coop ? 'CO-OP · WAVE 1' : 'WAVE 1'; bannerT = 90; startSfMusic();
+              beginRunProof();
+              started = true;
+              banner = dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1';
+              bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : '';
+              bannerT = 90; startSfMusic();
             }
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
           }
