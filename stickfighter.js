@@ -3651,9 +3651,26 @@
              (see the netplay comment block up top for the design; the per-tick feeder
              lives at the top of loop() beside the replay feeder, and the tick gate in
              frameStep) */
-          const NET_RTC_CONF = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+          const NET_RTC_CONF = {
+            iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
+          };
+          // connection diagnostics — candidate counts each side gathered + the state trail,
+          // folded into failure messages and breadcrumbed to the console ([sf-net]) so a
+          // "couldn't connect" report is actually debuggable
+          let netDiag = null;
+          function netCandSummary(sdp) {
+            const counts = { host: 0, srflx: 0, relay: 0 };
+            const re = /a=candidate:.+ typ (host|srflx|relay)/g;
+            let m;
+            while ((m = re.exec(sdp || ''))) counts[m[1]]++;
+            return counts.host + ' host / ' + counts.srflx + ' srflx' + (counts.relay ? ' / ' + counts.relay + ' relay' : '');
+          }
+          function netLog(msg) {
+            try { console.info('[sf-net] ' + msg); } catch (e) { /* no console */ }
+          }
           function netOpen(mode) {
             netTeardown();
+            netDiag = { local: '?', remote: '?', states: [] };
             netSaved = { c1: classSel, c2: classSel2, coop, daily: dailyRun, hs: hardSel,
                          top: menuTop, ss: subSingle, sm: subMulti,
                          gw: xp.offsetWidth, gh: xp.offsetHeight - 40 };
@@ -3661,16 +3678,25 @@
             netCfg = null;
             if (mode === 'host') netStartHost();
           }
-          // non-trickle ICE: wait (briefly) for gathering so ONE blob carries the candidates —
-          // signaling is a single store/fetch each way, no trickle channel needed
+          // non-trickle ICE: wait for gathering so ONE blob carries the candidates —
+          // signaling is a single store/fetch each way, no trickle channel needed.
+          // Resolve on gathering-complete, or after 3s ONCE at least one candidate is in
+          // the SDP (shipping a candidate-less blob guarantees an ICE failure — better to
+          // wait out a slow STUN, hard-capped at 8s).
           function netWaitIce() {
             return new Promise((res) => {
               const pc = netPc;
-              if (!pc || pc.iceGatheringState === 'complete') return res();
-              let done = false;
-              const fin = () => { if (!done) { done = true; res(); } };
-              pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') fin(); });
-              setTimeout(fin, 3000);   // ship what we have — STUN answers arrive well under this
+              if (!pc) return res();
+              const t0 = Date.now();
+              const poll = () => {
+                if (netPc !== pc) return res();       // torn down / retried meanwhile
+                const sdp = (pc.localDescription && pc.localDescription.sdp) || '';
+                const hasCand = /a=candidate:/.test(sdp);
+                const dt = Date.now() - t0;
+                if (pc.iceGatheringState === 'complete' || (hasCand && dt >= 3000) || dt >= 8000) return res();
+                setTimeout(poll, 200);
+              };
+              poll();
             });
           }
           function netArmConnTimeout() {
@@ -3678,7 +3704,8 @@
             netTimeout = setTimeout(() => {
               netTimeout = 0;
               if (!netplay && netUi && netUi.phase !== 'err') {
-                netAbort('could not reach the other player — a strict network may be blocking the path. both of you should retry (or try another network).');
+                const diag = netDiag ? ' (you gathered ' + netDiag.local + ' · they sent ' + netDiag.remote + ')' : '';
+                netAbort('could not reach the other player' + diag + ' — a strict network may be blocking the path. both of you should retry (or try another network).');
               }
             }, 20000);
           }
@@ -3686,9 +3713,18 @@
             pc.onconnectionstatechange = () => {
               if (netPc !== pc) return;
               const s = pc.connectionState;
-              if (s === 'failed' || s === 'disconnected' || s === 'closed') {
-                if (netplay) netLeave('CONNECTION LOST');
-                else if (netUi && netUi.phase !== 'err' && netUi.phase !== 'code') netAbort('the connection was lost before the game began');
+              if (netDiag) netDiag.states.push(s);
+              netLog('connection: ' + s);
+              // ONLY `failed` is fatal here. `disconnected` is often transient (the browser
+              // may recover it on its own — in-game the lockstep just stalls and the badge
+              // shows; Q always leaves), and `closed` is covered by the channel's onclose
+              // (our own teardown nulls these handlers first, so it never self-trips).
+              if (s === 'failed') {
+                const diag = netDiag ? ' (you gathered ' + netDiag.local + ' · they sent ' + netDiag.remote + ')' : '';
+                if (netplay) netLeave('CONNECTION LOST — the peer link failed');
+                else if (netUi && netUi.phase !== 'err' && netUi.phase !== 'code') {
+                  netAbort('no direct route between you could be found' + diag + ' — retry, or try a different network. VPNs and strict NATs block peer links.');
+                }
               }
             };
           }
@@ -3696,6 +3732,7 @@
             netChan = dc;
             dc.onopen = () => {
               if (netChan !== dc) return;
+              netLog('data channel open');
               if (netTimeout) { clearTimeout(netTimeout); netTimeout = 0; }
               if (netUi) netUi.phase = 'handshake';
               // the client opens the handshake; the host answers with the run config
@@ -3728,6 +3765,8 @@
               await netPc.setLocalDescription(offer);
               await netWaitIce();
               if (!netPc || !netUi || netUi.mode !== 'host') return;   // player backed out mid-create
+              if (netDiag) netDiag.local = netCandSummary(netPc.localDescription.sdp);
+              netLog('offer ready — candidates: ' + netCandSummary(netPc.localDescription.sdp));
               const r = await fetch(base + '/mp-host', {
                 method: 'POST', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ offer: { type: netPc.localDescription.type, sdp: netPc.localDescription.sdp } }),
@@ -3748,6 +3787,8 @@
                   if (dd && dd.answer && netPc && netPc.signalingState === 'have-local-offer') {
                     clearInterval(netPoll); netPoll = 0;
                     if (netUi) netUi.phase = 'connecting';
+                    if (netDiag) netDiag.remote = netCandSummary(dd.answer.sdp);
+                    netLog('answer received — their candidates: ' + netCandSummary(dd.answer.sdp));
                     netArmConnTimeout();
                     await netPc.setRemoteDescription(dd.answer);
                   }
@@ -3769,11 +3810,15 @@
               netPc = new RTCPeerConnection(NET_RTC_CONF);
               netWirePc(netPc);
               netPc.ondatachannel = (ev) => { if (netPc) netWireChannel(ev.channel); };
+              if (netDiag) netDiag.remote = netCandSummary(d.offer.sdp);
+              netLog('offer fetched — their candidates: ' + netCandSummary(d.offer.sdp));
               await netPc.setRemoteDescription(d.offer);
               const ans = await netPc.createAnswer();
               await netPc.setLocalDescription(ans);
               await netWaitIce();
               if (!netPc || !netUi) return;
+              if (netDiag) netDiag.local = netCandSummary(netPc.localDescription.sdp);
+              netLog('answer ready — candidates: ' + netCandSummary(netPc.localDescription.sdp));
               const rr = await fetch(base + '/mp-join', {
                 method: 'POST', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ code, answer: { type: netPc.localDescription.type, sdp: netPc.localDescription.sdp } }),
