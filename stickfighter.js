@@ -3674,7 +3674,7 @@
             netSaved = { c1: classSel, c2: classSel2, coop, daily: dailyRun, hs: hardSel,
                          top: menuTop, ss: subSingle, sm: subMulti,
                          gw: xp.offsetWidth, gh: xp.offsetHeight - 40 };
-            netUi = { mode, phase: mode === 'host' ? 'creating' : 'code', code: '', input: '', err: '' };
+            netUi = { mode, phase: mode === 'host' ? 'creating' : 'code', code: '', input: '', err: '', copiedT: 0 };
             netCfg = null;
             if (mode === 'host') netStartHost();
           }
@@ -4027,7 +4027,13 @@
               ctx.shadowColor = '#ffb300'; ctx.shadowBlur = RM ? 12 : 10 + 5 * Math.sin(frame * 0.06);
               ctx.fillText(netUi.code.split('').join(' '), GW / 2, cy);
               ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
-              sub('waiting for a challenger' + dots + '   (the room lives ~5 minutes)', cy + 42);
+              if (netUi.copiedT > 0) {
+                netUi.copiedT--;
+                sub('✓ copied to the clipboard', cy + 42, '#caffa0');
+              } else {
+                sub('C — copy the code', cy + 42, '#ffe9ad');
+              }
+              sub('waiting for a challenger' + dots + '   (the room lives ~5 minutes)', cy + 64);
             } else if (netUi.phase === 'code') {
               sub('type the room code your friend gave you:', cy - 58);
               const bw = 44, gap = 10, x0 = GW / 2 - (bw * 5 + gap * 4) / 2;
@@ -4045,7 +4051,7 @@
                   ctx.fillText('▍', x + bw / 2, cy + 6);
                 }
               }
-              sub(netUi.input.length === 5 ? 'ENTER — connect' : 'letters and numbers only', cy + 46, netUi.input.length === 5 ? '#caffa0' : '#9fb0c0');
+              sub(netUi.input.length === 5 ? 'ENTER — connect' : 'type it, or paste it (⌘/Ctrl+V)', cy + 46, netUi.input.length === 5 ? '#caffa0' : '#9fb0c0');
               if (netUi.err) sub(netUi.err, cy + 72, '#ff8a80');
             } else if (netUi.phase === 'connecting') {
               sub('connecting the two of you' + dots, cy - 20);
@@ -7577,6 +7583,7 @@
             if (rafId) cancelAnimationFrame(rafId);
             document.removeEventListener('keydown', onKey);
             document.removeEventListener('keyup',   offKey);
+            document.removeEventListener('paste',   onPaste);
             window.removeEventListener('blur', dropKeys);
             canvas.remove(); hud.remove(); xp._sfCleanup = null;
           }
@@ -7729,6 +7736,16 @@
                   }
                 } else if (!e.repeat && (e.key === 'q' || e.key === 'Q')) {
                   backOut();
+                } else if (netUi.phase === 'waiting' && !e.repeat && (e.key === 'c' || e.key === 'C')) {
+                  // the code is canvas-drawn (unselectable) — C puts it on the clipboard
+                  try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      navigator.clipboard.writeText(netUi.code).then(
+                        () => { if (netUi) netUi.copiedT = 150; },
+                        () => {},
+                      );
+                    }
+                  } catch (err) { /* clipboard unavailable — the code stays typeable */ }
                 } else if (netUi.phase === 'err' && !e.repeat && ['z', 'Z', 'Enter'].includes(e.key)) {
                   if (netUi.mode === 'host') netOpen('host');           // roll a fresh room
                   else { netUi.phase = 'code'; netUi.input = ''; netUi.err = ''; }
@@ -7948,8 +7965,17 @@
           }
           function offKey(e) { keys[keyName(e.key)] = false; }
           function dropKeys() { keys = {}; }   // release everything (focus loss → missed keyups)
+          // ⌘/Ctrl+V fills the JOIN code entry (the paste event carries the clipboard without
+          // any permission prompt; only listened to on the code screen)
+          function onPaste(e) {
+            if (started || !netUi || netUi.phase !== 'code') return;
+            const txt = (e.clipboardData && e.clipboardData.getData('text')) || '';
+            const code = txt.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+            if (code) { netUi.input = code; e.preventDefault(); }
+          }
           document.addEventListener('keydown', onKey);
           document.addEventListener('keyup',   offKey);
+          document.addEventListener('paste',   onPaste);
           // Safety net for stuck movement: if the window loses focus (alt-tab, a click into the
           // devtools, etc.) the keyup may never arrive, leaving a key "held". Drop all held keys on
           // blur so a hero can't run off on its own.
