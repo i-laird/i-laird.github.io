@@ -3395,8 +3395,12 @@ function drawMinion(m) {
    The open field used to be a transparent canvas showing the XP desktop through
    it. Now the fight happens somewhere: a scorched night field — mottled earth,
    old battle debris, fog breathing at the rim, embers rising off unseen fires —
-   under a WAVE TINT that runs cold dawn-blue to blood red as the run deepens
-   (grey in the mournful world). STRICTLY render-only and rnd()-free: everything
+   beneath a HORIZON BAND holding a gothic city in silhouette (spires, a twin-
+   towered cathedral, dead trees, a fenced yard of graves) under a hunter's moon
+   that ripens bone → amber → blood as the run deepens, all of it under a WAVE
+   TINT that runs cold dawn-blue to blood red (grey in the mournful world). The
+   band is pure backdrop — sprites walk in front of it, exactly like the set-
+   piece rooms' painted walls. STRICTLY render-only and rnd()-free: everything
    animates off `frame` + a position hash, so the deterministic draw-stream and
    60/120Hz cadence tests hold, and no sim version bump is needed. The set-piece
    rooms (corridor / mansion / Ian) still paint their own worlds. Steady (never
@@ -3415,15 +3419,162 @@ function drawBattlefield() {
   // (wave 4 is the eve), settling to a war-torn breeze after
   const wind = wave === 4 ? 1 : wave === 3 ? 0.4 : wave >= 6 ? 0.5 : 0;
   const ogreUp = enemies.some((e) => e.type === 'ogre' && !e.dead);
+  const deep = Math.min(1, (wave - 1) / 9);   // how far into the night the run is (shared by moon + tint)
   // 1) the ground — deep and cold, faintly lifted at the fight's heart
   let g = ctx.createLinearGradient(0, 0, 0, GH);
-  g.addColorStop(0, '#0d1119'); g.addColorStop(0.55, '#0a0e14'); g.addColorStop(1, '#06080c');
+  g.addColorStop(0, '#141a30'); g.addColorStop(0.55, '#0d1120'); g.addColorStop(1, '#080b12');
   ctx.fillStyle = g; ctx.fillRect(-30, -30, GW + 60, GH + 60);   // overscan bleed — the living camera drifts
+  // 1b) THE NIGHT ABOVE — the horizon band. A haze-dimmed sky, a hunter's
+  //     moon, a slow rack of cloud, and the old city in silhouette. Hash-
+  //     placed and `frame`-driven like everything else here; the moon's
+  //     color is pure sim state (wave/dread/mournful), so the draw stream
+  //     stays a function of the seed.
+  const HOR = GH * 0.26;
+  const sky = ctx.createLinearGradient(0, -30, 0, HOR);
+  sky.addColorStop(0, '#1a2138'); sky.addColorStop(0.6, '#131a2c'); sky.addColorStop(1, '#141a30');
+  ctx.fillStyle = sky; ctx.fillRect(-30, -30, GW + 60, HOR + 30);
+  for (let i = 0; i < 14; i++) {   // a few dim stars through the haze
+    const tw = RM ? 0.5 : 0.35 + 0.35 * Math.sin(frame * 0.017 + i * 3.3);
+    ctx.fillStyle = 'rgba(205,215,235,' + (0.18 * tw).toFixed(3) + ')';
+    ctx.fillRect(-30 + ih(i + 811) * (GW + 60), 4 + ih(i + 837) * HOR * 0.5, 1.1, 1.1);
+  }
+  // the moon — bone-pale at dawn-wave, ripening late toward blood; dread
+  // bleaches it to a dead pallor, the mournful world keeps it ash-grey
+  const mk = mournful ? 0 : deep * deep;
+  let mcr = 236 - 26 * mk, mcg = 228 - 134 * mk, mcb = 206 - 150 * mk;
+  if (mournful) { mcr = 168; mcg = 168; mcb = 176; }
+  mcr = Math.round(mcr + (170 - mcr) * dread);
+  mcg = Math.round(mcg + (172 - mcg) * dread);
+  mcb = Math.round(mcb + (182 - mcb) * dread);
+  const mrgb = mcr + ',' + mcg + ',' + mcb;
+  const mx = GW * 0.73, my = HOR * 0.5, mR = Math.max(22, Math.min(GW, GH) * 0.075);
+  const halo = ctx.createRadialGradient(mx, my, mR * 0.5, mx, my, mR * 3.6);
+  halo.addColorStop(0, 'rgba(' + mrgb + ',' + (0.15 * (1 - dread * 0.5)).toFixed(3) + ')');
+  halo.addColorStop(1, 'rgba(' + mrgb + ',0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(mx - mR * 3.6, my - mR * 3.6, mR * 7.2, mR * 7.2);
+  const md = ctx.createRadialGradient(mx - mR * 0.35, my - mR * 0.35, mR * 0.2, mx, my, mR);
+  md.addColorStop(0, 'rgb(' + mrgb + ')');
+  md.addColorStop(1, 'rgb(' + Math.max(0, mcr - 62) + ',' + Math.max(0, mcg - 66) + ',' + Math.max(0, mcb - 58) + ')');
+  ctx.fillStyle = md; ctx.beginPath(); ctx.arc(mx, my, mR, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';   // the old scars on its face
+  ctx.beginPath();
+  ctx.arc(mx - mR * 0.3, my - mR * 0.1, mR * 0.16, 0, Math.PI * 2);
+  ctx.arc(mx + mR * 0.25, my + mR * 0.3, mR * 0.12, 0, Math.PI * 2);
+  ctx.arc(mx + mR * 0.1, my - mR * 0.38, mR * 0.09, 0, Math.PI * 2);
+  ctx.fill();
+  // a slow rack of cloud dragging across the moon (still air under RM)
+  for (let i = 0; i < 3; i++) {
+    const cw = GW * (0.26 + ih(i + 861) * 0.18), ch = 6 + ih(i + 883) * 6;
+    const cx = ((ih(i + 907) * (GW + 320) + (RM ? 0 : frame * (0.05 + ih(i + 929) * 0.06) * (1 + wind))) % (GW + 320)) - 160;
+    const cy = HOR * (0.22 + ih(i + 953) * 0.5);
+    ctx.fillStyle = 'rgba(9,12,20,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, cw / 2, ch, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx + cw * 0.36, cy + 2, cw * 0.3, ch * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // the city on the horizon — a far roofline pale in the haze, a near one black
+  const roofline = (n, seed, colr, hLo, hHi) => {
+    ctx.fillStyle = colr;
+    const cell = (GW + 60) / n;
+    for (let i = 0; i < n; i++) {
+      const bw = cell * (0.55 + ih(i * 3 + seed) * 0.5);
+      const bx = -30 + i * cell;
+      const bh = hLo + ih(i * 7 + seed + 39) * (hHi - hLo);
+      const by = HOR - bh;
+      ctx.fillRect(bx, by, bw, bh + 4);
+      const p = ih(i + seed + 73);
+      if (p < 0.34) {          // a needle spire
+        ctx.beginPath(); ctx.moveTo(bx + bw * 0.15, by + 1); ctx.lineTo(bx + bw * 0.5, by - bh * (0.6 + p)); ctx.lineTo(bx + bw * 0.85, by + 1); ctx.closePath(); ctx.fill();
+      } else if (p < 0.62) {   // a pitched gable
+        ctx.beginPath(); ctx.moveTo(bx - 1, by + 1); ctx.lineTo(bx + bw / 2, by - 3 - ih(i + seed + 91) * 6); ctx.lineTo(bx + bw + 1, by + 1); ctx.closePath(); ctx.fill();
+      } else {                 // a flat roof and its cold chimneys
+        ctx.fillRect(bx + bw * 0.18, by - 4, 2, 5);
+        ctx.fillRect(bx + bw * 0.66, by - 6, 2.4, 7);
+      }
+    }
+  };
+  roofline(13, 900, '#161d31', HOR * 0.16, HOR * 0.40);
+  roofline(8, 1200, '#080b13', HOR * 0.08, HOR * 0.26);
+  // the cathedral every such city is built around, twin spires over the nave
+  const cwid = Math.max(90, GW * 0.13), cxl = GW * 0.30 - cwid / 2, cnh = HOR * 0.34, cth = HOR * 0.52;
+  ctx.fillStyle = '#080b13';
+  ctx.fillRect(cxl + cwid * 0.16, HOR - cnh, cwid * 0.68, cnh + 4);
+  ctx.beginPath();
+  for (const tx of [cxl, cxl + cwid * 0.82]) {
+    ctx.rect(tx, HOR - cth, cwid * 0.18, cth + 4);
+    ctx.moveTo(tx - 2, HOR - cth + 1);
+    ctx.lineTo(tx + cwid * 0.09, HOR - cth - HOR * 0.22);
+    ctx.lineTo(tx + cwid * 0.18 + 2, HOR - cth + 1);
+    ctx.closePath();
+  }
+  ctx.fill();
+  // its rose window, holding a little haunted light (dark in dread)
+  const rw = RM ? 0.7 : 0.55 + 0.45 * Math.sin(frame * 0.013);
+  ctx.fillStyle = 'rgba(178,138,210,' + (0.2 * rw * (1 - dread)).toFixed(3) + ')';
+  ctx.beginPath(); ctx.arc(GW * 0.30, HOR - cnh * 0.55, cwid * 0.075, 0, Math.PI * 2); ctx.fill();
+  // dead trees clawing at the sky
+  ctx.strokeStyle = '#080b13'; ctx.lineWidth = 1.7; ctx.lineCap = 'round';
+  for (let i = 0; i < 3; i++) {
+    const tx = GW * (0.09 + ih(i + 1501) * 0.82), th = 15 + ih(i + 1531) * 13;
+    const lean = (ih(i + 1553) - 0.5) * 10;
+    ctx.beginPath();
+    ctx.moveTo(tx, HOR + 3);
+    ctx.quadraticCurveTo(tx + lean * 0.4, HOR - th * 0.55, tx + lean, HOR - th);
+    ctx.moveTo(tx + lean * 0.55, HOR - th * 0.62);
+    ctx.lineTo(tx + lean * 0.55 + (ih(i + 1571) - 0.5) * 14, HOR - th * 0.9);
+    ctx.moveTo(tx + lean * 0.3, HOR - th * 0.4);
+    ctx.lineTo(tx + lean * 0.3 - 6 - ih(i + 1597) * 5, HOR - th * 0.62);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+  // an iron fence and its quiet tenants, black against the moon's halo
+  const f0 = GW * 0.58, f1 = GW * 0.88;
+  ctx.strokeStyle = '#080b13'; ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(f0, HOR - 5.5); ctx.lineTo(f1, HOR - 5.5);
+  for (let x = f0; x <= f1; x += 6.5) { ctx.moveTo(x, HOR + 2); ctx.lineTo(x, HOR - 9); }
+  ctx.stroke();
+  ctx.fillStyle = '#080b13';
+  for (let x = f0; x <= f1; x += 6.5) {
+    ctx.beginPath(); ctx.moveTo(x - 1.3, HOR - 9); ctx.lineTo(x, HOR - 12); ctx.lineTo(x + 1.3, HOR - 9); ctx.closePath(); ctx.fill();
+  }
+  for (let i = 0; i < 3; i++) {   // headstones leaning shoulder to shoulder
+    const gx = f0 + 8 + ih(i + 1621) * (f1 - f0 - 16), gh = 5 + ih(i + 1647) * 4;
+    ctx.beginPath();
+    ctx.moveTo(gx - 2.6, HOR + 2); ctx.lineTo(gx - 2.6, HOR - gh);
+    ctx.arc(gx, HOR - gh, 2.6, Math.PI, 0);
+    ctx.lineTo(gx + 2.6, HOR + 2); ctx.closePath(); ctx.fill();
+  }
+  // candle-lit windows across the skyline — snuffed one and all under dread
+  const wLit = (1 - dread) * (mournful ? 0.35 : 1);
+  if (wLit > 0.05) {
+    for (let i = 0; i < 9; i++) {
+      const wx = -20 + ih(i + 1701) * (GW + 40);
+      const wy = HOR - 7 - ih(i + 1723) * HOR * 0.20;
+      const fl = RM ? 0.75 : 0.55 + 0.45 * Math.sin(frame * 0.021 + i * 2.7);
+      ctx.fillStyle = 'rgba(255,184,92,' + (0.42 * fl * wLit).toFixed(3) + ')';
+      ctx.fillRect(wx, wy, 1.7, 2.6);
+    }
+  }
+  // the ground-haze the city stands in (and the horizon seam drowns in)
+  const hz = ctx.createLinearGradient(0, HOR - 22, 0, HOR + 30);
+  hz.addColorStop(0, 'rgba(96,110,145,0)');
+  hz.addColorStop(0.5, 'rgba(96,110,145,' + (0.13 * (1 - dread * 0.5)).toFixed(3) + ')');
+  hz.addColorStop(1, 'rgba(96,110,145,0)');
+  ctx.fillStyle = hz; ctx.fillRect(-30, HOR - 22, GW + 60, 52);
+  // and the moonlight lying long across the field below
+  const sheen = ctx.createRadialGradient(mx, HOR, 0, mx, HOR, GH * 0.85);
+  sheen.addColorStop(0, 'rgba(' + mrgb + ',' + (0.055 * (1 - dread)).toFixed(3) + ')');
+  sheen.addColorStop(1, 'rgba(' + mrgb + ',0)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(-30, HOR, GW + 60, GH - HOR + 30);
   // 2) mottled earth: fixed hashed scorch patches and faint dead moss
   for (let i = 0; i < 32; i++) {
-    const x = ih(i) * GW, y = 44 + ih(i + 51) * (GH - 54);
-    const r = 26 + ih(i + 97) * 58;
-    ctx.fillStyle = i % 3 ? 'rgba(0,0,0,0.15)' : 'rgba(34,46,38,0.09)';
+    const x = ih(i) * GW, y = HOR + 6 + ih(i + 51) * (GH - HOR - 16);
+    const r = 20 + ih(i + 97) * 44;
+    ctx.fillStyle = i % 3 ? 'rgba(0,0,0,0.08)' : 'rgba(34,46,38,0.06)';
     ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.42, ih(i + 13) * 3.14, 0, Math.PI * 2); ctx.fill();
   }
   // 2b) GROUND MEMORY: the field remembers this run — ash where they fell,
@@ -3449,7 +3600,7 @@ function drawBattlefield() {
   }
   // 3) the debris of older battles: half-buried skulls, snapped spears, ribs
   for (let i = 0; i < 15; i++) {
-    const x = ih(i + 201) * GW, y = 62 + ih(i + 233) * (GH - 84);
+    const x = ih(i + 201) * GW, y = HOR + 14 + ih(i + 233) * (GH - HOR - 36);
     ctx.save(); ctx.translate(x, y); ctx.rotate(ih(i + 77) * Math.PI);
     ctx.globalAlpha = 0.2;
     if (i % 5 === 0) {           // a half-buried skull, staring at nothing
@@ -3514,7 +3665,6 @@ function drawBattlefield() {
   }
   // 6) the wave tint: cold blue dawn → violet dusk → blood red as the run
   //    deepens — and dread drains it all to a dead grey-violet
-  const deep = Math.min(1, (wave - 1) / 9);
   const tr = Math.round((40 + deep * 160) * (1 - dread) + 70 * dread);
   const tg = Math.round((30 - deep * 14) * (1 - dread) + 60 * dread);
   const tb = Math.round((90 - deep * 60) * (1 - dread) + 90 * dread);
