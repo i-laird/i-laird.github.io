@@ -195,7 +195,7 @@ function makeWorld() {
 }
 
 // ── boot one full game instance (the determinism-test harness, netplay-flavored) ──
-async function bootInstance(world) {
+async function bootInstance(world, dims) {
   const errors = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', (e) => errors.push(e));
@@ -274,8 +274,14 @@ async function bootInstance(world) {
   window.HTMLCanvasElement.prototype.getContext = () => ctx;
 
   const xp = window.document.createElement('div');
-  Object.defineProperty(xp, 'offsetWidth', { configurable: true, value: 800 });
-  Object.defineProperty(xp, 'offsetHeight', { configurable: true, value: 600 });
+  Object.defineProperty(xp, 'offsetWidth', {
+    configurable: true,
+    value: (dims && dims.w) || 800,
+  });
+  Object.defineProperty(xp, 'offsetHeight', {
+    configurable: true,
+    value: (dims && dims.h) || 600,
+  });
   window.document.body.appendChild(xp);
 
   const api = {
@@ -306,8 +312,9 @@ async function bootInstance(world) {
     },
     hud() {
       // the game's HUD div is the xp child styled with pointer-events:none + top:8px
+      // (skip the letterbox matte — it's a div too, inserted before the hud)
       for (const el of xp.children) {
-        if (el.tagName === 'DIV') return el.innerHTML;
+        if (el.tagName === 'DIV' && el.id !== 'sf-matte') return el.innerHTML;
       }
       return '';
     },
@@ -335,7 +342,9 @@ async function waitUntil(cond, instances, timeoutMs, what) {
 
 test('two instances host+join, stay in lockstep, persist nothing, survive disconnect', async (t) => {
   const world = makeWorld();
-  const host = await bootInstance(world);
+  // MISMATCHED SCREENS on purpose: the host's desktop is larger, so the
+  // negotiated field letterboxes on its side — the dark matte must cover the rest
+  const host = await bootInstance(world, { w: 1000, h: 700 });
   const client = await bootInstance(world);
   t.after(() => {
     host.dom.window.close();
@@ -381,14 +390,35 @@ test('two instances host+join, stay in lockstep, persist nothing, survive discon
     'the lockstep handshake to complete after both ready'
   );
 
-  // the run opens on the shared boon menu — the HOST picks for the party
+  // the run opens on the boon menus — P1's belongs to the HOST, P2's to the JOINER
+  // (each player picks their OWN boon; the other side watches)
   await waitUntil(
     () => host.hud().includes('boon') && client.hud().includes('Player 1 is choosing'),
     [host, client],
     2000,
-    'the run-start boon menu on both sims'
+    "P1's boon menu on both sims"
   );
   host.key('z');
+  await waitUntil(
+    () =>
+      client.hud().includes('your boon is offered') &&
+      host.hud().includes('Player 2 is choosing'),
+    [host, client],
+    4000,
+    "P2's own boon menu (the joiner picks, the host watches)"
+  );
+  client.key('z');
+
+  // the letterboxed (larger) screen gets the battlefield matte behind the field;
+  // the exact-fit screen needs none — and the desktop never peeks through either way
+  assert.ok(
+    host.dom.window.document.getElementById('sf-matte'),
+    'the letterboxed host must have the dark matte behind the negotiated field'
+  );
+  assert.ok(
+    !client.dom.window.document.getElementById('sf-matte'),
+    'an exact-fit screen needs no matte'
+  );
 
   // different inputs on each side: host runs right, client runs left+up
   host.key('ArrowRight');
@@ -485,6 +515,10 @@ test('two instances host+join, stay in lockstep, persist nothing, survive discon
   assert.ok(
     client.hud().includes('BEST:'),
     "the peer must land on the intro after the leaver's bye"
+  );
+  assert.ok(
+    !host.dom.window.document.getElementById('sf-matte'),
+    'the letterbox matte must be gone once the run ends and the field is full-size again'
   );
 
   assert.deepEqual(

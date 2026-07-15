@@ -139,6 +139,13 @@ function heroFigure(x, y, phase, color, cls, dir = 1, scale = 1, alpha = 1, lean
     ctx.strokeStyle = gc(DRAGOON_COL); ctx.lineWidth = 1.5;                // its little crest wings
     ctx.beginPath(); ctx.moveTo(-6, -38); ctx.quadraticCurveTo(-11, -43, -15, -42.5); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(6, -38); ctx.quadraticCurveTo(11, -43, 15, -42.5); ctx.stroke();
+  } else if (cls === 'rider') {
+    ctx.strokeStyle = gc('#ffab91'); ctx.lineWidth = 2.2;                  // riding cap
+    ctx.beginPath(); ctx.moveTo(-7, -37.5); ctx.lineTo(7, -37.5); ctx.stroke();
+    const s1 = Math.sin(phase * 1.7) * 2.5;                                // the scarf streams behind
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(-5, -33); ctx.quadraticCurveTo(-13, -32 + s1, -19, -28 + s1 * 1.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-5, -34.5); ctx.quadraticCurveTo(-12, -36 + s1, -17, -34 + s1); ctx.stroke();
   }
   ctx.restore();
 }

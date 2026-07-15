@@ -1,5 +1,6 @@
 // ── hero-actions — enemyColor, movement, dash, swing/shoot/cast/scythe, summons, the Nine ──
 function enemyColor(e) {
+  if (e.flashT > 0 && sfOpts.flash > 0) return '#ffffff';   // impact frame — the flash outranks everything (player-optional)
   if (freezeT > 0 || e.stun > 0 || e.frozen > 0) return '#8fd8ff';
   if (e.type === 'wraith')
     return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#5d4f8a' : '#16121e';
@@ -52,11 +53,12 @@ function enemyColor(e) {
 // (and RNG consumption — there is none here) is identical to the old inline block.
 function moveHero(h, ix, iy) {
   // a frost-wolf chill drags the hero's acceleration and top speed (dash unaffected — the escape valve)
-  const chill = (h.chillT > 0 ? 0.55 : 1) * bn.spd;   // Fleet Foot raises both accel and the cap
+  const chill = (h.chillT > 0 ? 0.55 : 1) * bn.spd * h.bn.spd;   // banes are global, Fleet Foot is the picker's own
   if (h.chillT > 0) h.chillT--;
   // the dragoon rides Joust physics: heavy glide (little friction), sluggish
-  // steering, and a far higher ceiling — momentum is the class's whole weapon
-  const drag = h.cls === 'dragoon';
+  // steering, and a far higher ceiling — momentum is the class's whole weapon.
+  // The wyrm (the co-op pair's beast) shares them wholesale.
+  const drag = h.cls === 'dragoon' || h.cls === 'wyrm';
   const fr = drag ? 0.93 : 0.86, ac = drag ? 0.3 : 0.62;
   h.vx = h.vx * fr + ix * ac * chill;
   h.vy = h.vy * fr + iy * ac * chill;
@@ -69,7 +71,7 @@ function moveHero(h, ix, iy) {
   if (pv > 0.4) h.phase += 0.06 + pv * 0.045;
   if (h.dashT > 0) {
     h.dashT--;
-    ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
+    if (h.cls !== 'wyrm') ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });   // the beast leaves dust, not afterimages
     // Phantom Strike: dashing through a foe staggers it (the no-flinch bosses shrug it off)
     if (up.dashStrike) {
       for (const e of enemies) {
@@ -119,6 +121,7 @@ function trySwing(h) {
     if (d > up.swingR + (e.type === 'troll' ? 14 : e.type === 'ogre' ? 20 : 0)) continue;
     if ((dx / d) * fx + (dy / d) * fy < -0.2) continue;  // ~220° cleave in front
     if (e.hp && --e.hp > 0) {
+      e.flashT = 2;   // impact frames (see rangedHit)
       if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') {
         // bosses / the war-ogre don't flinch — a brief parry stagger, no stunlock
         e.stun = Math.max(e.stun || 0, e.type === 'ogre' ? 10 : 6);
@@ -165,8 +168,65 @@ function tryAttack(h) {
   if (h.cls === 'ranged') return tryShoot(h);
   if (h.cls === 'caster') return tryCast(h);
   if (h.cls === 'necro') return tryScythe(h);
-  if (h.cls === 'dragoon') return tryFlap(h);
+  if (h.cls === 'dragoon' || h.cls === 'wyrm') return tryFlap(h);
+  if (h.cls === 'rider') return tryLance(h);
   return trySwing(h);
+}
+/* ── the rider (the co-op pair's saddle seat) ──
+   Mounted, the rider never steers — their movement keys are an 8-way TURRET AIM
+   (set in the loop's P2 block) and the attack key JABS a lance along it: the
+   nearest foe in a narrow cone takes a rangedHit. Thrown/dismounted, the same
+   key is a short desperate stab. Lance kills top up the shared heat gauge. */
+function tryLance(h) {
+  if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || tick < h.swingReadyTick) return;
+  h.swingReadyTick = tick + Math.max(8, Math.round(up.jabT)); h.swingT = 8;
+  const fd = Math.hypot(h.fx, h.fy) || 1;
+  const ux = h.fx / fd, uy = h.fy / fd;
+  const reach = h.mounted ? up.riderReach : 34;
+  let best = null, bd = Infinity;
+  for (const e of enemies) {
+    if (untouchable(e) || e.type === 'ian') continue;
+    const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
+    if (d > e.kr + reach) continue;
+    if ((dx / d) * ux + (dy / d) * uy < 0.6) continue;   // a jab, not a sweep
+    if (d < bd) { bd = d; best = e; }
+  }
+  if (!best) { sfSfx.blip(); return; }
+  sfSfx.thud();
+  if (rangedHit(best, 1, ux, uy) && p2 && p2.cls === 'rider') heat = Math.min(up.heatMax, heat + HEAT_LANCE);
+  enemies = enemies.filter(e => !e.dead);
+}
+// FIRE BREATH — the rider's spender (the spell-cycle key, E): drinks BREATH_COST
+// from the shared heat gauge and rakes a cone along the aim. Bosses stagger by
+// the usual no-flinch rules; the pack burns. Only tramples and lance kills
+// refill the gauge — the beast earns, the rider spends.
+function tryBreath(h) {
+  if (!h || h.down || !h.mounted || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0) return;
+  if (heat < up.breathCost) {
+    sparks.push({ x: h.x, y: h.y - 20, t: 12, color: '#ff8a65', txt: 'no heat' });
+    sfSfx.blip();
+    return;
+  }
+  heat -= up.breathCost;
+  const fd = Math.hypot(h.fx, h.fy) || 1;
+  const ux = h.fx / fd, uy = h.fy / fd;
+  fieldWashSet('255,120,40', 0.12, 32);   // (render-only)
+  addDecal(h.x + ux * BREATH_R * 0.5, h.y + uy * BREATH_R * 0.5, 'scorch');
+  sfSfx.bomb(); shake = Math.max(shake, 6);
+  blasts.push({ kind: 'fire', x: h.x + ux * BREATH_R * 0.45, y: h.y + uy * BREATH_R * 0.45, r: 0, t: 0, life: 22, rMax: BREATH_R * 0.6 });
+  const kills0 = kills;
+  for (const e of enemies) {
+    if (untouchable(e) || e.type === 'ian') continue;
+    const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
+    if (d > BREATH_R + e.kr) continue;
+    if ((dx / d) * ux + (dy / d) * uy < up.breathCone) continue;   // a tight cone along the aim
+    rangedHit(e, up.breathDmg, ux, uy);
+    if (!e.dead && e.hp > 0) e.stun = Math.max(e.stun || 0, 24);   // scorched
+  }
+  enemies = enemies.filter(e => !e.dead);
+  const slain = kills - kills0;
+  if (slain >= 4) sfUnlock('dragonfire');
+  if (slain > 1) sparks.push({ x: h.x + ux * 60, y: h.y - 30, t: 16, color: '#ff8a65', txt: slain + ' BURNED' });
 }
 /* ── the dragoon (arcade JOUST) ──
    The attack key carries no weapon at all — it's a WING FLAP, an impulse along the
@@ -179,7 +239,7 @@ function tryFlap(h) {
   const d = Math.hypot(h.fx, h.fy) || 1;
   h.vx += h.fx / d * FLAP_IMP;
   h.vy += h.fy / d * FLAP_IMP;
-  ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 12, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
+  if (h.cls !== 'wyrm') ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 12, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
   sfSfx.flap();
 }
 // a foe's skewer bar: how fast the lance must fly to take it (null = unjoustable)
@@ -207,11 +267,17 @@ function joustSweep(h) {
     const bar = joustBar(e);
     if (bar === null || pv < bar) continue;
     const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
-    if (d > e.kr + PLAYER_R + LANCE_R + up.lanceR) continue;
+    if (d > e.kr + PLAYER_R + LANCE_R + up.lanceR + (h.cls === 'wyrm' ? WYRM_R : 0)) continue;
     if ((dx / d) * ux + (dy / d) * uy < 0.35) continue;   // the lance points where you fly
     e.joustTick = tick + 26;
     const survived = !rangedHit(e, up.joustDmg, ux, uy);
-    sparks.push({ x: (h.x + e.x) / 2, y: (h.y + e.y) / 2 - 20, t: 14, color: DRAGOON_COL, txt: 'SKEWER' });
+    sparks.push({ x: (h.x + e.x) / 2, y: (h.y + e.y) / 2 - 20, t: 14, color: DRAGOON_COL, txt: h.cls === 'wyrm' ? 'TRAMPLE' : 'SKEWER' });
+    if (!survived && h.cls === 'wyrm') {
+      heat = Math.min(up.heatMax, heat + HEAT_TRAMPLE + up.heatTrampleB);   // the beast earns
+      trampleN++;
+      if (trampleN >= 15) sfUnlock('trampler');
+    }
+    if (!survived && h.cls === 'dragoon' && e.type === 'troll') sfUnlock('skewered');
     if (survived) {
       // carom: bounce off the contact normal, keep most of the speed
       const nx = dx / d, ny = dy / d;
@@ -221,7 +287,7 @@ function joustSweep(h) {
       h.x = clamp(h.x - nx * 6, 14, GW - 14);
       h.y = clamp(h.y - ny * 6, 40, GH - 10);
     } else {
-      if (bn.cry) knockback(e.x, e.y, 0, 60, 12);     // SHRILL CRY: the kill scatters the pack
+      if (h.bn.cry) knockback(e.x, e.y, 0, 60, 12);   // SHRILL CRY: the picker's kills scatter the pack
       if (up.tailwind) {                              // Tailwind: a kill feeds the gallop
         const s = Math.min(1.15, (DRAG_CAP * up.dragCap) / Math.max(pv, 0.1));
         h.vx *= s; h.vy *= s;
@@ -239,6 +305,7 @@ function untouchable(e) {
 // an arrow/bolt lands on e: the blade's no-flinch rules, with a gentler shove
 function rangedHit(e, dmg, ux, uy) {
   if (e.hp && (e.hp -= dmg) > 0) {
+    e.flashT = 2;   // impact frames: the survivor blazes white for a beat (persists through hit-stop)
     if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') {
       e.stun = Math.max(e.stun || 0, e.type === 'ogre' ? 10 : 6);
       sparks.push({ x: e.x, y: e.y - 34, t: 14, color: '#ff8a80', txt: 'TSSS' });
@@ -321,7 +388,7 @@ function tryCast(h) {
   h.mana -= sp.cost;                            // committed — the incantation drinks up front
   h.manaHoldTick = tick + MANA_HOLD;            // ...and the well holds its breath (no regen for a beat)
   h.swingReadyTick = tick + Math.round(up.zapMs * SIM_HZ / 1000);
-  const castT = Math.max(4, Math.round(sp.cast * bn.castMul));   // Flicker Cast trims the wind-up
+  const castT = Math.max(4, Math.round(sp.cast * h.bn.castMul));   // Flicker Cast trims the picker's wind-up
   h.castT = castT; h.castMax = castT; h.casting = key;
   sfSfx.bolt();
 }
@@ -345,7 +412,7 @@ function resolveCast(h) {
   h.swingT = 10;
   const slain = kills - kills0;                 // soul sparks: kills feed the well (Siphon doubles them)
   if (slain > 0) {
-    const back = slain * (bn.sparks2 ? 10 : 5) + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
+    const back = slain * (h.bn.sparks2 ? 10 : 5) + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
     h.mana = Math.min(up.manaMax, h.mana + back);
     sparks.push({ x: h.x, y: h.y - 34, t: 12, color: '#b39ddb', txt: '🔮+' + back });
   }
@@ -378,6 +445,7 @@ function castBolt(h) {
 // FROST NOVA — an ice ring around the caster; always erupts (positioning IS the aim)
 function castNova(h) {
   sfSfx.freeze();
+  addDecal(h.x, h.y, 'frost');   // (render-only) a bloom the field remembers
   blasts.push({ kind: 'frost', x: h.x, y: h.y, r: 0, t: 0, life: 26, rMax: NOVA_R });
   let n = 0;
   for (const e of enemies) {
@@ -394,6 +462,7 @@ function castFire(h) {
   if (!t) return false;
   const cx = t.x, cy = t.y;                     // the eruption outlives its mark
   sfSfx.bomb(); shake = Math.max(shake, 10);
+  addDecal(cx, cy, 'scorch');   // (render-only)
   blasts.push({ kind: 'fire', x: cx, y: cy, r: 0, t: 0, life: 30, rMax: FIREB_R });
   knockback(cx, cy, FIREB_R, 180, 40);
   sparks.push({ x: cx, y: cy - 36, t: 24, color: '#ff8a65', txt: 'FWOOSH' });
@@ -450,7 +519,7 @@ function tryScythe(h) {
   enemies = enemies.filter(e => !e.dead);
   const slain = kills - kills0;
   if (slain > 0) {
-    const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0) + bn.soulBonus);
+    const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0) + h.bn.soulBonus);
     h.souls = Math.min(SOULS_MAX, h.souls + gain);
     sparks.push({ x: h.x, y: h.y - 36, t: 14, color: NECRO_COL, txt: '+' + gain + ' souls' });
     shake = Math.max(shake, Math.min(8, 2 + slain * 2));
@@ -465,7 +534,7 @@ function tryScythe(h) {
       husks.splice(i, 1);
       h.souls -= up.raiseCost;
       minions.push({ src: k.src, x: k.x, y: k.y, hp: up.minionHp + (k.elite ? 1 : 0),
-                     t: Math.round(MINION_T * bn.minionMul),   // Restless: the loan runs longer
+                     t: Math.round(MINION_T * h.bn.minionMul),   // Restless: the picker's loans run longer
                      phase: 0, fx: 1, hitCd: 20, hurtCd: 30, shotCd: 60, elite: k.elite });
       if (minions.length >= 4) sfUnlock('army_4');
       blasts.push({ kind: 'frost', x: k.x, y: k.y, r: 0, t: 0, life: 16, rMax: 44 });

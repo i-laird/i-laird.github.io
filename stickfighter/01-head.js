@@ -31,16 +31,33 @@ let GH = xp.offsetHeight - 40;
 // transparent canvas over the whole desktop
 const canvas = document.createElement('canvas');
 canvas.id = 'sf-canvas';
-const SF_CANVAS_CSS = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);pointer-events:none;z-index:5;';
+const SF_CANVAS_CSS = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);pointer-events:none;z-index:5;background:#06080c;';
 function setGameDims(w, h) {
   GW = w; GH = h;
   canvas.width = w; canvas.height = h;
   const availW = xp.offsetWidth, availH = xp.offsetHeight - 40;
-  if (w === availW && h === availH) { canvas.style.cssText = SF_CANVAS_CSS; return; }
-  // negotiated (smaller) field: aspect-preserving centred fit on a black matte
+  const matte = document.getElementById('sf-matte');
+  if (w === availW && h === availH) {
+    canvas.style.cssText = SF_CANVAS_CSS;
+    if (matte) matte.remove();
+    return;
+  }
+  // negotiated (smaller) field — a co-op band's screens rarely match, so the
+  // field letterboxes to the smallest: aspect-preserving centred fit, FRAMED on
+  // a battlefield-dark matte that fills the rest of the desktop (the atmosphere
+  // pass promises the desktop never shows through during play — the margins of
+  // a mismatched screen are part of that promise)
+  if (!matte) {
+    const m = document.createElement('div');
+    m.id = 'sf-matte';
+    m.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);z-index:4;pointer-events:none;' +
+      'background:radial-gradient(ellipse at 50% 45%, #0c1017 0%, #07090d 55%, #020304 100%);';
+    if (canvas.parentNode === xp) xp.insertBefore(m, canvas); else xp.appendChild(m);
+  }
   const sc = Math.min(availW / w, availH / h);
   const cw = Math.round(w * sc), chh = Math.round(h * sc);
-  canvas.style.cssText = 'position:absolute;pointer-events:none;z-index:5;background:#000;' +
+  canvas.style.cssText = 'position:absolute;pointer-events:none;z-index:5;background:#06080c;' +
+    'box-shadow:0 0 60px rgba(0,0,0,0.85), 0 0 0 1px rgba(120,140,170,0.28);' +
     'left:' + Math.round((availW - cw) / 2) + 'px;top:' + Math.round((availH - chh) / 2) + 'px;' +
     'width:' + cw + 'px;height:' + chh + 'px;';
 }

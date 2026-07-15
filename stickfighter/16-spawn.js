@@ -97,17 +97,20 @@ function makeEnemy(type, x, y, elite) {
   }
   if (type === 'ogre') {
     // a horde mini-boss: lumbers, telegraphs, then bull-rushes straight across the field
-    e.spd = 1.25; e.kr = 30; e.hp = 8; e.maxhp = 8; e.mode = 'stalk'; e.st = 80; e.lx = 0; e.ly = 0;
+    const bandO = partySize() - 1;   // the ogre toughens with the party
+    e.spd = 1.25; e.kr = 30; e.hp = 8 + bandO * 3; e.maxhp = e.hp; e.mode = 'stalk'; e.st = 80; e.lx = 0; e.ly = 0;
   }
   if (type === 'wraith') {
-    e.spd = 2.6; e.kr = 14; e.hp = 2; e.mode = 'circle';
+    // the Nine harden with the party (2P/3P take 3 blows, a full band 4)
+    e.spd = 2.6; e.kr = 14; e.hp = 2 + Math.ceil((partySize() - 1) / 2); e.mode = 'circle';
     // keep the bearing it spawned at so the ring forms without crossing paths
     e.slot = Math.atan2(y - player.y, x - player.x) - frame * 0.004;
     e.ring = Math.hypot(x - player.x, y - player.y) || 300;
   }
   if (type === 'witchking') {
     // rises mounted on a fell beast; a few hits down the beast, then he fights on foot
-    e.spd = 2.88; e.kr = 24; e.hp = 4; e.mountMax = 4; e.footMax = 6;
+    const bandK = partySize() - 1;   // the king endures more blades
+    e.spd = 2.88; e.kr = 24; e.mountMax = 4 + bandK; e.footMax = 6 + bandK * 2; e.hp = e.mountMax;
     e.mounted = true; e.mode = 'hover'; e.st = 80; e.flailAng = 0;
   }
   if (type === 'trooper') {
@@ -116,7 +119,8 @@ function makeEnemy(type, x, y, elite) {
   }
   if (type === 'vader') {
     // a proper duel: advances, telegraphs, melee slashes AND Force powers; escalates at half health
-    e.spd = 1.5; e.kr = 20; e.hp = 10; e.maxhp = 10;
+    const bandV = partySize() - 1;
+    e.spd = 1.5; e.kr = 20; e.hp = 10 + bandV * 3; e.maxhp = e.hp;
     e.mode = 'advance'; e.st = 50; e.slashAng = 0;
     e.phase2 = false; e.power = null; e.combo = false; e.disarmed = false;
     e.intro = 50;   // a brief menacing entrance: holds position, harmless to touch — no instant spawn-kill
@@ -124,7 +128,8 @@ function makeEnemy(type, x, y, elite) {
   if (type === 'sidious') {
     // Clone Wars Sidious: fast & acrobatic, twin red sabers, a spin attack and Force lightning;
     // at half HP he stows the sabers and turns to pure lightning (e.phase2)
-    e.spd = 2.7; e.kr = 17; e.hp = 14; e.maxhp = 14;
+    const bandS = partySize() - 1;
+    e.spd = 2.7; e.kr = 17; e.hp = 14 + bandS * 4; e.maxhp = e.hp;
     e.mode = 'enter'; e.st = 60; e.spinAng = 0; e.lit = 0; e.hop = 0;
     e.phase2 = false; e.castKind = 'bolt';
   }
@@ -134,7 +139,8 @@ function makeEnemy(type, x, y, elite) {
   }
   if (type === 'dio') {
     // DIO + The World: trolls you with stopped time, then knives / MUDA rushes / the road roller
-    e.spd = 1.95; e.kr = 17; e.hp = 16; e.maxhp = 16;   // a deliberate saunter — readable, not frantic
+    const bandD = partySize() - 1;
+    e.spd = 1.95; e.kr = 17; e.hp = 16 + bandD * 4; e.maxhp = e.hp;   // a deliberate saunter — readable, not frantic
     e.mode = 'troll'; e.tstep = 0; e.tt = 0; e.st = 0; e.stand = 0; e.cape = 0; e.rollerDone = false;
   }
   if (type === 'ian') {

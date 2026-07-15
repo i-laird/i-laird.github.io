@@ -125,9 +125,16 @@ const UPGRADES = [
   { id: 'lance_dmg',   tree: 'SKYLANCE', cls: 'dragoon', name: 'Trample',     desc: 'the lance strikes twice as hard',     icon: '🐎', req: 'lance_long',  apply: () => { up.joustDmg = Math.max(up.joustDmg, 2); } },
   { id: 'lance_wind3', tree: 'SKYLANCE', cls: 'dragoon', name: 'Tailwind',    desc: 'a skewer kill feeds the gallop',      icon: '🍃', req: 'lance_wind',  apply: () => { up.tailwind = true; } },
   { id: 'lance_master',tree: 'SKYLANCE', cls: 'dragoon', name: 'Sky Lord',    desc: 'top speed soars · a longer, harder lance', icon: '🐉', req: 'lance_wind2', cost: 2, apply: () => { up.dragCap = Math.max(up.dragCap, 1.38); up.lanceR = Math.max(up.lanceR, 22); up.joustDmg = Math.max(up.joustDmg, 2); } },
+  { id: 'bond_heat',   tree: 'BOND', cls: 'wyrm', name: 'Furnace Heart',  desc: 'the heat gauge holds half again more',  icon: '🔥', req: null,        apply: () => { up.heatMax = Math.max(up.heatMax, 150); } },
+  { id: 'bond_breath', tree: 'BOND', cls: 'wyrm', name: 'Deep Lungs',     desc: 'fire breath drinks far less heat',      icon: '🌬️', req: null,        apply: () => { up.breathCost = Math.min(up.breathCost, 40); } },
+  { id: 'bond_lance',  tree: 'BOND', cls: 'wyrm', name: 'Saddle Lance',   desc: "the rider's jab reaches farther",       icon: '📏', req: null,        apply: () => { up.riderReach = Math.max(up.riderReach, 96); } },
+  { id: 'bond_jab',    tree: 'BOND', cls: 'wyrm', name: 'Quick Hands',    desc: 'the rider jabs far more often',         icon: '🤺', req: 'bond_lance', apply: () => { up.jabT = Math.min(up.jabT, 16); } },
+  { id: 'bond_mount',  tree: 'BOND', cls: 'wyrm', name: 'Practiced Leap', desc: 'remount from farther away',             icon: '🏇', req: null,        apply: () => { up.remountR = Math.max(up.remountR, 52); } },
+  { id: 'bond_beak',   tree: 'BOND', cls: 'wyrm', name: 'Iron Beak',      desc: 'the trample strikes twice as hard',     icon: '🐲', req: 'bond_heat',  apply: () => { up.joustDmg = Math.max(up.joustDmg, 2); } },
+  { id: 'bond_master', tree: 'BOND', cls: 'wyrm', name: 'DRAGONFIRE',     desc: 'a wider, hotter breath · cheap to loose', icon: '☄️', req: 'bond_breath', cost: 2, apply: () => { up.breathDmg = Math.max(up.breathDmg, 3); up.breathCone = Math.min(up.breathCone, 0.6); up.breathCost = Math.min(up.breathCost, 40); up.heatMax = Math.max(up.heatMax, 150); } },
 ];
 const upCost = (u) => (u.cost || 1) + bn.toll;   // most nodes cost 1 token; capstones more; HEAVY TOLL taxes all
-const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8', GRAVE: NECRO_COL, SKYLANCE: DRAGOON_COL };
+const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8', GRAVE: NECRO_COL, SKYLANCE: DRAGOON_COL, BOND: '#ff8a65' };
 function availableUpgrades() {
   // class trees only show for classes actually in the party (DASH/ALLIES have no cls and
   // always show); coopOnly nodes (Medic) only show in a 2-player run
@@ -255,32 +262,34 @@ function drawSummonMeter() {
 // pips). Both dim gray while the next action is unaffordable.
 function drawManaGauge() {
   if (!started || !alive || paused || bossIntro || ianActive) return;
-  const bearers = heroesAll().filter(h => h.cls === 'caster' || h.cls === 'necro' || h.cls === 'dragoon');
+  const bearers = heroesAll().filter(h => h.cls === 'caster' || h.cls === 'necro' || h.cls === 'dragoon' || h.cls === 'rider');
   if (!bearers.length) return;
   let y = GH - 22;
   ctx.save();
   for (const h of bearers) {
-    const necro = h.cls === 'necro', drag = h.cls === 'dragoon';
-    const sp = necro || drag ? null : SPELLS[curSpell(h)];
+    const necro = h.cls === 'necro', drag = h.cls === 'dragoon', rider = h.cls === 'rider';
+    const sp = necro || drag || rider ? null : SPELLS[curSpell(h)];
     // the dragoon's gauge is MOMENTUM: current speed against the top speed, with a
     // notch per Joust tier (goblin · wolf · troll) — "am I lethal right now?"
-    const pool = necro ? SOULS_MAX : drag ? DRAG_CAP * up.dragCap : up.manaMax;
-    const have = necro ? h.souls : drag ? Math.hypot(h.vx, h.vy) : h.mana;
-    const cost = necro ? up.raiseCost : drag ? JOUST_BAR.goblin : sp.cost;
+    const pool = necro ? SOULS_MAX : drag ? DRAG_CAP * up.dragCap : rider ? up.heatMax : up.manaMax;
+    const have = necro ? h.souls : drag ? Math.hypot(h.vx, h.vy) : rider ? heat : h.mana;
+    const cost = necro ? up.raiseCost : drag ? JOUST_BAR.goblin : rider ? up.breathCost : sp.cost;
     const ok = have >= cost && !h.down;
     const barW = 150, barH = 12, x = GW - barW - 14;
     const frac = clamp(have / pool, 0, 1);
-    const who = coop ? (h === p2 ? 'P2 · ' : 'P1 · ') : '';
+    const who = coop ? 'P' + (heroSeat(h) + 1) + ' · ' : '';
     const label = necro
       ? who + '💀 SOULS · raise ' + cost + '  ·  ' + '●'.repeat(minions.length) + '○'.repeat(Math.max(0, up.minionCap - minions.length))
       : drag
       ? who + '🐉 GALLOP · skewer past a notch — X flaps'
+      : rider
+      ? who + '🔥 HEAT · tramples & lance kills feed it — E breathes fire' + (h.mounted ? '' : '  ·  REMOUNT!')
       : who + sp.icon + ' ' + sp.name + ' · ' + cost + (heroSpells().length > 1 ? '  ·  ' + (coop ? (h === p2 ? 'E' : '.') : 'C') + ' turns' : '') +
         (tick < (h.manaHoldTick || 0) ? '  ·  settling…' : '');
     ctx.textAlign = 'right';
     ctx.font = 'bold 11px Tahoma,Arial';
     ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
-    ctx.fillStyle = h.down ? '#7a7a7a' : ok ? (necro ? NECRO_COL : drag ? DRAGOON_COL : sp.col) : '#8a93a5';
+    ctx.fillStyle = h.down ? '#7a7a7a' : ok ? (necro ? NECRO_COL : drag ? DRAGOON_COL : rider ? '#ff8a65' : sp.col) : '#8a93a5';
     ctx.fillText(label, x + barW, y - 6);
     ctx.shadowBlur = 0;
     ctx.fillStyle = 'rgba(10,16,24,0.82)';
@@ -290,7 +299,7 @@ function drawManaGauge() {
       roundRectPath(x, y, barW, barH, 3); ctx.clip();
       const grd = ctx.createLinearGradient(x, y, x, y + barH);
       if (necro) { grd.addColorStop(0, ok ? '#7dfadf' : '#7ba8a0'); grd.addColorStop(1, ok ? '#0f9b82' : '#3a5a54'); }
-      else if (drag) { grd.addColorStop(0, ok ? '#ffcc80' : '#a08a68'); grd.addColorStop(1, ok ? '#ef6c00' : '#5a4630'); }
+      else if (drag || rider) { grd.addColorStop(0, ok ? (rider ? '#ffab91' : '#ffcc80') : '#a08a68'); grd.addColorStop(1, ok ? (rider ? '#d84315' : '#ef6c00') : '#5a4630'); }
       else { grd.addColorStop(0, ok ? '#b39ddb' : '#8090b8'); grd.addColorStop(1, ok ? '#5e35b1' : '#3a4668'); }
       ctx.fillStyle = grd; ctx.fillRect(x, y, barW * frac, barH);
       ctx.restore();
@@ -302,7 +311,7 @@ function drawManaGauge() {
       const notch = x + barW * clamp(nv / pool, 0, 1);
       ctx.beginPath(); ctx.moveTo(notch, y - 1); ctx.lineTo(notch, y + barH + 1); ctx.stroke();
     }
-    ctx.strokeStyle = ok ? (necro ? 'rgba(100,255,218,0.75)' : drag ? 'rgba(255,167,38,0.8)' : 'rgba(179,157,219,0.75)') : 'rgba(150,160,180,0.4)';
+    ctx.strokeStyle = ok ? (necro ? 'rgba(100,255,218,0.75)' : drag ? 'rgba(255,167,38,0.8)' : rider ? 'rgba(255,138,101,0.85)' : 'rgba(179,157,219,0.75)') : 'rgba(150,160,180,0.4)';
     ctx.lineWidth = 1.5;
     roundRectPath(x, y, barW, barH, 3); ctx.stroke();
     y -= 38;

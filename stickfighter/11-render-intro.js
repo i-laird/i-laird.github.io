@@ -2,7 +2,7 @@
 // the intro's living mannequin: the hero as currently built — weapon in hand, gently
 // scanning — over a class-colored spotlight. `hot` marks the row being edited.
 function drawClassPreview(x, y, cls, color, hot, label) {
-  const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL }[cls];
+  const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL, wyrm: DRAGOON_COL, rider: '#ffab91' }[cls];
   ctx.save();
   // light pool under the feet
   ctx.globalAlpha = hot ? 0.5 : 0.26;
@@ -14,14 +14,18 @@ function drawClassPreview(x, y, cls, color, hot, label) {
   // the hero at 1.3× — a fake hero object drives the same weapon draws the game uses,
   // its facing swaying slowly so the weapon reads as alive, not a museum piece
   ctx.translate(x, y); ctx.scale(1.3, 1.3); ctx.translate(-x, -y);
-  heroFigure(x, y, frame * 0.05, color, cls, 1, 1, 1, 0, hot ? cc : 0);
   const fake = { x, y, fx: 1, fy: Math.sin(frame * 0.02) * 0.22, swingT: 0, castT: 0,
-                 swordT: 1e9, heldSaber: false, cls, tint: color };
-  if (cls === 'ranged') drawHeldBow(fake);
-  else if (cls === 'caster') drawHeldStaff(fake);
-  else if (cls === 'necro') drawHeldScythe(fake);
-  else if (cls === 'dragoon') drawHeldLance(fake);
-  else drawHeldSword(fake);
+                 swordT: 1e9, heldSaber: false, cls, tint: color, phase: frame * 0.05, mounted: true };
+  if (cls === 'wyrm') {
+    drawWyrm(fake);   // the beast IS the figure
+  } else {
+    heroFigure(x, y, frame * 0.05, color, cls, 1, 1, 1, 0, hot ? cc : 0);
+    if (cls === 'ranged') drawHeldBow(fake);
+    else if (cls === 'caster') drawHeldStaff(fake);
+    else if (cls === 'necro') drawHeldScythe(fake);
+    else if (cls === 'dragoon' || cls === 'rider') drawHeldLance(fake);
+    else drawHeldSword(fake);
+  }
   ctx.restore();
   ctx.save();
   ctx.textAlign = 'center'; ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
@@ -200,27 +204,36 @@ function drawIntroScreen() {
     drawClassPreview(GW / 2 + podX, py, CLASSES[classSel2], P2_COL, introRow === 3, 'P2');
   }
   ctx.textAlign = 'center';
-  const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL };
-  const nCls = CLASSES.length, cgap = 10, ch = 24;
-  const cw = Math.min(104, Math.floor((GW - 60 - cgap * (nCls - 1)) / nCls));
-  const clsRow = (y, sel, active, lbl, lblCol) => {
-    const x0 = GW / 2 - (cw * nCls + cgap * (nCls - 1)) / 2;
+  const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL, wyrm: DRAGOON_COL, rider: '#ffab91' };
+  // the wyrm & rider are a PAIR: the wyrm pill appears only on P1's row in couch
+  // co-op, and picking it binds P2's row to the single locked rider pill
+  const PICKS_SOLO = [0, 1, 2, 3, 4];
+  const cgap = 10, ch = 24;
+  const clsRow = (y, sel, active, lbl, lblCol, list) => {
+    const n = list.length;
+    const cw = Math.min(104, Math.floor((GW - 60 - cgap * (n - 1)) / n));
+    const x0 = GW / 2 - (cw * n + cgap * (n - 1)) / 2;
     if (lbl) {
       ctx.textAlign = 'right'; ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = lblCol;
       ctx.fillText(lbl, x0 - 12, y + ch / 2 + 4.5); ctx.textAlign = 'center';
     }
-    for (let i = 0; i < nCls; i++) {
-      pill(x0 + i * (cw + cgap), y, cw, ch, CLASS_ICON[CLASSES[i]] + ' ' + CLASSES[i].toUpperCase(),
-           sel === i, active, clsCol[CLASSES[i]], '12px Tahoma,Arial');
+    for (let i = 0; i < n; i++) {
+      const ci = list[i];
+      pill(x0 + i * (cw + cgap), y, cw, ch, CLASS_ICON[CLASSES[ci]] + ' ' + CLASSES[ci].toUpperCase(),
+           sel === ci, active, clsCol[CLASSES[ci]], '12px Tahoma,Arial');
     }
   };
   let cy = py + 48;
   if (!isLocalMulti()) {
-    clsRow(cy, classSel, introRow === 2);
+    clsRow(cy, classSel, introRow === 2, null, null, PICKS_SOLO);
   } else {
-    clsRow(cy, classSel, introRow === 2, 'P1', '#fff');
+    clsRow(cy, classSel, introRow === 2, 'P1', '#fff', [...PICKS_SOLO, PAIR_WYRM]);
     cy += 32;
-    clsRow(cy, classSel2, introRow === 3, 'P2', P2_COL);
+    if (classSel === PAIR_WYRM) {
+      clsRow(cy, PAIR_RIDER, false, 'P2', P2_COL, [PAIR_RIDER]);   // bound to the wyrm
+    } else {
+      clsRow(cy, classSel2, introRow === 3, 'P2', P2_COL, PICKS_SOLO);
+    }
   }
   const CLASS_BLURB = {
     melee:  'run over the stone to seize the sword — X cleaves all before you',
@@ -228,6 +241,8 @@ function drawIntroScreen() {
     caster: 'X casts the chosen page — C turns the spellbook · spells drink mana, kills give it back',
     necro:  'X reaps a wide arc — husks caught in the sweep RISE as minions · kills feed the soul well',
     dragoon: 'JOUST: your speed IS the lance — meet every foe at full gallop or die on its body · X flaps',
+    wyrm:  'the PAIR: you ARE the beast — steer, flap, TRAMPLE at speed · your kills feed the heat',
+    rider: "the PAIR: you never steer — your keys AIM the saddle lance · E breathes fire from the wyrm's heat",
   };
   ctx.font = 'italic 12px Tahoma,Arial'; ctx.fillStyle = '#aeb9c4';
   ctx.fillText(CLASS_BLURB[CLASSES[introRow === 3 ? classSel2 : classSel]], GW / 2, cy + 40);
@@ -295,19 +310,71 @@ function drawIntroConfirm() {
   ctx.restore(); ctx.textAlign = 'left';
 }
 
+// the WYRM — the co-op pair's war-beast (a proud Joust lineage): big gliding body,
+// long neck, snapping beak, galloping legs, and stub wings that beat on a flap.
+// Drawn in place of the hero figure for cls 'wyrm'; the mounted rider is a normal
+// hero drawn at the saddle right after it.
+function drawWyrm(h) {
+  const dir = h.fx >= 0 ? 1 : -1;
+  const col = heroTint(h);
+  const run = Math.hypot(h.vx || 0, h.vy || 0);
+  const gait = Math.sin(h.phase || 0);
+  const beat = Math.max(0, 1 - (tick - (h.flapT || -99)) / 14);   // wingbeat decays after a flap
+  ctx.save();
+  ctx.translate(h.x, h.y);
+  ctx.scale(dir, 1);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // legs first (behind the body), scissoring with the stride
+  ctx.strokeStyle = col; ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(-4, -12); ctx.lineTo(-7 + gait * 5, -2); ctx.lineTo(-9 + gait * 7, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4, -12); ctx.lineTo(7 - gait * 5, -2); ctx.lineTo(9 - gait * 7, 0); ctx.stroke();
+  // tail plume
+  ctx.strokeStyle = DRAGOON_COL; ctx.lineWidth = 2.2;
+  ctx.beginPath(); ctx.moveTo(-14, -18); ctx.quadraticCurveTo(-24, -22 + gait * 2, -30, -16 + gait * 3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-14, -20); ctx.quadraticCurveTo(-23, -27 + gait * 2, -28, -24 + gait * 2); ctx.stroke();
+  // the body — a stout ellipse, saddle blanket over the spine
+  ctx.fillStyle = 'rgba(20,26,34,0.92)';
+  ctx.strokeStyle = col; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.ellipse(0, -18, 16, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = DRAGOON_COL; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-7, -26); ctx.quadraticCurveTo(0, -30, 7, -26); ctx.stroke();   // the saddle
+  // stub wing, beating on a flap (steady half-raised under reduced motion)
+  const wa = api.reduceMotion ? 0.4 : beat;
+  ctx.fillStyle = 'rgba(255,167,38,0.4)'; ctx.strokeStyle = DRAGOON_COL; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-2, -22);
+  ctx.quadraticCurveTo(-12, -30 - wa * 10, -20, -26 - wa * 14);
+  ctx.quadraticCurveTo(-12, -20, -3, -17);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // the neck + head, leaning into the run; the beak snaps at trample speed
+  const lean = Math.min(6, run * 1.2);
+  ctx.strokeStyle = col; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(10, -22); ctx.quadraticCurveTo(16 + lean, -34, 17 + lean, -42); ctx.stroke();
+  ctx.fillStyle = 'rgba(20,26,34,0.92)';
+  ctx.beginPath(); ctx.ellipse(18 + lean, -44, 6, 4.5, 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = DRAGOON_COL;                                      // the beak
+  const snap = run >= JOUST_BAR.goblin ? (api.reduceMotion ? 1.5 : 1 + gait * 1.6) : 0.8;
+  ctx.beginPath(); ctx.moveTo(23 + lean, -45); ctx.lineTo(31 + lean, -44 + snap); ctx.lineTo(23 + lean, -42); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ffd24d';                                        // the eye
+  ctx.beginPath(); ctx.arc(19 + lean, -45, 1.4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 // the hero's current body color: P1 white / P2 green, overridden by the dash
 // cyan and the frost-wolf chill. The intro mannequins pass their display color
 // through `h.tint`. Used by the body draw AND the weapon arms/fists, so P2's
 // bow arm is green like the rest of P2.
 function heroTint(h) {
   if (h.tint) return h.tint;
-  const base = coop && p2 && h === p2 ? P2_COL : 'white';
+  const base = coop && p2 ? SEAT_COLS[heroSeat(h)] || 'white' : 'white';
   return h.dashT > 0 ? '#80deea' : h.chillT > 0 ? '#a8d8e8' : base;
 }
 // draw one hero (class-dressed figure + Aegis bubble + held weapon). A downed
 // hero is drawn fallen with a revive ring instead.
 function drawHero(h) {
   if (h.down) { drawDownedHero(h); return; }
+  if (h.cls === 'wyrm') { drawWyrm(h); return; }
   const lean = clamp(h.vx * 0.04, -0.3, 0.3);
   const col = heroTint(h);
   heroFigure(h.x, h.y, h.phase, col, h.cls, h.fx >= 0 ? 1 : -1, 1, 1, lean, h.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
@@ -329,6 +396,8 @@ function drawHero(h) {
   else if (h.cls === 'caster') drawHeldStaff(h);
   else if (h.cls === 'necro') drawHeldScythe(h);
   else if (h.cls === 'dragoon') drawHeldLance(h);
+  else if (h.cls === 'rider' && h.mounted) drawHeldLance(h);   // the saddle lance rides the aim
+  else if (h.cls === 'rider') drawHeldDirk(h);                 // unhorsed: a short desperate dirk
   else if (h.swordT > 0 || h.heldSaber) drawHeldSword(h);
 }
 // a fallen co-op hero: a prone figure with a revive ring that fills as a partner stands by

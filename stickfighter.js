@@ -48,16 +48,33 @@ let GH = xp.offsetHeight - 40;
 // transparent canvas over the whole desktop
 const canvas = document.createElement('canvas');
 canvas.id = 'sf-canvas';
-const SF_CANVAS_CSS = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);pointer-events:none;z-index:5;';
+const SF_CANVAS_CSS = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);pointer-events:none;z-index:5;background:#06080c;';
 function setGameDims(w, h) {
   GW = w; GH = h;
   canvas.width = w; canvas.height = h;
   const availW = xp.offsetWidth, availH = xp.offsetHeight - 40;
-  if (w === availW && h === availH) { canvas.style.cssText = SF_CANVAS_CSS; return; }
-  // negotiated (smaller) field: aspect-preserving centred fit on a black matte
+  const matte = document.getElementById('sf-matte');
+  if (w === availW && h === availH) {
+    canvas.style.cssText = SF_CANVAS_CSS;
+    if (matte) matte.remove();
+    return;
+  }
+  // negotiated (smaller) field — a co-op band's screens rarely match, so the
+  // field letterboxes to the smallest: aspect-preserving centred fit, FRAMED on
+  // a battlefield-dark matte that fills the rest of the desktop (the atmosphere
+  // pass promises the desktop never shows through during play — the margins of
+  // a mismatched screen are part of that promise)
+  if (!matte) {
+    const m = document.createElement('div');
+    m.id = 'sf-matte';
+    m.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:calc(100% - 40px);z-index:4;pointer-events:none;' +
+      'background:radial-gradient(ellipse at 50% 45%, #0c1017 0%, #07090d 55%, #020304 100%);';
+    if (canvas.parentNode === xp) xp.insertBefore(m, canvas); else xp.appendChild(m);
+  }
   const sc = Math.min(availW / w, availH / h);
   const cw = Math.round(w * sc), chh = Math.round(h * sc);
-  canvas.style.cssText = 'position:absolute;pointer-events:none;z-index:5;background:#000;' +
+  canvas.style.cssText = 'position:absolute;pointer-events:none;z-index:5;background:#06080c;' +
+    'box-shadow:0 0 60px rgba(0,0,0,0.85), 0 0 0 1px rgba(120,140,170,0.28);' +
     'left:' + Math.round((availW - cw) / 2) + 'px;top:' + Math.round((availH - chh) / 2) + 'px;' +
     'width:' + cw + 'px;height:' + chh + 'px;';
 }
@@ -208,14 +225,22 @@ function recPush(ev) {
 const NET_VER = 2;      // wire-protocol version (handshake-checked); 2 = resume/reconnect protocol
 const NET_SIM_V = 4;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 4 = the mana-regen nerf
 const NET_DELAY = 5;    // ticks of input delay (~83ms) — local input applies at tick+NET_DELAY on both sims
+const NET_MAX_SEATS = 4; // the WAR BAND: up to four fighters — host = seat 0 (P1), joiners 1..3.
+                         // Topology is a host-relayed STAR: every client links only to the host,
+                         // which relays frames/events — 2-player is simply the 2-seat case.
 let netplay = false;    // an online run is live (gates ALL persistence, like replayMode)
 let netIsHost = false;
 let netCfg = null;      // the authoritative run header (host-built; both sims init from it)
 let netRunId = 0;       // bumps on every netBeginRun — stale frames from a previous run are dropped
-let netPc = null, netChan = null, netPoll = 0, netTimeout = 0;
+let netPc = null, netChan = null, netPoll = 0, netTimeout = 0;  // the CLIENT's single link to the host
+let netConns = [];      // HOST only: one conn per joined client { seat, pc, chan, have, csRemote, recon, ack, cls, gw, gh }
+let netArming = null;   // HOST only: the pc currently parked in a room awaiting the next joiner
+let netSeat = 0;        // my seat (0 = host/P1; joiners 1..3)
+let netMasks = [0, 0, 0, 0];   // this tick's held-direction nibble per seat (fed by the frame consumer)
+let netHave = null;     // CLIENT: per-seat highest frame tick received (resume tells the host where to refill)
 let netUi = null;       // the connect screens: { mode:'host'|'join', phase, code, input, err }
 let netSaved = null;    // the local player's own intro selections, restored on exit
-let netFrames = null;   // [hostMap, clientMap]: tick → { m: held-dir nibble, e: edge bits, s: summon, h: mash }
+let netFrames = null;   // per-seat Maps (length = party size): tick → { m: held-dir nibble, e: edge bits, s: summon, h: mash }
 let netEvents = [];     // host menu picks in flight: [tick, op, arg] (same opcodes as the recorder)
 let netLocal = null;    // local edge staging between ticks (the netplay `pend`)
 let netMask = 0;        // the combined 8-bit held mask applied this tick (host low nibble, client high)
@@ -230,7 +255,6 @@ let netRoomCode = '';   // the minted/typed room code — kept to derive the rej
 let netRejoin = '';     // 'R'+5 chars: the reconnect rendezvous room (recomputed each netBeginRun)
 let netRecon = null;    // reconnect state { attempt, t0, gen } — non-null while the link is down
 let netReconSeq = 0;    // bumped by netTeardown so an in-flight reconnect loop from a dead session goes inert
-let netHaveRemote = 0;  // highest remote input-frame tick received — resume tells the peer where to re-send from
 let netEventLog = [];   // every host menu event queued this run ([k,op,a], tiny) — re-sent on resume so none are lost in flight
 let netDiscoT = 0;      // grace timer: pc 'disconnected' must persist ~10s before it counts as a drop
 // ── local couch co-op (chosen on the intro screen; persists across R-restarts) ──
@@ -244,18 +268,76 @@ let netDiscoT = 0;      // grace timer: pc 'disconnected' must persist ~10s befo
 // only once hardUnlocked) · 2=☀ DAILY; subMulti 0=LOCAL (couch co-op) · 1=HOST ·
 // 2=JOIN (online). coop/dailyRun stay the derived per-run flags, persisting across
 // R-restarts exactly as before.
-let coop = false, dailyRun = false, p2 = null;
+let coop = false, dailyRun = false, p2 = null, p3 = null, p4 = null;
+let heat = 0;   // the wyrm & rider's shared fire gauge (reset in init; see WYRM & RIDER)
+// ── the death KILL CAM (render-only): a rolling ghost tape of draw-ready entity
+//    snapshots; on death the last seconds replay in slow motion, camera tight on
+//    the fallen hero. Advanced once per loop call (= per sim tick) so the
+//    60/120Hz draw-stream comparison holds; consumes no rnd(); skipped under
+//    reduced motion and for replay watchers. ──
+let camTape = [];       // ring of { heroes:[clones+tint], enemies:[clones] }, ~3.5s
+let killCam = null;     // { tape, i, t, hold, fx, fy } while the cam plays
+let camVictim = null;   // the hero whose fall ended it (set in downHero)
+const CAM_TAPE_MAX = 210, CAM_SHOW = 110, CAM_SPEED = 0.5;
+// ── the LIVING CAMERA (render-only): a soft drift toward the party's center of
+//    mass, a punch-in behind boss cards, a zoom pulse on the wave's final kill,
+//    and directional KICKS on heavy blows (a statement, not a wobble — distinct
+//    from shake's noise). Updated once per loop call (= per sim tick, so the
+//    60/120Hz cadence draw-stream comparison holds), consumes no rnd(), and is
+//    skipped wholesale under reduced motion. The sim never reads it. ──
+let cam = { x: 0, y: 0, kx: 0, ky: 0, zoom: 1, pulse: 0, prevBreather: 0 };
+// ── HIT-STOP (sim-side, deterministic): heavy impacts hold the world for a beat.
+//    Set by kills/blows with Math.max semantics (a multi-kill punctuates, never
+//    stutters), capped at 14 ticks. tick still advances and the feeders keep
+//    running (the `paused` precedent), so netplay lockstep and replays carry it
+//    bit-exactly — it IS gameplay, folded into sim v4. ──
+let hitStop = 0;
+// ── ATMOSPHERE II (render-only buffers, written by sim events like camKick —
+//    deterministic per tick, never read by the sim) ──
+let decals = [];       // ground memory: { x, y, kind:'ash'|'scorch'|'frost', t0 } — the field remembers
+const DECAL_MAX = 90;
+let fieldWash = null;  // one full-field event light wash: { rgb, a, t, T } (Excalibur, powerups, a hero falling)
+let dreadF = 0;        // eased 0..1 — the Nine/Witch-king snuff the field's warmth (see drawBattlefield)
+let killsByType = {};
+let trampleN = 0;      // this run's tramples (the TRAMPLER trophy)
+// ── PLAYER OPTIONS (persisted; strictly presentation — the iron rule: options
+//    change what you SEE, never what the sim DOES, same as reduceMotion) ──
+let sfOpts = { shake: 1, kick: 1, flash: 1, hiVis: false };
+try {
+  const so = JSON.parse(localStorage.getItem('ilaird_sf_opts') || '{}');
+  if (typeof so.shake === 'number') sfOpts.shake = clamp(so.shake, 0, 1);
+  if (typeof so.kick === 'number') sfOpts.kick = clamp(so.kick, 0, 1);
+  if (typeof so.flash === 'number') sfOpts.flash = clamp(so.flash, 0, 1);
+  sfOpts.hiVis = !!so.hiVis;
+} catch (_) { /* private mode */ }
+function saveOpts() { try { localStorage.setItem('ilaird_sf_opts', JSON.stringify(sfOpts)); } catch (_) {} }
+// the PAUSE/settings overlay: solo & couch runs truly pause (recorded as opcode
+// 13, so replays hold the same beats); online it is an overlay over a live sim
+let shellMenu = false, shellSel = 0;
+function shellToggle() { shellMenu = !shellMenu; if (!netplay) paused = shellMenu; }  // sim state (v4): per-type kill tally — feeds the results ceremony
+let hurtFlash = null;  // { dx, dy, t } — a red edge flash from the DIRECTION of the last blow (render-only)
+function addDecal(x, y, kind) {
+  decals.push({ x, y, kind, t0: tick });
+  if (decals.length > DECAL_MAX) decals.shift();
+}
+function fieldWashSet(rgb, a, T) { fieldWash = { rgb, a, t: 0, T }; }
 let menuTop = 0, subSingle = 0, subMulti = 0;
 const isLocalMulti = () => menuTop === 1 && subMulti === 0;
 const P2_COL    = '#8fe388';   // P2's stick figure — a soft green, distinct from white P1 and enemy red
+const P3_COL    = '#7fd8ff';   // P3 — sky blue
+const P4_COL    = '#f0a5ff';   // P4 — orchid
+const SEAT_COLS = ['#ffffff', P2_COL, P3_COL, P4_COL];   // hero body color by seat
 const REVIVE_T  = 150;         // frames a partner must stand by a downed hero to revive them (~2.5s)
 // ── hero classes (chosen on the intro screen; persist across R-restarts & visits) ──
 //   melee  = the classic kit, unchanged (sword in the stone / lightsaber pickups)
 //   ranged = the bow is always strung — the attack key looses arrows at the nearest foe
 //   caster = the attack key hurls arcing lightning; SORCERY adds auto-cast nova & fireball
 //   Each hero picks independently in co-op; each class has its own upgrade tree.
-const CLASSES   = ['melee', 'ranged', 'caster', 'necro', 'dragoon'];
-const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨', necro: '💀', dragoon: '🐉' };
+const CLASSES   = ['melee', 'ranged', 'caster', 'necro', 'dragoon', 'wyrm', 'rider'];
+const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨', necro: '💀', dragoon: '🐉', wyrm: '🐲', rider: '🏇' };
+// wyrm+rider are a PAIRED, CO-OP-ONLY pick (see WYRM & RIDER below): they never
+// appear in solo class cycling, and picking the wyrm on P1 binds P2 to the rider.
+const PAIR_WYRM = 5, PAIR_RIDER = 6;
 const ARROW_SPD = 7.4;   // player arrows fly this fast (px/tick)
 const ZAP_R     = 170;   // arcane bolt reaches this far — deliberately short; position matters
 const ZAP_HOP   = 180;   // each chain jump reaches this far
@@ -318,6 +400,24 @@ const JOUST_BAR  = {      // per-foe skewer bars — the Joust rider tiers
 };
 const JOUST_ELITE = 0.5, JOUST_DREAD = 0.9;   // elites raise their bar; dread more
 
+/* WYRM & RIDER — the co-op PAIR: two players, one creature. P1 IS the beast
+   (wyrm): dragoon momentum physics on a bigger body, and its contact resolves by
+   the same joust rules — at speed it TRAMPLES through the pack, caught slow it
+   takes the hit. P2 sits the saddle (rider): their movement keys become an 8-way
+   TURRET AIM (never steering), their attack key jabs a lance along the aim, and
+   their spell-cycle key (E) breathes FIRE — spending the shared HEAT gauge that
+   only tramples and lance kills fill. The beast earns, the rider spends; neither
+   can do both, which is the whole point. Downs ride the existing model: a struck
+   rider is THROWN (an on-foot hero until remounted), a felled wyrm dumps the
+   rider to fight standing over the body; standing close revives/remounts. */
+const WYRM_R      = 8;    // extra body radius over PLAYER_R (contact + trample reach)
+const HEAT_MAX    = 100;
+const HEAT_TRAMPLE = 12;  // heat per trample kill (the wyrm earns)
+const HEAT_LANCE  = 6;    // heat per lance kill (the rider tops up)
+const BREATH_COST = 55;   // fire breath drinks over half the gauge
+const BREATH_R    = 150;  // the cone's reach
+const RIDER_SADDLE = 26;  // the rider sits this far above the wyrm's center
+
 // ── trophies — the trophy case: SF_ACH, persistence, sfUnlock, toasts, the T-panel ──
 /* ── the TROPHY CASE: Stick Fighter's own in-game achievement system ──
    Persisted account-wide in `ilaird_sf_trophies` (deliberately NOT per class
@@ -356,6 +456,10 @@ const SF_ACH = [
   { id: 'wolf_100',    name: 'WOLFSBANE',              desc: 'put down 100 frost wolves' },
   { id: 'the_weight',  name: 'THE WEIGHT OF IT',       desc: "hold the creator's fate for a full minute before deciding",         secret: true },
   { id: 'hoisted',     name: 'HOISTED',                desc: 'bait a powder keg into blowing up a goblin shaman',                 secret: true },
+  { id: 'skewered',    name: 'SKEWERED',               desc: 'run a troll through at full gallop' },
+  { id: 'trampler',    name: 'TRAMPLER',               desc: 'trample fifteen foes in one ride' },
+  { id: 'dragonfire',  name: 'DRAGONFIRE',             desc: 'burn four foes with a single breath' },
+  { id: 'pair_bond',   name: 'BEAST AND BRAVE',        desc: 'carry the pair to wave 4' },
 ];
 const SF_ACH_KEY = 'ilaird_sf_trophies';
 const sfTrophies = (() => {
@@ -458,20 +562,28 @@ function drawTrophyCase() {
 // ── boons — per-run boons and hard-mode banes: tables, offer roll, menus, panel ──
 /* ── BOONS: per-run blessings, chosen 1-of-3 at three moments — the run's start,
    the Witch-king's fall, and Ian's mercy. Ephemeral by design (nothing persists;
-   `bn` and any `up` tweaks rebuild each init), so every run has its own identity
-   on top of the permanent tree. Offers are rolled with rnd() (pure function of
-   the seed + roll position); the PICK is sim input, recorded as opcode 12 (boon
-   id) in the same between-tick slot as a shop buy. The run-start menu opens
-   SYNCHRONOUSLY in the begin/R/startReplay handlers right after init() — the
-   offer roll is then the seed's first draws in both live play and replay, and
-   a headless driver can pick before the first frame is ever pumped. */
+   `bn`, each hero's `h.bn`, and any `up` tweaks rebuild each init). IN CO-OP THE
+   PICKS ARE PERSONAL: each moment runs TWO menus back-to-back — P1 picks first,
+   then P2 — and each player's offer is drawn only from the shared six plus THEIR
+   OWN class's boons. Personal effects (Fleet Foot, Deathward, the bn.* class
+   perks) land on the picker's `h.bn`; party-economy boons (`global: true` —
+   Golden Touch, War Horn, King's Tithe, Bounty) affect the whole run and are
+   spent once for the party (they never re-offer once anyone holds them). Class
+   boons that tune shared `up.*` fields help every hero of that class — a
+   same-class duo can stack them, one pick each. Offers are rolled with rnd()
+   (pure function of the seed + roll position); each PICK is sim input, recorded
+   as opcode 12 in the same between-tick slot as a shop buy (two events per
+   moment in co-op — the feeder replays the chain identically). ONLINE, each
+   menu belongs to its seat: the host confirms P1's, the JOINER confirms P2's
+   (the one client-authoritative event — see netHandle 'ev'). The run-start menu
+   opens SYNCHRONOUSLY in the begin/R/startReplay handlers right after init(). */
 const BOONS = [
-  { id: 'fleet_foot', name: 'FLEET FOOT',    icon: '👟', desc: 'run 12% faster',                        apply: () => { bn.spd = 1.12; } },
-  { id: 'deathward',  name: 'DEATHWARD',     icon: '💖', desc: 'cheat death once this run',             apply: () => { bn.cheatDeath = true; } },
-  { id: 'gold_touch', name: 'GOLDEN TOUCH',  icon: '🪙', desc: 'coins pay double meter, +25 score',     apply: () => { bn.gold = true; } },
-  { id: 'war_horn',   name: 'WAR HORN',      icon: '📯', desc: 'ally meter charges 50% faster', apply: () => { up.meterMul *= 1.5; } },
-  { id: 'tithe',      name: "KING'S TITHE",  icon: '👑', desc: 'story bosses pay double tokens',        apply: () => { bn.tithe = true; } },
-  { id: 'bounty',     name: 'BOUNTY',        icon: '💰', desc: 'every kill scores +5 (before multiplier)', apply: () => { bn.bounty = 5; } },
+  { id: 'fleet_foot', name: 'FLEET FOOT',    icon: '👟', desc: 'YOU run 12% faster',                    apply: (h) => { h.bn.spd = 1.12; } },
+  { id: 'deathward',  name: 'DEATHWARD',     icon: '💖', desc: 'YOU cheat death once this run',         apply: (h) => { h.bn.cheatDeath = true; } },
+  { id: 'gold_touch', name: 'GOLDEN TOUCH',  icon: '🪙', desc: 'coins pay double meter, +25 score',     global: true, apply: () => { bn.gold = true; } },
+  { id: 'war_horn',   name: 'WAR HORN',      icon: '📯', desc: 'ally meter charges 50% faster', global: true, apply: () => { up.meterMul *= 1.5; } },
+  { id: 'tithe',      name: "KING'S TITHE",  icon: '👑', desc: 'story bosses pay double tokens',        global: true, apply: () => { bn.tithe = true; } },
+  { id: 'bounty',     name: 'BOUNTY',        icon: '💰', desc: 'every kill scores +5 (before multiplier)', global: true, apply: () => { bn.bounty = 5; } },
   { id: 'giants_arc', name: "GIANT'S ARC",   icon: '⭕', desc: 'the blade sweeps 25% wider',   cls: 'melee',  apply: () => { up.swingR = Math.round(up.swingR * 1.25); } },
   { id: 'berserk',    name: 'BERSERKER',     icon: '⚡', desc: 'swings come 30% faster',       cls: 'melee',  apply: () => { up.swingMs = Math.round(up.swingMs * 0.7); } },
   { id: 'keen_legacy',name: 'KEEN LEGACY',   icon: '⌛', desc: 'Excalibur burns 50% longer', cls: 'melee', apply: () => { up.swordMul *= 1.5; } },
@@ -479,14 +591,20 @@ const BOONS = [
   { id: 'piercer',    name: 'PIERCER',       icon: '🎯', desc: 'arrows pierce one more foe',   cls: 'ranged', apply: () => { up.shotPierce += 1; } },
   { id: 'hunters_pace',name:'HUNTER\'S PACE',icon: '🏹', desc: 'loose arrows 30% faster',      cls: 'ranged', apply: () => { up.shotMs = Math.round(up.shotMs * 0.7); } },
   { id: 'bottomless', name: 'BOTTOMLESS WELL',icon:'🔮', desc: '+50 mana to the pool',         cls: 'caster', apply: () => { up.manaMax += 50; } },
-  { id: 'siphon',     name: 'SIPHON',        icon: '✨', desc: 'soul sparks return double mana', cls: 'caster', apply: () => { bn.sparks2 = true; } },
-  { id: 'flicker',    name: 'FLICKER CAST',  icon: '💫', desc: 'incantations 40% shorter',     cls: 'caster', apply: () => { bn.castMul = 0.6; } },
-  { id: 'harvest',    name: 'GRAVE HARVEST', icon: '🌾', desc: '+3 souls from every kill',     cls: 'necro',  apply: () => { bn.soulBonus = 3; } },
+  { id: 'siphon',     name: 'SIPHON',        icon: '✨', desc: 'soul sparks return double mana', cls: 'caster', apply: (h) => { h.bn.sparks2 = true; } },
+  { id: 'flicker',    name: 'FLICKER CAST',  icon: '💫', desc: 'incantations 40% shorter',     cls: 'caster', apply: (h) => { h.bn.castMul = 0.6; } },
+  { id: 'harvest',    name: 'GRAVE HARVEST', icon: '🌾', desc: '+3 souls from every kill',     cls: 'necro',  apply: (h) => { h.bn.soulBonus = 3; } },
   { id: 'legion',     name: 'ONE MORE',      icon: '🧟', desc: 'command one more minion',      cls: 'necro',  apply: () => { up.minionCap += 1; } },
-  { id: 'restless',   name: 'RESTLESS',      icon: '⚰️', desc: 'minions endure 50% longer', cls: 'necro', apply: () => { bn.minionMul = 1.5; } },
+  { id: 'restless',   name: 'RESTLESS',      icon: '⚰️', desc: 'minions endure 50% longer', cls: 'necro', apply: (h) => { h.bn.minionMul = 1.5; } },
   { id: 'gale',       name: 'GALE',          icon: '🌪️', desc: 'the wind at your back — 8% higher top speed', cls: 'dragoon', apply: () => { up.dragCap *= 1.08; } },
-  { id: 'shrill_cry', name: 'SHRILL CRY',    icon: '🦅', desc: 'a skewer kill scatters the nearby pack', cls: 'dragoon', apply: () => { bn.cry = true; } },
+  { id: 'shrill_cry', name: 'SHRILL CRY',    icon: '🦅', desc: 'a skewer kill scatters the nearby pack', cls: 'dragoon', apply: (h) => { h.bn.cry = true; } },
   { id: 'broad_pennon',name:'BROAD PENNON',  icon: '🚩', desc: 'the lance reaches 10 farther',  cls: 'dragoon', apply: () => { up.lanceR += 10; } },
+  { id: 'hot_blood',   name: 'HOT BLOOD',     icon: '🔥', desc: 'tramples earn +6 heat',          cls: 'wyrm',  apply: () => { up.heatTrampleB += 6; } },
+  { id: 'iron_pinions',name: 'IRON PINIONS',  icon: '🪽', desc: 'the wings beat far more often',  cls: 'wyrm',  apply: () => { up.flapCd = Math.min(up.flapCd, 10); } },
+  { id: 'broad_back',  name: 'BROAD BACK',    icon: '🐲', desc: 'remount from 20 farther away',   cls: 'wyrm',  apply: () => { up.remountR += 20; } },
+  { id: 'kindled',     name: 'KINDLED',       icon: '🕯️', desc: 'fire breath costs 10 less heat', cls: 'rider', apply: () => { up.breathCost = Math.max(30, up.breathCost - 10); } },
+  { id: 'lancers_eye', name: "LANCER'S EYE",  icon: '🎯', desc: 'the saddle jab reaches 14 farther', cls: 'rider', apply: () => { up.riderReach += 14; } },
+  { id: 'fireheart',   name: 'FIREHEART',     icon: '❤️‍🔥', desc: 'the heat gauge holds 30 more', cls: 'rider', apply: () => { up.heatMax += 30; } },
 ];
 /* BANES — hard mode's answer to boons: no gifts at all, and the run OPENS by
    choosing one burden instead (1-of-3, same menu/opcode machinery — bane ids
@@ -505,18 +623,32 @@ function rollBoonOffer(pool) {
   while (opts.length < 3 && pool.length) opts.push(pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
   return opts;
 }
-function openBoonMenu(title) {
-  const present = new Set(heroesAll().map(h => h.cls));
-  const opts = rollBoonOffer(BOONS.filter(b => (!b.cls || present.has(b.cls)) && !bn.picked.includes(b.id)));
-  if (!opts.length) return;                 // the pool ran dry — no menu, no pause
-  boonMenu = { sel: 0, opts, title };
+// each hero's PERSONAL boon effects + pick history — rebuilt every init alongside
+// the global (bane/party-economy) `bn`
+function resetHeroBn(h) {
+  h.bn = { picked: [], spd: 1, cheatDeath: false, sparks2: false, castMul: 1, soulBonus: 0, minionMul: 1, cry: false };
+}
+function boonPicker(who) { return heroesAll()[who | 0] || player; }
+function openBoonMenu(title, who = 0) {
+  const picker = boonPicker(who);
+  // YOUR offer only: the shared six plus your own class's boons, no repeats.
+  // Party-wide (`global`) boons are spent once for everyone; personal ones per picker.
+  const taken = (b) => b.global
+    ? heroesAll().some(h => h.bn.picked.includes(b.id))
+    : picker.bn.picked.includes(b.id);
+  const opts = rollBoonOffer(BOONS.filter(b => (!b.cls || b.cls === picker.cls) && !taken(b)));
+  if (!opts.length) {                       // this picker's pool ran dry — try the next seat
+    if (coop && who + 1 < heroesAll().length) openBoonMenu(title, who + 1);
+    return;
+  }
+  boonMenu = { sel: 0, opts, title, who };
   paused = true;
   sfSfx.wave();
 }
 function openBaneMenu(title) {
-  const opts = rollBoonOffer(BANES.filter(b => !bn.picked.includes(b.id)));
+  const opts = rollBoonOffer(BANES.filter(b => !player.bn.picked.includes(b.id)));
   if (!opts.length) return;
-  boonMenu = { sel: 0, opts, title, bane: true };
+  boonMenu = { sel: 0, opts, title, bane: true, who: 0 };
   paused = true;
   sfSfx.charge();
 }
@@ -525,11 +657,17 @@ function pickBoon(id) {
   const b = boonMenu.opts.find(o => o.id === id);
   if (!b) return;
   const bane = !!boonMenu.bane;
-  bn.picked.push(b.id);
-  b.apply();
-  banner = b.icon + ' ' + b.name + (bane ? ' — your burden' : ''); bannerSub = b.desc; bannerT = 110;
+  const who = boonMenu.who | 0;
+  const title = boonMenu.title;
+  const picker = boonPicker(who);
+  picker.bn.picked.push(b.id);
+  b.apply(picker);
+  banner = (coop && !bane ? 'P' + (who + 1) + ' · ' : '') + b.icon + ' ' + b.name + (bane ? ' — your burden' : '');
+  bannerSub = b.desc; bannerT = 110;
   boonMenu = null; paused = false; keys = {};
   bane ? sfSfx.thud() : sfSfx.sword();
+  // co-op: the next seat picks — their OWN offer, their OWN confirm
+  if (!bane && coop && who + 1 < heroesAll().length) openBoonMenu(title, who + 1);
 }
 function drawBoonPanel() {
   const m = boonMenu;
@@ -540,7 +678,9 @@ function drawBoonPanel() {
   ctx.fillStyle = m.bane ? '#ff6e6e' : '#ffd24d'; ctx.font = 'bold 26px Tahoma,Arial';
   ctx.fillText(m.title, GW / 2, Math.round(GH * 0.24));
   ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
-  ctx.fillText(m.bane ? 'hard mode offers no gifts — carry one burden' : 'this run only — choose well', GW / 2, Math.round(GH * 0.24) + 24);
+  ctx.fillText(m.bane ? 'hard mode offers no gifts — carry one burden'
+             : coop ? 'PLAYER ' + ((m.who | 0) + 1) + ' — this one is yours alone'
+             : 'this run only — choose well', GW / 2, Math.round(GH * 0.24) + 24);
   ctx.shadowBlur = 0;
   const cw = Math.min(210, (GW - 80) / 3), chh = 150, gap = 18;
   const x0 = GW / 2 - (cw * m.opts.length + gap * (m.opts.length - 1)) / 2;
@@ -548,7 +688,7 @@ function drawBoonPanel() {
   for (let i = 0; i < m.opts.length; i++) {
     const b = m.opts[i], hot = i === m.sel;
     const x = x0 + i * (cw + gap), y = cy - (hot ? 8 : 0);
-    const accent = m.bane ? '#ff6e6e' : b.cls ? { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL }[b.cls] : '#e8eef4';
+    const accent = m.bane ? '#ff6e6e' : b.cls ? { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL }[b.cls] : '#e8eef4';
     ctx.fillStyle = hot ? 'rgba(28,24,10,0.96)' : 'rgba(12,16,22,0.92)';
     roundRectPath(x, y, cw, chh, 10); ctx.fill();
     if (hot) { ctx.shadowColor = accent; ctx.shadowBlur = api.reduceMotion ? 12 : 10 + 4 * Math.sin(frame * 0.1); }
@@ -603,7 +743,9 @@ let pend = null;   // built by resetPend() in init()
 function resetPend() {
   // summon2 is netplay-only (the client's summon, applied after the host's so the
   // shared meter spends in a deterministic order) — solo/replay never set it
-  pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, cycleP1: false, cycleP2: false, summon: null, summon2: null, prompt: false, mash: 0 };
+  pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, cycleP1: false, cycleP2: false,
+           dashP3: false, atkP3: false, cycleP3: false, dashP4: false, atkP4: false, cycleP4: false,   // online war-band seats
+           summon: null, summon2: null, summon3: null, summon4: null, prompt: false, mash: 0 };
 }
 // ── daily challenge ──
 // One shared seed per UTC day: everyone who picks DAILY plays the identical run
@@ -619,6 +761,12 @@ function dailySeed() {
 }
 
 function init() {
+  // the wyrm & rider are a co-op-only PAIR — a stale localStorage pick (or any
+  // other path into a solo run) falls back to the classic kit, and a paired P1
+  // always binds P2 (selection normally enforces this; this is the belt)
+  if (!coop && classSel >= PAIR_WYRM) classSel = 0;
+  if (classSel === PAIR_WYRM) classSel2 = PAIR_RIDER;
+  else if (classSel2 >= PAIR_WYRM) classSel2 = 0;
   // Seed the run. sfSeedOverride lets a future MP handshake pin a shared seed;
   // otherwise we draw fresh entropy (Math.random/Date.now here is the ONE
   // intentional non-deterministic input — it picks the seed, then never again).
@@ -632,16 +780,20 @@ function init() {
              swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
              cls: CLASSES[classSel], castT: 0, castMax: 0, casting: null, mana: 0, spellSel: 0, souls: 25, chillT: 0,
              manaHoldTick: 0, flapReadyTick: 0, flapT: -99 };
-  p2 = null;
+  p2 = null; p3 = null; p4 = null;
   enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
   bolts = []; arrows = []; kegs = []; minions = []; husks = [];
   score = 0; mult = 1; wave = 1; alive = true; started = false; frame = 0;
   keys = {}; freezeT = 0; banner = ''; bannerSub = ''; bannerT = 0;
   deadT = 0; shake = 0; newBest = false;
   stone = null; stoneCd = 150; stoneSeen = false;
-  meter = 0; meterPrompted = false; allies = []; kills = 0;
+  meter = 0; meterPrompted = false; allies = []; kills = 0; heat = 0; killsByType = {}; trampleN = 0;
+  camTape = []; killCam = null; camVictim = null;
+  cam = { x: 0, y: 0, kx: 0, ky: 0, zoom: 1, pulse: 0, prevBreather: 0 };
+  hitStop = 0;
+  decals = []; fieldWash = null; dreadF = 0; hurtFlash = null;
   nineActive = false; nineDone = false; wraithsLeft = 0;
-  waveQuota = 11; breatherT = 0;
+  waveQuota = bandScale(11); breatherT = 0;   // the opening war band scales with the party
   corpses = []; bossActive = false;
   bossRiseT = 0; bossRiseX = 0; bossRiseY = 0;
   awaitExit = false; swActive = false; swState = '';
@@ -656,9 +808,11 @@ function init() {
   wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
   lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
   cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true;
-  bn = { picked: [], spd: 1, cheatDeath: false, gold: false, tithe: false, bounty: 0,
-         sparks2: false, castMul: 1, soulBonus: 0, minionMul: 1,
-         toll: 0, foeSpd: 1, miser: false };   // bane fields (hard mode)
+  // the GLOBAL bn holds only bane + party-economy effects; each hero's personal
+  // boon effects live on h.bn (resetHeroBn — co-op picks are per player)
+  bn = { spd: 1, gold: false, tithe: false, bounty: 0,
+         toll: 0, foeSpd: 1, miser: false };
+  resetHeroBn(player);
   boonMenu = null;
   up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
          champs: { gandalf: false, luke: false, jotaro: false },
@@ -672,8 +826,10 @@ function init() {
          swordMul: 1, riposte: false,                                    // BLADE extras
          arrowSpd: 1, ricochet: false,                                   // BOW extras
          shatter: false, overcharge: false,                              // SORCERY extras
-         lanceR: 0, joustDmg: 1, flapCd: FLAP_CD, dragCap: 1, tailwind: false };  // SKYLANCE (dragoon)
-  paused = false; upMenu = null;
+         lanceR: 0, joustDmg: 1, flapCd: FLAP_CD, dragCap: 1, tailwind: false,   // SKYLANCE (dragoon)
+         heatMax: HEAT_MAX, heatTrampleB: 0, breathCost: BREATH_COST, breathDmg: 2,
+         breathCone: 0.72, riderReach: 76, jabT: 26, remountR: 30 };               // BOND (wyrm & rider)
+  paused = false; upMenu = null; shellMenu = false;
   resetPend();                       // no queued input crosses a restart
   if (replayMode && replay) {
     // the RECORDED player's persistent state, not the watcher's — the sim must
@@ -714,26 +870,56 @@ function init() {
   player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
   player.mana = up.manaMax;          // the wizard starts with a full well (after Deep Well applies)
   if (coop) { setupCoop(); sfUnlock('coop'); }   // a second hero joins; both share allies, meter & upgrades
+  if (netplay && netCfg && Array.isArray(netCfg.cs) && netCfg.cs.length > 2) {
+    // the ONLINE WAR BAND: seats 3 and 4 spawn flanking the pair
+    p3 = makeAllyHero(netCfg.cs[2], GW / 2, GH / 2 - 48, 1);
+    if (netCfg.cs.length > 3) p4 = makeAllyHero(netCfg.cs[3], GW / 2, GH / 2 + 48, -1);
+  }
 }
 
 /* ── couch co-op helpers ── */
 // Build P2 and stand the two heroes apart at centre-screen. Called from init() (so R
 // restarts straight into co-op) and the moment 2-PLAYER is confirmed on the intro.
+function makeAllyHero(clsIdx, x, y, fx) {
+  const h = { x, y, vx: 0, vy: 0, phase: 0, fx, fy: 0,
+              dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
+              shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
+              swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
+              cls: CLASSES[clamp(clsIdx | 0, 0, CLASSES.length - 1)], castT: 0, castMax: 0, casting: null,
+              mana: up.manaMax, spellSel: 0, souls: 25, chillT: 0,
+              manaHoldTick: 0, flapReadyTick: 0, flapT: -99,
+              mounted: CLASSES[clsIdx] === 'rider' };   // a rider starts in the saddle
+  resetHeroBn(h);
+  return h;
+}
 function setupCoop() {
   player.x = GW / 2 - 48; player.y = GH / 2;
-  p2 = { x: GW / 2 + 48, y: GH / 2, vx: 0, vy: 0, phase: 0, fx: -1, fy: 0,
-         dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
-         shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
-         swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-         cls: CLASSES[classSel2], castT: 0, castMax: 0, casting: null, mana: up.manaMax, spellSel: 0, souls: 25, chillT: 0,
-         manaHoldTick: 0, flapReadyTick: 0, flapT: -99 };
+  p2 = makeAllyHero(classSel2, GW / 2 + 48, GH / 2, -1);
 }
 // each hero arms independently — the blade (Excalibur / lightsaber) lives on the hero,
 // not the run. helpers for the scripted interlude transitions that arm/disarm everyone.
 function armSaberAll(v) { for (const h of heroesAll()) if (h.cls === 'melee') h.heldSaber = v; }  // blades are the melee kit; ranged/caster keep their own weapons
 function clearBlades() { for (const h of heroesAll()) { h.swordT = 0; h.swingT = 0; h.heldSaber = false; } }
 // the active heroes; in single-player this is just [player], so co-op code stays a no-op
-function heroesAll()  { return (coop && p2) ? [player, p2] : [player]; }
+// ── party-size difficulty ──
+// Every fighter past the first raises the pressure: bigger war bands (wave
+// quota ~+35% per extra seat, higher cap), denser spawns, and tougher named
+// bosses (see makeEnemy). Derived from the run's INTENT (netCfg/coop) — never
+// from live hero state — so every sim in a lockstep band and every replay
+// computes the identical number.
+function partySize() {
+  if (!coop) return 1;
+  return netplay && netCfg && Array.isArray(netCfg.cs) ? netCfg.cs.length : 2;
+}
+function bandScale(base) { return Math.round(base * (1 + 0.35 * (partySize() - 1))); }
+function heroesAll()  {
+  if (!coop || !p2) return [player];
+  const a = [player, p2];
+  if (p3) a.push(p3);
+  if (p4) a.push(p4);
+  return a;
+}
+function heroSeat(h) { return h === player ? 0 : h === p2 ? 1 : h === p3 ? 2 : 3; }
 function heroesLive() { return heroesAll().filter(h => !h.down); }
 // frames a partner must stand by to revive — halved by the Medic upgrade
 function reviveNeed() { return up.medic ? Math.round(REVIVE_T * 0.5) : REVIVE_T; }
@@ -913,9 +1099,16 @@ const UPGRADES = [
   { id: 'lance_dmg',   tree: 'SKYLANCE', cls: 'dragoon', name: 'Trample',     desc: 'the lance strikes twice as hard',     icon: '🐎', req: 'lance_long',  apply: () => { up.joustDmg = Math.max(up.joustDmg, 2); } },
   { id: 'lance_wind3', tree: 'SKYLANCE', cls: 'dragoon', name: 'Tailwind',    desc: 'a skewer kill feeds the gallop',      icon: '🍃', req: 'lance_wind',  apply: () => { up.tailwind = true; } },
   { id: 'lance_master',tree: 'SKYLANCE', cls: 'dragoon', name: 'Sky Lord',    desc: 'top speed soars · a longer, harder lance', icon: '🐉', req: 'lance_wind2', cost: 2, apply: () => { up.dragCap = Math.max(up.dragCap, 1.38); up.lanceR = Math.max(up.lanceR, 22); up.joustDmg = Math.max(up.joustDmg, 2); } },
+  { id: 'bond_heat',   tree: 'BOND', cls: 'wyrm', name: 'Furnace Heart',  desc: 'the heat gauge holds half again more',  icon: '🔥', req: null,        apply: () => { up.heatMax = Math.max(up.heatMax, 150); } },
+  { id: 'bond_breath', tree: 'BOND', cls: 'wyrm', name: 'Deep Lungs',     desc: 'fire breath drinks far less heat',      icon: '🌬️', req: null,        apply: () => { up.breathCost = Math.min(up.breathCost, 40); } },
+  { id: 'bond_lance',  tree: 'BOND', cls: 'wyrm', name: 'Saddle Lance',   desc: "the rider's jab reaches farther",       icon: '📏', req: null,        apply: () => { up.riderReach = Math.max(up.riderReach, 96); } },
+  { id: 'bond_jab',    tree: 'BOND', cls: 'wyrm', name: 'Quick Hands',    desc: 'the rider jabs far more often',         icon: '🤺', req: 'bond_lance', apply: () => { up.jabT = Math.min(up.jabT, 16); } },
+  { id: 'bond_mount',  tree: 'BOND', cls: 'wyrm', name: 'Practiced Leap', desc: 'remount from farther away',             icon: '🏇', req: null,        apply: () => { up.remountR = Math.max(up.remountR, 52); } },
+  { id: 'bond_beak',   tree: 'BOND', cls: 'wyrm', name: 'Iron Beak',      desc: 'the trample strikes twice as hard',     icon: '🐲', req: 'bond_heat',  apply: () => { up.joustDmg = Math.max(up.joustDmg, 2); } },
+  { id: 'bond_master', tree: 'BOND', cls: 'wyrm', name: 'DRAGONFIRE',     desc: 'a wider, hotter breath · cheap to loose', icon: '☄️', req: 'bond_breath', cost: 2, apply: () => { up.breathDmg = Math.max(up.breathDmg, 3); up.breathCone = Math.min(up.breathCone, 0.6); up.breathCost = Math.min(up.breathCost, 40); up.heatMax = Math.max(up.heatMax, 150); } },
 ];
 const upCost = (u) => (u.cost || 1) + bn.toll;   // most nodes cost 1 token; capstones more; HEAVY TOLL taxes all
-const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8', GRAVE: NECRO_COL, SKYLANCE: DRAGOON_COL };
+const TREE_COLOR = { DASH: '#80deea', ALLIES: '#caa6ff', BLADE: '#ffd24d', BOW: '#9ccc65', SORCERY: '#ce93d8', GRAVE: NECRO_COL, SKYLANCE: DRAGOON_COL, BOND: '#ff8a65' };
 function availableUpgrades() {
   // class trees only show for classes actually in the party (DASH/ALLIES have no cls and
   // always show); coopOnly nodes (Medic) only show in a 2-player run
@@ -1043,32 +1236,34 @@ function drawSummonMeter() {
 // pips). Both dim gray while the next action is unaffordable.
 function drawManaGauge() {
   if (!started || !alive || paused || bossIntro || ianActive) return;
-  const bearers = heroesAll().filter(h => h.cls === 'caster' || h.cls === 'necro' || h.cls === 'dragoon');
+  const bearers = heroesAll().filter(h => h.cls === 'caster' || h.cls === 'necro' || h.cls === 'dragoon' || h.cls === 'rider');
   if (!bearers.length) return;
   let y = GH - 22;
   ctx.save();
   for (const h of bearers) {
-    const necro = h.cls === 'necro', drag = h.cls === 'dragoon';
-    const sp = necro || drag ? null : SPELLS[curSpell(h)];
+    const necro = h.cls === 'necro', drag = h.cls === 'dragoon', rider = h.cls === 'rider';
+    const sp = necro || drag || rider ? null : SPELLS[curSpell(h)];
     // the dragoon's gauge is MOMENTUM: current speed against the top speed, with a
     // notch per Joust tier (goblin · wolf · troll) — "am I lethal right now?"
-    const pool = necro ? SOULS_MAX : drag ? DRAG_CAP * up.dragCap : up.manaMax;
-    const have = necro ? h.souls : drag ? Math.hypot(h.vx, h.vy) : h.mana;
-    const cost = necro ? up.raiseCost : drag ? JOUST_BAR.goblin : sp.cost;
+    const pool = necro ? SOULS_MAX : drag ? DRAG_CAP * up.dragCap : rider ? up.heatMax : up.manaMax;
+    const have = necro ? h.souls : drag ? Math.hypot(h.vx, h.vy) : rider ? heat : h.mana;
+    const cost = necro ? up.raiseCost : drag ? JOUST_BAR.goblin : rider ? up.breathCost : sp.cost;
     const ok = have >= cost && !h.down;
     const barW = 150, barH = 12, x = GW - barW - 14;
     const frac = clamp(have / pool, 0, 1);
-    const who = coop ? (h === p2 ? 'P2 · ' : 'P1 · ') : '';
+    const who = coop ? 'P' + (heroSeat(h) + 1) + ' · ' : '';
     const label = necro
       ? who + '💀 SOULS · raise ' + cost + '  ·  ' + '●'.repeat(minions.length) + '○'.repeat(Math.max(0, up.minionCap - minions.length))
       : drag
       ? who + '🐉 GALLOP · skewer past a notch — X flaps'
+      : rider
+      ? who + '🔥 HEAT · tramples & lance kills feed it — E breathes fire' + (h.mounted ? '' : '  ·  REMOUNT!')
       : who + sp.icon + ' ' + sp.name + ' · ' + cost + (heroSpells().length > 1 ? '  ·  ' + (coop ? (h === p2 ? 'E' : '.') : 'C') + ' turns' : '') +
         (tick < (h.manaHoldTick || 0) ? '  ·  settling…' : '');
     ctx.textAlign = 'right';
     ctx.font = 'bold 11px Tahoma,Arial';
     ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
-    ctx.fillStyle = h.down ? '#7a7a7a' : ok ? (necro ? NECRO_COL : drag ? DRAGOON_COL : sp.col) : '#8a93a5';
+    ctx.fillStyle = h.down ? '#7a7a7a' : ok ? (necro ? NECRO_COL : drag ? DRAGOON_COL : rider ? '#ff8a65' : sp.col) : '#8a93a5';
     ctx.fillText(label, x + barW, y - 6);
     ctx.shadowBlur = 0;
     ctx.fillStyle = 'rgba(10,16,24,0.82)';
@@ -1078,7 +1273,7 @@ function drawManaGauge() {
       roundRectPath(x, y, barW, barH, 3); ctx.clip();
       const grd = ctx.createLinearGradient(x, y, x, y + barH);
       if (necro) { grd.addColorStop(0, ok ? '#7dfadf' : '#7ba8a0'); grd.addColorStop(1, ok ? '#0f9b82' : '#3a5a54'); }
-      else if (drag) { grd.addColorStop(0, ok ? '#ffcc80' : '#a08a68'); grd.addColorStop(1, ok ? '#ef6c00' : '#5a4630'); }
+      else if (drag || rider) { grd.addColorStop(0, ok ? (rider ? '#ffab91' : '#ffcc80') : '#a08a68'); grd.addColorStop(1, ok ? (rider ? '#d84315' : '#ef6c00') : '#5a4630'); }
       else { grd.addColorStop(0, ok ? '#b39ddb' : '#8090b8'); grd.addColorStop(1, ok ? '#5e35b1' : '#3a4668'); }
       ctx.fillStyle = grd; ctx.fillRect(x, y, barW * frac, barH);
       ctx.restore();
@@ -1090,7 +1285,7 @@ function drawManaGauge() {
       const notch = x + barW * clamp(nv / pool, 0, 1);
       ctx.beginPath(); ctx.moveTo(notch, y - 1); ctx.lineTo(notch, y + barH + 1); ctx.stroke();
     }
-    ctx.strokeStyle = ok ? (necro ? 'rgba(100,255,218,0.75)' : drag ? 'rgba(255,167,38,0.8)' : 'rgba(179,157,219,0.75)') : 'rgba(150,160,180,0.4)';
+    ctx.strokeStyle = ok ? (necro ? 'rgba(100,255,218,0.75)' : drag ? 'rgba(255,167,38,0.8)' : rider ? 'rgba(255,138,101,0.85)' : 'rgba(179,157,219,0.75)') : 'rgba(150,160,180,0.4)';
     ctx.lineWidth = 1.5;
     roundRectPath(x, y, barW, barH, 3); ctx.stroke();
     y -= 38;
@@ -1324,6 +1519,13 @@ function heroFigure(x, y, phase, color, cls, dir = 1, scale = 1, alpha = 1, lean
     ctx.strokeStyle = gc(DRAGOON_COL); ctx.lineWidth = 1.5;                // its little crest wings
     ctx.beginPath(); ctx.moveTo(-6, -38); ctx.quadraticCurveTo(-11, -43, -15, -42.5); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(6, -38); ctx.quadraticCurveTo(11, -43, 15, -42.5); ctx.stroke();
+  } else if (cls === 'rider') {
+    ctx.strokeStyle = gc('#ffab91'); ctx.lineWidth = 2.2;                  // riding cap
+    ctx.beginPath(); ctx.moveTo(-7, -37.5); ctx.lineTo(7, -37.5); ctx.stroke();
+    const s1 = Math.sin(phase * 1.7) * 2.5;                                // the scarf streams behind
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(-5, -33); ctx.quadraticCurveTo(-13, -32 + s1, -19, -28 + s1 * 1.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-5, -34.5); ctx.quadraticCurveTo(-12, -36 + s1, -17, -34 + s1); ctx.stroke();
   }
   ctx.restore();
 }
@@ -2735,6 +2937,20 @@ function drawRoadRoller(r) {
 
 // ── render-field — drawEnemy dispatch, champions, stone/saber pickups, held weapons, husks/minions ──
 function drawEnemy(e) {
+  // ── readability grammar (render-only) ──
+  // ONE language for "about to strike": every telegraphing foe stands on a red
+  // underglow, whatever its sprite does (steady pulse under reduced motion)
+  if (!e.dead && e.frozen <= 0 && ['aim', 'wind', 'cast', 'gather'].includes(e.mode)) {
+    const ua = api.reduceMotion ? 0.22 : 0.16 + 0.10 * Math.sin(frame * 0.25);
+    ctx.fillStyle = 'rgba(255,60,50,' + ua.toFixed(3) + ')';
+    ctx.beginPath(); ctx.ellipse(e.x, e.y + 3, 22, 8, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // the vignette must never HIDE a live threat: foes hugging the dark rim get a
+  // faint self-light so the atmosphere pass can't cost you a death
+  if (!e.dead && (e.x < 70 || e.x > GW - 70 || e.y < 90 || e.y > GH - 60)) {
+    ctx.fillStyle = 'rgba(255,90,70,0.10)';
+    ctx.beginPath(); ctx.ellipse(e.x, e.y - 8, 26, 18, 0, 0, Math.PI * 2); ctx.fill();
+  }
   const col = enemyColor(e);
   if (e.type === 'goblin') drawGoblin(e, col);
   else if (e.type === 'shaman') drawShaman(e, col);
@@ -2759,6 +2975,12 @@ function drawEnemy(e) {
       ctx.fillStyle = '#ffd24d'; ctx.font = 'bold 11px Tahoma,Arial'; ctx.textAlign = 'center';
       ctx.fillText('♥'.repeat(e.hp), e.x, e.y - 78); ctx.textAlign = 'left';
     }
+  }
+  // HIGH-CONTRAST ELITES (accessibility option): tier as SHAPE, not just tint
+  if (sfOpts.hiVis && e.elite && !e.dead) {
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px Tahoma,Arial'; ctx.textAlign = 'center';
+    ctx.fillText(e.elite === 2 ? '◆◆' : '◆', e.x, e.y - 60);
+    ctx.textAlign = 'left';
   }
 }
 
@@ -3003,6 +3225,22 @@ function drawHeldBow(h) {
   ctx.beginPath(); ctx.arc(handX, handY, 2.6, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
+// the unhorsed rider's dirk: short, desperate, held out front — matches the
+// on-foot jab's reach so the picture tells the truth
+function drawHeldDirk(h) {
+  const fl = Math.hypot(h.fx, h.fy) || 1;
+  const ux = h.fx / fl, uy = h.fy / fl;
+  const hx = h.x + ux * 9, hy = h.y - 18 + uy * 4;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = heroTint(h); ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.strokeStyle = '#cdd8e2'; ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx + ux * 13, hy + uy * 13); ctx.stroke();
+  ctx.fillStyle = heroTint(h);
+  ctx.beginPath(); ctx.arc(hx, hy, 2.4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
 // the dragoon's couched lance: it points where you FLY (the velocity), falling
 // back to the facing at a standstill — so the joust reads exactly like it kills.
 // The tip ignites ember-orange once you're moving fast enough to skewer the
@@ -3153,11 +3391,237 @@ function drawMinion(m) {
   ctx.restore();
 }
 
+/* ── THE BATTLEFIELD (atmosphere pass) ──
+   The open field used to be a transparent canvas showing the XP desktop through
+   it. Now the fight happens somewhere: a scorched night field — mottled earth,
+   old battle debris, fog breathing at the rim, embers rising off unseen fires —
+   under a WAVE TINT that runs cold dawn-blue to blood red as the run deepens
+   (grey in the mournful world). STRICTLY render-only and rnd()-free: everything
+   animates off `frame` + a position hash, so the deterministic draw-stream and
+   60/120Hz cadence tests hold, and no sim version bump is needed. The set-piece
+   rooms (corridor / mansion / Ian) still paint their own worlds. Steady (never
+   flashing) under prefers-reduced-motion. */
+function drawBattlefield() {
+  const RM = api.reduceMotion;
+  const ih = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+  // ── the run's MOOD, stepped once per draw call (= per tick) ──
+  // dread: the Nine (and the Witch-king after them) snuff the field's warmth —
+  // embers die, fog flees outward, the tint drops to a dead grey-violet, and
+  // the light pools dim to half (see drawLightPools). Eases over ~30 ticks and
+  // relights the same way once the king falls.
+  dreadF += (((nineActive || (bossActive && !nineDone)) ? 1 : 0) - dreadF) * 0.04;
+  const dread = dreadF;
+  // the gathering storm: still air early, the wind rising as the Nine draw near
+  // (wave 4 is the eve), settling to a war-torn breeze after
+  const wind = wave === 4 ? 1 : wave === 3 ? 0.4 : wave >= 6 ? 0.5 : 0;
+  const ogreUp = enemies.some((e) => e.type === 'ogre' && !e.dead);
+  // 1) the ground — deep and cold, faintly lifted at the fight's heart
+  let g = ctx.createLinearGradient(0, 0, 0, GH);
+  g.addColorStop(0, '#0d1119'); g.addColorStop(0.55, '#0a0e14'); g.addColorStop(1, '#06080c');
+  ctx.fillStyle = g; ctx.fillRect(-30, -30, GW + 60, GH + 60);   // overscan bleed — the living camera drifts
+  // 2) mottled earth: fixed hashed scorch patches and faint dead moss
+  for (let i = 0; i < 32; i++) {
+    const x = ih(i) * GW, y = 44 + ih(i + 51) * (GH - 54);
+    const r = 26 + ih(i + 97) * 58;
+    ctx.fillStyle = i % 3 ? 'rgba(0,0,0,0.15)' : 'rgba(34,46,38,0.09)';
+    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.42, ih(i + 13) * 3.14, 0, Math.PI * 2); ctx.fill();
+  }
+  // 2b) GROUND MEMORY: the field remembers this run — ash where they fell,
+  //     scorch rings where fire landed, frost blooms melting away (~40s fades;
+  //     recorded by sim events via addDecal, pruned here as they expire)
+  for (let i = decals.length - 1; i >= 0; i--) {
+    const d = decals[i];
+    const age = tick - d.t0;
+    const life = d.kind === 'frost' ? 700 : 2400;
+    if (age >= life) { decals.splice(i, 1); continue; }
+    const a = (1 - age / life) * (d.kind === 'ash' ? 0.22 : d.kind === 'frost' ? 0.2 : 0.3);
+    if (d.kind === 'scorch') {
+      ctx.strokeStyle = 'rgba(10,6,4,' + a.toFixed(3) + ')'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, 26, 11, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(0,0,0,' + (a * 0.8).toFixed(3) + ')';
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, 16, 7, 0, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = d.kind === 'frost'
+        ? 'rgba(150,200,230,' + a.toFixed(3) + ')'
+        : 'rgba(20,16,14,' + a.toFixed(3) + ')';
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, d.kind === 'frost' ? 20 : 13, d.kind === 'frost' ? 8 : 5.5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // 3) the debris of older battles: half-buried skulls, snapped spears, ribs
+  for (let i = 0; i < 15; i++) {
+    const x = ih(i + 201) * GW, y = 62 + ih(i + 233) * (GH - 84);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ih(i + 77) * Math.PI);
+    ctx.globalAlpha = 0.2;
+    if (i % 5 === 0) {           // a half-buried skull, staring at nothing
+      ctx.fillStyle = '#9aa3a8';
+      ctx.beginPath(); ctx.arc(0, 0, 3.4, Math.PI, 0); ctx.fill();
+      ctx.fillRect(-2.6, -0.4, 1.4, 1.8); ctx.fillRect(1.2, -0.4, 1.4, 1.8);
+    } else if (i % 5 === 1) {    // a snapped spear
+      ctx.strokeStyle = '#6b5a40'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(6, 0); ctx.stroke();
+      ctx.fillStyle = '#8a939c';
+      ctx.beginPath(); ctx.moveTo(6, -2); ctx.lineTo(11, 0); ctx.lineTo(6, 2); ctx.closePath(); ctx.fill();
+    } else {                     // a rib, or just a rock
+      ctx.strokeStyle = i % 2 ? '#727a82' : '#3c444d'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(0, 0, 4.6, 0.3, 2.4); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  // 4) embers rising off fires just out of sight (a steady field under RM) —
+  //    blown sideways by the storm wind, flushed red while the War-Ogre lives,
+  //    and SNUFFED entirely as dread takes the field
+  const emberA = 1 - dread;
+  if (emberA > 0.02) {
+    for (let i = 0; i < 22; i++) {
+      const sp = 0.25 + ih(i + 301) * 0.5;
+      const yy = GH - ((RM ? i * 37 : frame * sp + ih(i + 331) * GH) % (GH + 20));
+      const drift = RM ? 0 : Math.sin((frame * 0.01 + i) * 1.7) * 14 + frame * 0.5 * wind;
+      const xx = (((ih(i + 359) * GW + drift) % GW) + GW) % GW;
+      const tw = RM ? 0.5 : 0.35 + 0.3 * Math.sin(frame * 0.11 + i * 2.1);
+      const gCh = ogreUp ? 70 + ((i * 37) % 40) : 120 + ((i * 37) % 60);
+      ctx.fillStyle = 'rgba(255,' + gCh + ',40,' + (Math.max(0.08, tw * 0.35) * emberA).toFixed(3) + ')';
+      ctx.fillRect(xx, yy, i % 5 === 0 ? 2 : 1.4, i % 5 === 0 ? 2 : 1.4);
+    }
+  }
+  // 5) fog banks breathing along the rim (very slow — vestibular-safe); the
+  //    storm hurries them, and dread drives them outward and thin
+  for (let i = 0; i < 5; i++) {
+    const t = RM ? 0.5 : 0.5 + 0.5 * Math.sin(frame * 0.004 + i * 1.9);
+    const spd = 0.00015 * (1 + wind * 3);
+    const fx = (((i * 0.23 + 0.06) + (RM ? 0 : frame * spd * (i % 2 ? 1 : -1))) % 1 + 1) % 1 * GW;
+    const fy = i % 2 ? 28 + t * 10 - dread * 40 : GH - 32 - t * 10 + dread * 40;
+    const fr = (130 + ih(i + 407) * 90) * (1 + dread * 0.8);
+    const fg = ctx.createRadialGradient(fx, fy, 0, fx, fy, fr);
+    fg.addColorStop(0, 'rgba(120,140,170,' + (0.10 * (0.5 + t * 0.5) * (1 - dread * 0.55)).toFixed(3) + ')');
+    fg.addColorStop(1, 'rgba(120,140,170,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(fx - fr, fy - fr, fr * 2, fr * 2);
+  }
+  // 5b) the eve of the Nine: silent lightning flickers at the field's edge
+  //     (wave 4 only; skipped under reduced motion — it is a flash by nature)
+  if (wave === 4 && !RM && dread < 0.2) {
+    const cyc = Math.floor(frame / 380);
+    const ph = frame % 380;
+    if (ph < 6) {
+      const side = ih(cyc + 611) < 0.5 ? 0 : GW;
+      const lg = ctx.createRadialGradient(side, GH * (0.2 + ih(cyc + 613) * 0.5), 0, side, GH * 0.4, GW * 0.7);
+      lg.addColorStop(0, 'rgba(200,215,255,' + (0.10 * (1 - ph / 6)).toFixed(3) + ')');
+      lg.addColorStop(1, 'rgba(200,215,255,0)');
+      ctx.fillStyle = lg;
+      ctx.fillRect(-30, -30, GW + 60, GH + 60);
+    }
+  }
+  // 6) the wave tint: cold blue dawn → violet dusk → blood red as the run
+  //    deepens — and dread drains it all to a dead grey-violet
+  const deep = Math.min(1, (wave - 1) / 9);
+  const tr = Math.round((40 + deep * 160) * (1 - dread) + 70 * dread);
+  const tg = Math.round((30 - deep * 14) * (1 - dread) + 60 * dread);
+  const tb = Math.round((90 - deep * 60) * (1 - dread) + 90 * dread);
+  const ta = (0.05 + deep * 0.07) * (1 - dread) + 0.16 * dread;
+  ctx.fillStyle = mournful
+    ? 'rgba(90,90,100,0.10)'
+    : 'rgba(' + tr + ',' + tg + ',' + tb + ',' + ta.toFixed(3) + ')';
+  ctx.fillRect(-30, -30, GW + 60, GH + 60);
+  // 6b) EVENT LIGHT WASH: the big moments light the whole world for a breath —
+  //     Excalibur gold, a powerup's element, the cold drain of a hero falling
+  //     (a smooth eased fade, never a flash; stepped once per draw = per tick)
+  if (fieldWash) {
+    const w = fieldWash;
+    const wa = w.a * (1 - w.t / w.T) * (1 - w.t / w.T);
+    ctx.fillStyle = 'rgba(' + w.rgb + ',' + wa.toFixed(3) + ')';
+    ctx.fillRect(-30, -30, GW + 60, GH + 60);
+    if (++w.t >= w.T) fieldWash = null;
+  }
+  // 7) the dark leans in from the edges — and leans in HARDER under dread
+  const v = ctx.createRadialGradient(GW / 2, GH * 0.52, Math.min(GW, GH) * (0.36 - dread * 0.09), GW / 2, GH * 0.52, Math.max(GW, GH) * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (0.4 + dread * 0.18).toFixed(3) + ')');
+  ctx.fillStyle = v; ctx.fillRect(-30, -30, GW + 60, GH + 60);
+  // 8) EYES IN THE DARK: during the breather, red glints blink open in the
+  //    vignette darkness — the next wave, already watching (steady under RM);
+  //    and while dread holds the field, the horde's silhouettes ring the edge
+  if (breatherT > 0 && waveQuota + enemies.length === 0 && !mournful) {
+    const nEyes = Math.min(8, 3 + wave);
+    const edgeIn = Math.min(1, (BREATHER - breatherT) / 20, breatherT / 20);
+    for (let i = 0; i < nEyes; i++) {
+      const blink = RM ? 1 : (((frame + i * 37) % 90) < 72 ? 1 : 0);
+      if (!blink) continue;
+      const side = Math.floor(ih(wave * 13 + i) * 4);
+      const along = 0.12 + ih(wave * 29 + i + 7) * 0.76;
+      const ex = side === 0 ? 14 + ih(i + wave) * 10 : side === 1 ? GW - 14 - ih(i + wave) * 10 : along * GW;
+      const ey = side < 2 ? 44 + along * (GH - 60) : side === 2 ? 48 + ih(i + wave) * 10 : GH - 16 - ih(i + wave) * 10;
+      ctx.fillStyle = 'rgba(255,60,50,' + (0.55 * edgeIn).toFixed(3) + ')';
+      ctx.fillRect(ex - 2.6, ey, 1.7, 1.7);
+      ctx.fillRect(ex + 1, ey, 1.7, 1.7);
+    }
+  }
+  if (dread > 0.5) {
+    const wA = (dread - 0.5) * 0.36;
+    for (let i = 0; i < 10; i++) {
+      const along = ih(i + 501);
+      const top = i % 2 === 0;
+      const wx = 30 + along * (GW - 60);
+      const wy = top ? 34 : GH - 12;
+      ctx.fillStyle = 'rgba(6,8,12,' + wA.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(wx, wy, 7 + ih(i + 531) * 4, Math.PI, 0);   // a hunched, motionless watcher
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(wx - 5, wy - 6); ctx.lineTo(wx - 8, wy - 12); ctx.lineTo(wx - 3, wy - 8);   // an ear
+      ctx.closePath(); ctx.fill();
+    }
+  }
+}
+/* ── LIGHT POOLS — the fight lights the field ──
+   Soft additive ground glows under everything that burns, hums, or shines:
+   blades, the stone, spell orbs, powerups, blasts, keg fuses, minions, allies,
+   and a cool presence glow anchoring each hero to the dark. Render-only. */
+function drawLightPools() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const dim = 1 - dreadF * 0.5;   // the Nine dim every light on the field
+  const pool = (x, y, r, rgb, a) => {
+    a *= dim;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(' + rgb + ',' + a.toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(' + rgb + ',0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  };
+  const puls = api.reduceMotion ? 0.75 : 0.65 + 0.35 * Math.sin(frame * 0.07);
+  for (const h of heroesLive()) {
+    pool(h.x, h.y + 2, 46, '140,170,210', 0.05);
+    if (h.heldSaber) pool(h.x, h.y - 6, 70, '80,160,255', 0.10 * puls);
+    else if (h.swordT > 0) pool(h.x, h.y - 6, 64, '255,200,80', 0.09 * puls);
+    if (h.cls === 'caster' && h.castT > 0) pool(h.x, h.y - 10, 60, '200,140,255', 0.12);
+    if (h.cls === 'necro') pool(h.x, h.y, 40, '80,255,215', 0.04);
+  }
+  if (stone) pool(stone.x, stone.y, 80, '255,200,80', 0.10 * puls);
+  if (saberPickup) pool(saberPickup.x, saberPickup.y, 70, '80,160,255', 0.10 * puls);
+  for (const pu of powerups) {
+    pool(pu.x, pu.y, 54, pu.kind === 'freeze' ? '120,210,255' : pu.kind === 'fire' ? '255,140,60' : '190,150,255', 0.10 * puls);
+  }
+  for (const b of blasts) {
+    if (b.x == null) continue;   // chain-lightning blasts carry point lists, not a center
+    pool(b.x, b.y, (b.rMax || 80) * 1.1, b.kind === 'frost' ? '120,210,255' : b.kind === 'fire' ? '255,120,40' : '190,150,255', 0.12);
+  }
+  for (const k of kegs) {        // the arcing keg's lit fuse
+    const t = k.t / k.T;
+    pool(k.sx + (k.tx - k.sx) * t, k.sy + (k.ty - k.sy) * t - Math.sin(t * Math.PI) * 60, 26, '255,160,60', 0.10);
+  }
+  for (const m of minions) pool(m.x, m.y, 34, '80,255,215', 0.05);
+  for (const al of allies) {
+    if (al.x == null) continue;
+    pool(al.x, al.y, 50, al.kind === 'luke' ? '120,255,140' : al.kind === 'gandalf' ? '220,220,255' : '160,120,255', 0.07);
+  }
+  ctx.restore();
+}
+
 // ── render-intro — class-preview mannequins, the intro/title screen, drawHero/drawDownedHero ──
 // the intro's living mannequin: the hero as currently built — weapon in hand, gently
 // scanning — over a class-colored spotlight. `hot` marks the row being edited.
 function drawClassPreview(x, y, cls, color, hot, label) {
-  const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL }[cls];
+  const cc = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL, wyrm: DRAGOON_COL, rider: '#ffab91' }[cls];
   ctx.save();
   // light pool under the feet
   ctx.globalAlpha = hot ? 0.5 : 0.26;
@@ -3169,14 +3633,18 @@ function drawClassPreview(x, y, cls, color, hot, label) {
   // the hero at 1.3× — a fake hero object drives the same weapon draws the game uses,
   // its facing swaying slowly so the weapon reads as alive, not a museum piece
   ctx.translate(x, y); ctx.scale(1.3, 1.3); ctx.translate(-x, -y);
-  heroFigure(x, y, frame * 0.05, color, cls, 1, 1, 1, 0, hot ? cc : 0);
   const fake = { x, y, fx: 1, fy: Math.sin(frame * 0.02) * 0.22, swingT: 0, castT: 0,
-                 swordT: 1e9, heldSaber: false, cls, tint: color };
-  if (cls === 'ranged') drawHeldBow(fake);
-  else if (cls === 'caster') drawHeldStaff(fake);
-  else if (cls === 'necro') drawHeldScythe(fake);
-  else if (cls === 'dragoon') drawHeldLance(fake);
-  else drawHeldSword(fake);
+                 swordT: 1e9, heldSaber: false, cls, tint: color, phase: frame * 0.05, mounted: true };
+  if (cls === 'wyrm') {
+    drawWyrm(fake);   // the beast IS the figure
+  } else {
+    heroFigure(x, y, frame * 0.05, color, cls, 1, 1, 1, 0, hot ? cc : 0);
+    if (cls === 'ranged') drawHeldBow(fake);
+    else if (cls === 'caster') drawHeldStaff(fake);
+    else if (cls === 'necro') drawHeldScythe(fake);
+    else if (cls === 'dragoon' || cls === 'rider') drawHeldLance(fake);
+    else drawHeldSword(fake);
+  }
   ctx.restore();
   ctx.save();
   ctx.textAlign = 'center'; ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
@@ -3355,27 +3823,36 @@ function drawIntroScreen() {
     drawClassPreview(GW / 2 + podX, py, CLASSES[classSel2], P2_COL, introRow === 3, 'P2');
   }
   ctx.textAlign = 'center';
-  const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL };
-  const nCls = CLASSES.length, cgap = 10, ch = 24;
-  const cw = Math.min(104, Math.floor((GW - 60 - cgap * (nCls - 1)) / nCls));
-  const clsRow = (y, sel, active, lbl, lblCol) => {
-    const x0 = GW / 2 - (cw * nCls + cgap * (nCls - 1)) / 2;
+  const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL, wyrm: DRAGOON_COL, rider: '#ffab91' };
+  // the wyrm & rider are a PAIR: the wyrm pill appears only on P1's row in couch
+  // co-op, and picking it binds P2's row to the single locked rider pill
+  const PICKS_SOLO = [0, 1, 2, 3, 4];
+  const cgap = 10, ch = 24;
+  const clsRow = (y, sel, active, lbl, lblCol, list) => {
+    const n = list.length;
+    const cw = Math.min(104, Math.floor((GW - 60 - cgap * (n - 1)) / n));
+    const x0 = GW / 2 - (cw * n + cgap * (n - 1)) / 2;
     if (lbl) {
       ctx.textAlign = 'right'; ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = lblCol;
       ctx.fillText(lbl, x0 - 12, y + ch / 2 + 4.5); ctx.textAlign = 'center';
     }
-    for (let i = 0; i < nCls; i++) {
-      pill(x0 + i * (cw + cgap), y, cw, ch, CLASS_ICON[CLASSES[i]] + ' ' + CLASSES[i].toUpperCase(),
-           sel === i, active, clsCol[CLASSES[i]], '12px Tahoma,Arial');
+    for (let i = 0; i < n; i++) {
+      const ci = list[i];
+      pill(x0 + i * (cw + cgap), y, cw, ch, CLASS_ICON[CLASSES[ci]] + ' ' + CLASSES[ci].toUpperCase(),
+           sel === ci, active, clsCol[CLASSES[ci]], '12px Tahoma,Arial');
     }
   };
   let cy = py + 48;
   if (!isLocalMulti()) {
-    clsRow(cy, classSel, introRow === 2);
+    clsRow(cy, classSel, introRow === 2, null, null, PICKS_SOLO);
   } else {
-    clsRow(cy, classSel, introRow === 2, 'P1', '#fff');
+    clsRow(cy, classSel, introRow === 2, 'P1', '#fff', [...PICKS_SOLO, PAIR_WYRM]);
     cy += 32;
-    clsRow(cy, classSel2, introRow === 3, 'P2', P2_COL);
+    if (classSel === PAIR_WYRM) {
+      clsRow(cy, PAIR_RIDER, false, 'P2', P2_COL, [PAIR_RIDER]);   // bound to the wyrm
+    } else {
+      clsRow(cy, classSel2, introRow === 3, 'P2', P2_COL, PICKS_SOLO);
+    }
   }
   const CLASS_BLURB = {
     melee:  'run over the stone to seize the sword — X cleaves all before you',
@@ -3383,6 +3860,8 @@ function drawIntroScreen() {
     caster: 'X casts the chosen page — C turns the spellbook · spells drink mana, kills give it back',
     necro:  'X reaps a wide arc — husks caught in the sweep RISE as minions · kills feed the soul well',
     dragoon: 'JOUST: your speed IS the lance — meet every foe at full gallop or die on its body · X flaps',
+    wyrm:  'the PAIR: you ARE the beast — steer, flap, TRAMPLE at speed · your kills feed the heat',
+    rider: "the PAIR: you never steer — your keys AIM the saddle lance · E breathes fire from the wyrm's heat",
   };
   ctx.font = 'italic 12px Tahoma,Arial'; ctx.fillStyle = '#aeb9c4';
   ctx.fillText(CLASS_BLURB[CLASSES[introRow === 3 ? classSel2 : classSel]], GW / 2, cy + 40);
@@ -3450,19 +3929,71 @@ function drawIntroConfirm() {
   ctx.restore(); ctx.textAlign = 'left';
 }
 
+// the WYRM — the co-op pair's war-beast (a proud Joust lineage): big gliding body,
+// long neck, snapping beak, galloping legs, and stub wings that beat on a flap.
+// Drawn in place of the hero figure for cls 'wyrm'; the mounted rider is a normal
+// hero drawn at the saddle right after it.
+function drawWyrm(h) {
+  const dir = h.fx >= 0 ? 1 : -1;
+  const col = heroTint(h);
+  const run = Math.hypot(h.vx || 0, h.vy || 0);
+  const gait = Math.sin(h.phase || 0);
+  const beat = Math.max(0, 1 - (tick - (h.flapT || -99)) / 14);   // wingbeat decays after a flap
+  ctx.save();
+  ctx.translate(h.x, h.y);
+  ctx.scale(dir, 1);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // legs first (behind the body), scissoring with the stride
+  ctx.strokeStyle = col; ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(-4, -12); ctx.lineTo(-7 + gait * 5, -2); ctx.lineTo(-9 + gait * 7, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4, -12); ctx.lineTo(7 - gait * 5, -2); ctx.lineTo(9 - gait * 7, 0); ctx.stroke();
+  // tail plume
+  ctx.strokeStyle = DRAGOON_COL; ctx.lineWidth = 2.2;
+  ctx.beginPath(); ctx.moveTo(-14, -18); ctx.quadraticCurveTo(-24, -22 + gait * 2, -30, -16 + gait * 3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-14, -20); ctx.quadraticCurveTo(-23, -27 + gait * 2, -28, -24 + gait * 2); ctx.stroke();
+  // the body — a stout ellipse, saddle blanket over the spine
+  ctx.fillStyle = 'rgba(20,26,34,0.92)';
+  ctx.strokeStyle = col; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.ellipse(0, -18, 16, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = DRAGOON_COL; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-7, -26); ctx.quadraticCurveTo(0, -30, 7, -26); ctx.stroke();   // the saddle
+  // stub wing, beating on a flap (steady half-raised under reduced motion)
+  const wa = api.reduceMotion ? 0.4 : beat;
+  ctx.fillStyle = 'rgba(255,167,38,0.4)'; ctx.strokeStyle = DRAGOON_COL; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-2, -22);
+  ctx.quadraticCurveTo(-12, -30 - wa * 10, -20, -26 - wa * 14);
+  ctx.quadraticCurveTo(-12, -20, -3, -17);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // the neck + head, leaning into the run; the beak snaps at trample speed
+  const lean = Math.min(6, run * 1.2);
+  ctx.strokeStyle = col; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(10, -22); ctx.quadraticCurveTo(16 + lean, -34, 17 + lean, -42); ctx.stroke();
+  ctx.fillStyle = 'rgba(20,26,34,0.92)';
+  ctx.beginPath(); ctx.ellipse(18 + lean, -44, 6, 4.5, 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = DRAGOON_COL;                                      // the beak
+  const snap = run >= JOUST_BAR.goblin ? (api.reduceMotion ? 1.5 : 1 + gait * 1.6) : 0.8;
+  ctx.beginPath(); ctx.moveTo(23 + lean, -45); ctx.lineTo(31 + lean, -44 + snap); ctx.lineTo(23 + lean, -42); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ffd24d';                                        // the eye
+  ctx.beginPath(); ctx.arc(19 + lean, -45, 1.4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 // the hero's current body color: P1 white / P2 green, overridden by the dash
 // cyan and the frost-wolf chill. The intro mannequins pass their display color
 // through `h.tint`. Used by the body draw AND the weapon arms/fists, so P2's
 // bow arm is green like the rest of P2.
 function heroTint(h) {
   if (h.tint) return h.tint;
-  const base = coop && p2 && h === p2 ? P2_COL : 'white';
+  const base = coop && p2 ? SEAT_COLS[heroSeat(h)] || 'white' : 'white';
   return h.dashT > 0 ? '#80deea' : h.chillT > 0 ? '#a8d8e8' : base;
 }
 // draw one hero (class-dressed figure + Aegis bubble + held weapon). A downed
 // hero is drawn fallen with a revive ring instead.
 function drawHero(h) {
   if (h.down) { drawDownedHero(h); return; }
+  if (h.cls === 'wyrm') { drawWyrm(h); return; }
   const lean = clamp(h.vx * 0.04, -0.3, 0.3);
   const col = heroTint(h);
   heroFigure(h.x, h.y, h.phase, col, h.cls, h.fx >= 0 ? 1 : -1, 1, 1, lean, h.dashT > 0 ? '#80deea' : 'rgba(255,255,255,0.5)');
@@ -3484,6 +4015,8 @@ function drawHero(h) {
   else if (h.cls === 'caster') drawHeldStaff(h);
   else if (h.cls === 'necro') drawHeldScythe(h);
   else if (h.cls === 'dragoon') drawHeldLance(h);
+  else if (h.cls === 'rider' && h.mounted) drawHeldLance(h);   // the saddle lance rides the aim
+  else if (h.cls === 'rider') drawHeldDirk(h);                 // unhorsed: a short desperate dirk
   else if (h.swordT > 0 || h.heldSaber) drawHeldSword(h);
 }
 // a fallen co-op hero: a prone figure with a revive ring that fills as a partner stands by
@@ -3520,10 +4053,13 @@ function knockback(cx, cy, killR, push, stun) {
   enemies = enemies.filter(e => !e.dead);
 }
 
+// heavy impacts hold the world — max semantics so a cleave punctuates, never stutters
+function hitStopFor(n) { hitStop = Math.min(14, Math.max(hitStop, n)); }
 function killEnemy(e) {
   if (e.dead) return;
   // downing the fell beast doesn't end the Witch-king — he rises and fights on foot
   if (e.type === 'witchking' && e.mounted) {
+    hitStopFor(10);   // the fell beast crashes — the world feels it
     e.mounted = false; e.hp = e.footMax; e.kr = 22; e.spd = 1.7;
     e.mode = 'walk'; e.st = 60; e.stun = 36; e.flailAng = 0;
     banner = 'the fell beast is slain!'; bannerSub = 'the Witch-king takes up his flail'; bannerT = 130;
@@ -3532,9 +4068,15 @@ function killEnemy(e) {
     return;
   }
   // DIO doesn't simply die — a slow crumble cutscene plays out (handled in dioFinale)
-  if (e.type === 'dio' && e.mode !== 'dying') { startDioFinale(e); return; }
+  if (e.type === 'dio' && e.mode !== 'dying') { hitStopFor(12); startDioFinale(e); return; }
   e.dead = true;
   kills++;
+  killsByType[e.type] = (killsByType[e.type] || 0) + 1;
+  // HIT-STOP: every kill lands with weight — a beat for a grunt, a held breath
+  // for a troll or an elite, the world stopping for a boss
+  hitStopFor(e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' ? 12
+           : e.type === 'ogre' ? 8
+           : e.type === 'troll' || e.elite ? 4 : 2);
   sfUnlock('first_blood');
   if (e.type === 'wolf' && e.elite && !noPersist()) {   // WOLFSBANE: frost + dire frost wolves, lifetime
     wolfKills++;
@@ -3560,11 +4102,13 @@ function killEnemy(e) {
   }
   const pts = ((e.type === 'dio' ? 500 : e.type === 'sidious' ? 400 : e.type === 'vader' ? 300 : e.type === 'witchking' ? 200 : e.type === 'ogre' ? 120 : e.type === 'troll' ? 40 : e.type === 'shaman' ? 35 : e.type === 'bomber' ? 35 : e.type === 'wraith' ? 30 : e.type === 'guard' ? 25 : e.type === 'trooper' ? 20 : 15) + bn.bounty) * mult * (e.elite === 2 ? 4 : e.elite ? 2 : 1);
   score += pts;
+  if (e.kr !== 0 || e.type === 'shaman' || e.type === 'bomber') addDecal(e.x, e.y, 'ash');   // (render-only) the field remembers the fallen
   addMeter(7);
   sparks.push({ x: e.x, y: e.y - 26, t: 20, color: '#ffd24d', txt: '+' + pts });
   sfSfx.killE();
   if (e.type === 'witchking') {
     sfUnlock('witch_king');
+    camKick(GW / 2 - e.x, GH / 2 - e.y, 5);   // (render-only) the fall pulls the camera in
     if (hardMode) sfUnlock('dark_hour');
     if (!hardMode) openBoonMenu('THE WITCH-KING FALLS — CHOOSE A BOON');   // hard mode: no gifts, ever
     bossActive = false; nineDone = true; corpses = [];
@@ -3579,12 +4123,14 @@ function killEnemy(e) {
     swTroopersLeft--;
   } else if (e.type === 'ogre') {
     sfUnlock('ogre');
+    camKick(GW / 2 - e.x, GH / 2 - e.y, 5);   // (render-only) the fall pulls the camera in
     // the mini-boss falls hard — extra points, a meter surge, and a guaranteed powerup drop
     banner = 'the war-ogre falls!'; bannerSub = '+200'; bannerT = 130;
     score += 200; addMeter(30); shake = 14;
     powerups.push({ x: e.x, y: e.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(rnd() * 3)], t: 820 });
   } else if (e.type === 'vader') {
     sfUnlock('vader');
+    camKick(GW / 2 - e.x, GH / 2 - e.y, 5);   // (render-only) the fall pulls the camera in
     // the dark lord falls — but a darker master waits in the void. keep the saber.
     vaderActive = false; swState = 'vaderdown';   // stay in the void; keep the lightsaber + starfield
     arrows = []; player.choke = 0; player.stunT = 0; swFlash = 0;  // clear in-flight saber / Force effects
@@ -3594,6 +4140,7 @@ function killEnemy(e) {
     // a breath, an upgrade, then the Emperor reveals himself
     if (!openUpgradeMenu('DARTH VADER FALLS')) sidiousCue = 110;
   } else if (e.type === 'sidious') {
+    camKick(GW / 2 - e.x, GH / 2 - e.y, 5);   // (render-only) the fall pulls the camera in
     // he does not simply fall — Darth Vader rises and bears him into the dark,
     // the Emperor's lightning storming over them both (reward deferred to the cutscene's end)
     sfUnlock('sidious');
@@ -3617,6 +4164,15 @@ function killEnemy(e) {
 // run only ends once both heroes are down (see downHero/endRun).
 function strike(h) {
   if (!h || h.down || h.dashT > 0 || h.iframe > 0) return;  // mid-dash i-frames / just-shielded
+  // (render-only) the living camera lurches WITH the blow — away from the likely striker
+  let kdx = 0, kdy = 1, kbest = Infinity;
+  for (const e of enemies) {
+    const d = Math.hypot(e.x - h.x, e.y - h.y);
+    if (d < kbest) { kbest = d; kdx = h.x - e.x; kdy = h.y - e.y; }
+  }
+  camKick(kdx, kdy, 7);
+  hurtFlash = { dx: -kdx, dy: -kdy, t: 26 };   // (render-only) the screen edge flares FROM the striker's side
+  hitStopFor(8);   // a blow that lands on a HERO stops the world hardest of all
   runFlawless = false;   // a blow got through the dodges (Aegis eating it still counts) — UNSCATHED is off
   if (h.shield) {
     // the Aegis takes the blow — shatters, buys a beat of safety, and shoves attackers off
@@ -3630,10 +4186,10 @@ function strike(h) {
     }
     return;
   }
-  if (bn.cheatDeath) {
+  if (h.bn.cheatDeath) {
     // DEATHWARD: the boon takes the blow that would have ended things — once.
     // Sits BELOW the Aegis on purpose: the shield refreshes every wave, this doesn't.
-    bn.cheatDeath = false; h.iframe = 60;
+    h.bn.cheatDeath = false; h.iframe = 60;
     shake = Math.max(shake, 12); sfSfx.shieldBreak();
     sparks.push({ x: h.x, y: h.y - 32, t: 34, color: '#ff8ab5', txt: '💖 DEATHWARD' });
     knockback(h.x, h.y, 0, 130, 16);
@@ -3642,15 +4198,30 @@ function strike(h) {
   downHero(h);
 }
 function downHero(h) {
+  camVictim = h;                                 // the kill cam frames whoever just fell
+  fieldWashSet('10,16,40', 0.3, 70);             // (render-only) the field drains cold as a hero falls
   if (!coop) { endRun(); return; }               // solo: a hit is simply the end
   h.down = true; h.downT = 0; h.reviveT = 0; h.vx = 0; h.vy = 0; h.dashT = 0; h.stunT = 0;
+  if (h.cls === 'rider') h.mounted = false;      // a struck rider is THROWN from the saddle
+  if (h.cls === 'wyrm' && p2 && p2.cls === 'rider' && p2.mounted && !p2.down) {
+    // the beast falls out from under the rider — dumped standing beside the body
+    p2.mounted = false;
+    p2.x = clamp(h.x + 20, 14, GW - 14); p2.y = h.y;
+    sparks.push({ x: p2.x, y: p2.y - 30, t: 20, color: DRAGOON_COL, txt: 'THROWN!' });
+  }
   sfSfx.die(); shake = Math.max(shake, 12);
   sparks.push({ x: h.x, y: h.y - 30, t: 34, color: '#ff5252', txt: 'DOWN!' });
   if (heroesLive().length === 0) endRun();        // both fallen — the horde wins
-  else { banner = (h === player ? 'PLAYER 1 DOWN' : 'PLAYER 2 DOWN'); bannerSub = 'a partner can revive — stand close'; bannerT = 90; }
+  else { banner = 'PLAYER ' + (heroSeat(h) + 1) + ' DOWN'; bannerSub = 'a partner can revive — stand close'; bannerT = 90; }
 }
 // the run is over (solo death, or both heroes down in co-op)
 function endRun() {
+  // arm the KILL CAM: the ghost tape's last seconds replay in slow motion before
+  // the death screen (render-only; any key skips; reduced motion goes straight on)
+  if (!replayMode && !api.reduceMotion && camTape.length > 30) {
+    const v = camVictim || player;
+    killCam = { tape: camTape, i: Math.max(0, camTape.length - CAM_SHOW), t: 0, hold: 0, fx: v.x, fy: v.y };
+  }
   if (replayMode) {                  // the legend falls again — nothing of the watcher's changes
     alive = false; sfSfx.die(); shake = 14; lbState = 'off';
     return;
@@ -3817,11 +4388,17 @@ function stopReplay() {
   init();                 // back to the title, the watcher's own setup restored
 }
 
-// ── netplay — online co-op: signaling, WebRTC handshake, lockstep gate, checksums ──
-/* ── online co-op: signaling, handshake, lockstep plumbing ──
-   (see the netplay comment block up top for the design; the per-tick feeder
-   lives at the top of loop() beside the replay feeder, and the tick gate in
-   frameStep) */
+// ── netplay — online co-op WAR BAND (2–4 seats): signaling, lobby, host-relayed lockstep, reconnection ──
+/* ── online co-op: a host-relayed STAR for up to NET_MAX_SEATS fighters ──
+   The HOST is seat 0 (P1) and every joiner links only to the host, which relays
+   input frames and menu events between clients — 2-player is simply the 2-seat
+   case of the same code path. One room code serves the whole band: the first
+   joiner takes the minted room, later joiners fall through to derived, gen-
+   stamped SLOT rooms the host re-arms after each join (the overwritable rejoin-
+   room machinery — zero new worker surface). Frames are seat-tagged ({t:'f',
+   p:seat}); a tick executes only when EVERY seat's frame for it is buffered
+   (netCanStep), so the relay adds at most one host hop of latency. The per-tick
+   feeder lives at the top of loop() beside the replay feeder. */
 const NET_RTC_CONF = {
   iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
 };
@@ -3839,28 +4416,36 @@ function netCandSummary(sdp) {
 function netLog(msg) {
   try { console.info('[sf-net] ' + msg); } catch (e) { /* no console */ }
 }
+/* room derivations — everything hangs off the ONE typed code:
+   - slot rooms (pre-run, joiners 2..3): rejoinHash(code + ':join:' + n, 0)
+   - per-seat rejoin rooms (mid-run reconnection): rejoinHash(code + ':' + seat, seed) */
+function netSlotRoom(code, n) { return rejoinHash(code + ':join:' + n, 0); }
+function netSeatRoom(seat) { return rejoinHash(netRoomCode + ':' + seat, netCfg ? netCfg.seed >>> 0 : 0); }
 function netOpen(mode) {
   netTeardown();
+  // a stale paired pick can't cross into the wrong seat: the joiner never plays
+  // the wyrm (they're P2+), and nobody plays the rider except through the pair
+  if (classSel === PAIR_RIDER || (classSel === PAIR_WYRM && mode !== 'host')) classSel = 0;
   netDiag = { local: '?', remote: '?', states: [] };
   netSaved = { c1: classSel, c2: classSel2, coop, daily: dailyRun, hs: hardSel,
                top: menuTop, ss: subSingle, sm: subMulti,
                gw: xp.offsetWidth, gh: xp.offsetHeight - 40 };
-  netUi = { mode, phase: mode === 'host' ? 'creating' : 'code', code: '', input: '', err: '', copiedT: 0 };
+  netIsHost = mode === 'host';
+  netSeat = netIsHost ? 0 : -1;
+  netConns = []; netArming = null;
+  netUi = { mode, phase: mode === 'host' ? 'creating' : 'code', code: '', input: '', err: '', copiedT: 0,
+            seats: netIsHost ? [{ c: classSel, r: false, on: true }] : null, myReady: false };
   netCfg = null;
-  if (mode === 'host') netStartHost();
+  if (mode === 'host') netHostArm(null);
 }
 // non-trickle ICE: wait for gathering so ONE blob carries the candidates —
 // signaling is a single store/fetch each way, no trickle channel needed.
-// Resolve on gathering-complete, or after 3s ONCE at least one candidate is in
-// the SDP (shipping a candidate-less blob guarantees an ICE failure — better to
-// wait out a slow STUN, hard-capped at 8s).
-function netWaitIce() {
+function netWaitIce(pc, aliveFn) {
   return new Promise((res) => {
-    const pc = netPc;
     if (!pc) return res();
     const t0 = Date.now();
     const poll = () => {
-      if (netPc !== pc) return res();       // torn down / retried meanwhile
+      if (aliveFn && !aliveFn()) return res();
       const sdp = (pc.localDescription && pc.localDescription.sdp) || '';
       const hasCand = /a=candidate:/.test(sdp);
       const dt = Date.now() - t0;
@@ -3870,294 +4455,453 @@ function netWaitIce() {
     poll();
   });
 }
-function netArmConnTimeout() {
-  if (netTimeout) clearTimeout(netTimeout);
-  netTimeout = setTimeout(() => {
-    netTimeout = 0;
-    if (!netplay && netUi && netUi.phase !== 'err') {
-      const diag = netDiag ? ' (you gathered ' + netDiag.local + ' · they sent ' + netDiag.remote + ')' : '';
-      netAbort('could not reach the other player' + diag + ' — a strict network may be blocking the path. both of you should retry (or try another network).');
-    }
-  }, 20000);
-}
-function netWirePc(pc) {
+/* ── link wiring — every pc/channel pair belongs to a `link`:
+   the CLIENT's single { host: true } link, a HOST conn (a seated client), or the
+   host's netArming placeholder. Guards compare against the link's own handles so
+   a torn-down link's late events go inert. ── */
+function netWirePc(pc, conn) {
   pc.onconnectionstatechange = () => {
-    if (netPc !== pc) return;
+    if (conn ? conn.pc !== pc : netPc !== pc) return;
     const s = pc.connectionState;
     if (netDiag) netDiag.states.push(s);
-    netLog('connection: ' + s);
-    if (s === 'connected' && netDiscoT) { clearTimeout(netDiscoT); netDiscoT = 0; }
-    // MID-RUN, a dead link no longer ends the game — the run is held and re-signaled
-    // (netStartRecon): `failed` reconnects at once; `disconnected` only after a 10s
-    // grace, because browsers often recover it on their own (a lagging or tabbed-away
-    // peer must NOT trigger a pointless re-signal — their link is fine, they're just
-    // not sending frames, and the stall badge covers that). Pre-run, `failed` still
-    // aborts to the connect screen. `closed` is covered by the channel's onclose
-    // (our own teardown nulls these handlers first, so it never self-trips).
+    netLog('connection' + (conn && conn.seat > 0 ? ' (P' + (conn.seat + 1) + ')' : '') + ': ' + s);
+    const dT = conn || { get discoT() { return netDiscoT; }, set discoT(v) { netDiscoT = v; } };
+    if (s === 'connected' && dT.discoT) { clearTimeout(dT.discoT); dT.discoT = 0; }
+    // MID-RUN a dead link holds the run and re-signals (netStartRecon): `failed`
+    // reconnects at once, `disconnected` after a 10s grace (browsers often recover
+    // it; a lagging/tabbed-away peer is covered by the stall badge, not a re-signal)
     if (netplay) {
-      if (s === 'failed') netStartRecon('the peer link failed');
-      else if (s === 'disconnected' && !netRecon && !netDiscoT) {
-        netDiscoT = setTimeout(() => {
-          netDiscoT = 0;
-          if (netplay && !netRecon && netPc === pc && pc.connectionState === 'disconnected') {
-            netStartRecon('the link went quiet');
+      if (s === 'failed') netStartRecon(conn, 'the peer link failed');
+      else if (s === 'disconnected' && !(conn ? conn.recon : netRecon) && !dT.discoT) {
+        dT.discoT = setTimeout(() => {
+          dT.discoT = 0;
+          if (netplay && !(conn ? conn.recon : netRecon) &&
+              (conn ? conn.pc === pc : netPc === pc) && pc.connectionState === 'disconnected') {
+            netStartRecon(conn, 'the link went quiet');
           }
         }, 10000);
       }
       return;
     }
     if (s === 'failed') {
+      if (conn) { netHostDropLink(conn, 'lost a joiner mid-connect'); return; }
       const diag = netDiag ? ' (you gathered ' + netDiag.local + ' · they sent ' + netDiag.remote + ')' : '';
       if (netUi && netUi.phase !== 'err' && netUi.phase !== 'code') {
-        netAbort('no direct route between you could be found' + diag + ' — retry, or try a different network. VPNs and strict NATs block peer links.');
+        netAbort('no direct route could be found' + diag + ' — retry, or try a different network. VPNs and strict NATs block peer links.');
       }
     }
   };
 }
-function netWireChannel(dc) {
-  netChan = dc;
+function netWireChannel(dc, conn) {
+  if (conn) conn.chan = dc; else netChan = dc;
   dc.onopen = () => {
-    if (netChan !== dc) return;
-    netLog('data channel open');
+    if ((conn ? conn.chan : netChan) !== dc) return;
+    netLog('data channel open' + (conn && conn.seat > 0 ? ' (P' + (conn.seat + 1) + ')' : ''));
     if (netTimeout) { clearTimeout(netTimeout); netTimeout = 0; }
-    // don't clobber the lobby if the peer's hello already arrived (a same-tick
-    // delivery can land the message before our own open event fires)
-    if (netUi && netUi.phase !== 'lobby') netUi.phase = 'handshake';
+    if (netUi && netUi.phase !== 'lobby') netUi.phase = netIsHost ? (netUi.phase === 'waiting' || netUi.phase === 'creating' ? netUi.phase : 'lobby') : 'handshake';
     if (netplay) {
-      // mid-run reconnect — swap resume state instead of the hello handshake. The
-      // client wipes its pending host-menu events first: the host's authoritative
-      // log re-sends everything past our tick, so a wipe-then-resend can't lose or
-      // double-apply a pick (see the 'resume' handler).
-      if (!netIsHost) netEvents = [];
-      netSend({ t: 'resume', r: netRunId, k: tick, have: netHaveRemote });
+      // mid-run reconnect — swap resume state instead of the hello handshake.
+      // The CLIENT reports per-seat floors (it receives every seat through the
+      // host); the HOST reports the scalar floor of that client's own frames.
+      if (conn) netSendTo(conn, { t: 'resume', r: netRunId, k: tick, have: conn.have });
+      else netSend({ t: 'resume', r: netRunId, k: tick, have: netHave || [] });
       return;
     }
-    // the client opens the handshake; the host answers with the run config
+    // a joiner opens the handshake; the host answers with a seat + the lobby
     if (!netIsHost) netSend({ t: 'hello', nv: NET_VER, sv: NET_SIM_V, cls: classSel, gw: GW, gh: GH });
   };
   dc.onmessage = (ev) => {
-    if (netChan !== dc) return;
+    if ((conn ? conn.chan : netChan) !== dc) return;
     let m = null;
     try { m = JSON.parse(ev.data); } catch (_) { return; }
-    if (m && typeof m.t === 'string') netHandle(m);
+    if (m && typeof m.t === 'string') netHandle(m, conn);
   };
   dc.onclose = () => {
-    if (netChan !== dc) return;
+    if ((conn ? conn.chan : netChan) !== dc) return;
     // mid-run, a closed channel is a DROP, not an exit — hold the run and re-signal
     // (a deliberate exit crosses as 'bye' before the close and lands in netLeave)
-    if (netplay) netStartRecon('the link closed');
-    else if (netUi && netUi.phase !== 'err') netAbort('the connection closed before the game began');
+    if (netplay) netStartRecon(conn, 'the link closed');
+    else if (conn) netHostDropLink(conn, 'a joiner left');
+    else if (netUi && netUi.phase !== 'err' && !netIsHost) netAbort('the connection closed before the game began');
   };
 }
+// host: broadcast to every open conn · client: to the host link
 function netSend(o) {
-  try { if (netChan && netChan.readyState === 'open') netChan.send(JSON.stringify(o)); } catch (_) {}
+  const s = JSON.stringify(o);
+  if (netIsHost) {
+    for (const c of netConns) {
+      try { if (c.chan && c.chan.readyState === 'open') c.chan.send(s); } catch (_) { /* that link is dying */ }
+    }
+  } else {
+    try { if (netChan && netChan.readyState === 'open') netChan.send(s); } catch (_) { /* dying */ }
+  }
 }
-async function netStartHost() {
+function netSendTo(conn, o) {
+  try { if (conn.chan && conn.chan.readyState === 'open') conn.chan.send(JSON.stringify(o)); } catch (_) { /* dying */ }
+}
+function netRelay(m, fromConn) {   // host: forward a message to every OTHER conn
+  const s = JSON.stringify(m);
+  for (const c of netConns) {
+    if (c === fromConn) continue;
+    try { if (c.chan && c.chan.readyState === 'open') c.chan.send(s); } catch (_) { /* dying */ }
+  }
+}
+/* ── HOST: arm a room and wait for the next joiner. The first arm mints the
+   typed room code; every later arm re-posts a fresh gen-stamped offer into one
+   of the two derived slot rooms (alternating), which joiners try in order. ── */
+let netArmSeq = 0;
+async function netHostArm(slotCode) {
   const base = lbBase();
-  if (!base) { netAbort('online play needs the room service, and it is unreachable'); return; }
+  if (!base) { if (!netConns.length) netAbort('online play needs the room service, and it is unreachable'); return; }
+  const pend = { seat: -1, pc: null, chan: null, have: NET_DELAY, csRemote: new Map(),
+                 recon: null, discoT: 0, ack: false, cls: 0, gw: GW, gh: GH, room: slotCode, pollId: 0 };
   try {
-    netIsHost = true;
-    netPc = new RTCPeerConnection(NET_RTC_CONF);
-    netWirePc(netPc);
-    netWireChannel(netPc.createDataChannel('sf', { ordered: true }));   // reliable+ordered: lockstep's transport
-    const offer = await netPc.createOffer();
-    await netPc.setLocalDescription(offer);
-    await netWaitIce();
-    if (!netPc || !netUi || netUi.mode !== 'host') return;   // player backed out mid-create
-    if (netDiag) netDiag.local = netCandSummary(netPc.localDescription.sdp);
-    netLog('offer ready — candidates: ' + netCandSummary(netPc.localDescription.sdp));
+    const pc = new RTCPeerConnection(NET_RTC_CONF);
+    pend.pc = pc;
+    netArming = pend;
+    netWirePc(pc, pend);
+    netWireChannel(pc.createDataChannel('sf', { ordered: true }), pend);
+    await pc.setLocalDescription(await pc.createOffer());
+    await netWaitIce(pc, () => netArming === pend);
+    if (netArming !== pend || !netUi || netUi.mode !== 'host') return;
+    if (netDiag && !slotCode) netDiag.local = netCandSummary(pc.localDescription.sdp);
+    const body = slotCode
+      ? { rejoin: slotCode, offer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }
+      : { offer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } };
     const r = await fetch(base + '/mp-host', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ offer: { type: netPc.localDescription.type, sdp: netPc.localDescription.sdp } }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error('mp-host ' + r.status);
     const d = await r.json();
-    if (!netUi || netUi.mode !== 'host') return;
-    netUi.code = String(d.code || '');
-    netRoomCode = netUi.code;   // kept past the connect screen — the rejoin room derives from it
-    netUi.phase = 'waiting';
+    if (netArming !== pend || !netUi || netUi.mode !== 'host') return;
+    if (!slotCode) {
+      netUi.code = String(d.code || '');
+      netRoomCode = netUi.code;   // every derived room hangs off this
+      netUi.phase = 'waiting';
+    }
+    pend.room = slotCode || netUi.code;
     let polls = 0;
-    netPoll = setInterval(async () => {
-      if (!netPc || !netUi || netUi.phase !== 'waiting') { clearInterval(netPoll); netPoll = 0; return; }
-      if (++polls > 150) { netAbort('the room expired — nobody joined in time'); return; }   // ~5 min
+    pend.pollId = setInterval(async () => {
+      if (netArming !== pend || !netUi) { clearInterval(pend.pollId); pend.pollId = 0; return; }
+      polls++;
+      if (!slotCode && !netConns.length && polls > 150) { netAbort('the room expired — nobody joined in time'); return; }  // ~5 min, first joiner only
+      if (slotCode && polls % 110 === 0) {
+        // slot rooms expire in 5 min — quietly re-arm a fresh offer before that
+        clearInterval(pend.pollId); pend.pollId = 0;
+        if (netArming === pend) { netArming = null; try { pend.pc.close(); } catch (_) {} netHostArm(slotCode); }
+        return;
+      }
       try {
-        const rr = await fetch(base + '/mp-answer?code=' + encodeURIComponent(netUi.code));
+        const rr = await fetch(base + '/mp-answer?code=' + encodeURIComponent(pend.room));
         if (!rr.ok) return;
         const dd = await rr.json();
-        if (dd && dd.answer && netPc && netPc.signalingState === 'have-local-offer') {
-          clearInterval(netPoll); netPoll = 0;
-          if (netUi) netUi.phase = 'connecting';
-          if (netDiag) netDiag.remote = netCandSummary(dd.answer.sdp);
-          netLog('answer received — their candidates: ' + netCandSummary(dd.answer.sdp));
-          netArmConnTimeout();
-          await netPc.setRemoteDescription(dd.answer);
+        if (dd && dd.answer && pend.pc && pend.pc.signalingState === 'have-local-offer') {
+          clearInterval(pend.pollId); pend.pollId = 0;
+          if (netDiag && !slotCode) netDiag.remote = netCandSummary(dd.answer.sdp);
+          netLog('answer received in ' + pend.room);
+          await pend.pc.setRemoteDescription(dd.answer);
+          // the channel's open → the joiner's hello seats them (netHandle)
         }
       } catch (_) { /* transient poll failure — try again next interval */ }
     }, 2000);
-  } catch (_) { netAbort('could not create a room — check your connection and try again'); }
+  } catch (_) {
+    if (!netConns.length && !slotCode) netAbort('could not create a room — check your connection and try again');
+  }
+}
+// a pre-run link died (or a lobby member left): free the seat, shift the ones
+// above it down (seats stay contiguous), tell everyone, and re-arm a slot
+function netHostDropLink(conn, why) {
+  netLog(why);
+  try { if (conn.pollId) clearInterval(conn.pollId); } catch (_) {}
+  try { if (conn.chan) { conn.chan.onmessage = conn.chan.onopen = conn.chan.onclose = null; conn.chan.close(); } } catch (_) {}
+  try { if (conn.pc) { conn.pc.onconnectionstatechange = null; conn.pc.close(); } } catch (_) {}
+  const i = netConns.indexOf(conn);
+  if (i < 0) { if (netArming === conn) { netArming = null; netHostArmNext(); } return; }
+  netConns.splice(i, 1);
+  for (const c of netConns) {
+    if (c.seat > conn.seat) { c.seat--; netSendTo(c, { t: 'seat', n: c.seat, nv: NET_VER, sv: NET_SIM_V }); }
+  }
+  netLobbySync();
+  netHostArmNext();
+}
+function netHostArmNext() {
+  if (!netUi || netUi.mode !== 'host' || netplay) return;
+  if (netArming || netConns.length + 1 >= NET_MAX_SEATS) return;
+  netHostArm(netSlotRoom(netRoomCode, 2 + (netArmSeq++ % 2)));
+}
+// rebuild + broadcast the lobby's seat table (host-authoritative)
+function netLobbySync() {
+  if (!netIsHost || !netUi) return;
+  const seats = [{ c: classSel, r: !!netUi.myReady, on: true }];
+  for (const c of netConns) seats[c.seat] = { c: c.cls, r: !!c.ready, on: true };
+  netUi.seats = seats;
+  netSend({ t: 'lob', seats, code: netRoomCode });
+}
+// lobby actions shared by the key handler (23-input) — each side owns its seat
+function netLobbyCls() {
+  if (netIsHost) netLobbySync();
+  else netSend({ t: 'cls', c: classSel });
+}
+function netLobbyReady(v) {
+  if (netUi) netUi.myReady = v;
+  if (netIsHost) { netLobbySync(); netLobbyMaybeStart(); }
+  else netSend({ t: 'rdy', v: v ? 1 : 0 });
 }
 async function netStartJoin(code) {
   const base = lbBase();
   if (!base) { netAbort('online play needs the room service, and it is unreachable'); return; }
   netUi.phase = 'connecting'; netUi.code = code; netUi.err = '';
-  netRoomCode = code;   // kept past the connect screen — the rejoin room derives from it
+  netRoomCode = code;
+  netIsHost = false; netSeat = -1;
+  const ui = netUi;
+  const candidates = [code, netSlotRoom(code, 2), netSlotRoom(code, 3)];
+  const tried = new Set();   // cand+gen pairs that 409'd — don't re-answer a taken offer
   try {
-    netIsHost = false;
-    const r = await fetch(base + '/mp-offer?code=' + encodeURIComponent(code));
-    if (r.status === 404) { netUi.phase = 'code'; netUi.input = ''; netUi.err = 'room not found — check the code (rooms expire after 5 minutes)'; return; }
-    if (!r.ok) throw new Error('mp-offer ' + r.status);
-    const d = await r.json();
-    if (!d || !d.offer) throw new Error('bad offer');
-    netPc = new RTCPeerConnection(NET_RTC_CONF);
-    netWirePc(netPc);
-    netPc.ondatachannel = (ev) => { if (netPc) netWireChannel(ev.channel); };
-    if (netDiag) netDiag.remote = netCandSummary(d.offer.sdp);
-    netLog('offer fetched — their candidates: ' + netCandSummary(d.offer.sdp));
-    await netPc.setRemoteDescription(d.offer);
-    const ans = await netPc.createAnswer();
-    await netPc.setLocalDescription(ans);
-    await netWaitIce();
-    if (!netPc || !netUi) return;
-    if (netDiag) netDiag.local = netCandSummary(netPc.localDescription.sdp);
-    netLog('answer ready — candidates: ' + netCandSummary(netPc.localDescription.sdp));
-    const rr = await fetch(base + '/mp-join', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, answer: { type: netPc.localDescription.type, sdp: netPc.localDescription.sdp } }),
-    });
-    if (rr.status === 409) { netAbort('someone already joined that room'); return; }
-    if (!rr.ok) throw new Error('mp-join ' + rr.status);
-    netArmConnTimeout();
-  } catch (_) { netAbort('could not join — check your connection and the code'); }
+    let sawRoom = false;
+    for (let round = 0; round < 40 && netUi === ui && ui.phase === 'connecting'; round++) {
+      for (const cand of candidates) {
+        if (netUi !== ui || ui.phase !== 'connecting') return;
+        let d = null;
+        try {
+          const r = await fetch(base + '/mp-offer?code=' + encodeURIComponent(cand));
+          if (!r.ok) continue;
+          d = await r.json();
+        } catch (_) { continue; }
+        if (!d || !d.offer) continue;
+        sawRoom = true;
+        const gen = d.gen ? String(d.gen) : '';
+        if (tried.has(cand + '#' + gen)) continue;
+        const pc = new RTCPeerConnection(NET_RTC_CONF);
+        netPc = pc;
+        netWirePc(pc, null);
+        pc.ondatachannel = (ev) => { if (netPc === pc) netWireChannel(ev.channel, null); };
+        if (netDiag) netDiag.remote = netCandSummary(d.offer.sdp);
+        await pc.setRemoteDescription(d.offer);
+        await pc.setLocalDescription(await pc.createAnswer());
+        await netWaitIce(pc, () => netPc === pc && netUi === ui);
+        if (netUi !== ui || netPc !== pc) return;
+        if (netDiag) netDiag.local = netCandSummary(pc.localDescription.sdp);
+        const body = { code: cand, answer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } };
+        if (gen) body.gen = gen;
+        let rr = null;
+        try {
+          rr = await fetch(base + '/mp-join', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+          });
+        } catch (_) { /* fall through to retry */ }
+        if (rr && rr.ok) {
+          netArmConnTimeout();
+          return;   // the channel's open → hello → seat assignment drive the rest
+        }
+        tried.add(cand + '#' + gen);
+        try { pc.close(); } catch (_) {}
+        if (netPc === pc) { netPc = null; netChan = null; }
+      }
+      await new Promise((res) => setTimeout(res, 700));
+    }
+    if (netUi === ui && ui.phase === 'connecting') {
+      if (sawRoom) netAbort('that war band is full (4 fighters max) — or the room went stale. ask the host for a fresh code.');
+      else { ui.phase = 'code'; ui.input = ''; ui.err = 'room not found — check the code (rooms expire after 5 minutes)'; }
+    }
+  } catch (_) { if (netUi === ui) netAbort('could not join — check your connection and the code'); }
 }
-function netHandle(m) {
+function netArmConnTimeout() {
+  if (netTimeout) clearTimeout(netTimeout);
+  netTimeout = setTimeout(() => {
+    netTimeout = 0;
+    if (!netplay && !netIsHost && netUi && netUi.phase !== 'err' && netUi.phase !== 'lobby') {
+      const diag = netDiag ? ' (you gathered ' + netDiag.local + ' · they sent ' + netDiag.remote + ')' : '';
+      netAbort('could not reach the host' + diag + ' — a strict network may be blocking the path. retry, or try another network.');
+    }
+  }, 20000);
+}
+function netHandle(m, conn) {
   switch (m.t) {
-    case 'hello': {   // host side: the client introduces itself → open the READY LOBBY
-      if (!netIsHost || netplay || netCfg) return;
+    case 'hello': {   // host side: a joiner introduces itself → seat it, open the lobby
+      if (!netIsHost || netplay || netCfg || !conn) return;
       if (m.nv !== NET_VER || m.sv !== NET_SIM_V) {
-        netSend({ t: 'err', why: 'version' });
-        netAbort('version mismatch — you two are on different builds. both of you: reload the page and retry.');
+        netSendTo(conn, { t: 'err', why: 'version' });
+        netHostDropLink(conn, 'version-mismatched joiner turned away');
         return;
       }
-      if (netUi) {
-        netUi.phase = 'lobby';
-        netUi.peerCls = clamp(m.cls | 0, 0, CLASSES.length - 1);
-        netUi.peerGw = Math.max(320, m.gw | 0) || GW;
-        netUi.peerGh = Math.max(240, m.gh | 0) || GH;
-        netUi.myReady = false; netUi.peerReady = false;
+      if (netConns.length + 1 >= NET_MAX_SEATS && !netConns.includes(conn)) {
+        netSendTo(conn, { t: 'full' });
+        netHostDropLink(conn, 'room full');
+        return;
       }
-      netSend({ t: 'lobby', nv: NET_VER, sv: NET_SIM_V, cls: classSel });
+      conn.seat = netConns.length + 1;
+      conn.cls = clamp(m.cls | 0, 0, PAIR_WYRM - 1);   // joiners never pick the pair
+      conn.gw = Math.max(320, m.gw | 0) || GW;
+      conn.gh = Math.max(240, m.gh | 0) || GH;
+      conn.ready = false;
+      if (netArming === conn) netArming = null;
+      netConns.push(conn);
+      if (netUi) netUi.phase = 'lobby';
+      netSendTo(conn, { t: 'seat', n: conn.seat, nv: NET_VER, sv: NET_SIM_V });
+      netLobbySync();
+      netHostArmNext();   // park the next offer for the rest of the band
       break;
     }
-    case 'lobby': {   // client side: the host opened the ready lobby (version-checked both ways)
+    case 'seat':      // client side: the host seated us (version-checked both ways)
       if (netIsHost || netplay) return;
-      if (m.nv !== NET_VER || m.sv !== NET_SIM_V) { netAbort('version mismatch — you two are on different builds. both of you: reload the page and retry.'); return; }
-      if (netUi) {
-        netUi.phase = 'lobby';
-        netUi.peerCls = clamp(m.cls | 0, 0, CLASSES.length - 1);
-        netUi.myReady = false; netUi.peerReady = false;
-      }
+      if (m.nv !== NET_VER || m.sv !== NET_SIM_V) { netAbort('version mismatch — you are on different builds. everyone: reload the page and retry.'); return; }
+      netSeat = clamp(m.n | 0, 1, NET_MAX_SEATS - 1);
+      if (netUi) { netUi.phase = 'lobby'; netUi.myReady = false; }
       break;
-    }
-    case 'cls':       // lobby: the peer re-picked their hero (live on both screens)
-      if (!netplay && netUi && netUi.phase === 'lobby') netUi.peerCls = clamp(m.c | 0, 0, CLASSES.length - 1);
+    case 'lob':       // client side: the lobby's seat table (host-authoritative)
+      if (netIsHost || netplay || !netUi) return;
+      netUi.seats = Array.isArray(m.seats) ? m.seats : [];
       break;
-    case 'rdy':       // lobby: the peer toggled ready — when BOTH are, the host starts
-      if (!netplay && netUi && netUi.phase === 'lobby') {
-        netUi.peerReady = !!m.v;
-        netLobbyMaybeStart();
-      }
+    case 'cls':       // host side: a joiner re-picked their hero
+      if (!netIsHost || netplay || !conn || conn.seat < 1) return;
+      conn.cls = clamp(m.c | 0, 0, PAIR_WYRM - 1);
+      netLobbySync();
+      break;
+    case 'rdy':       // host side: a joiner toggled ready
+      if (!netIsHost || netplay || !conn || conn.seat < 1) return;
+      conn.ready = !!m.v;
+      netLobbySync();
+      netLobbyMaybeStart();
       break;
     case 'cfg': {     // client side: adopt the host's authoritative run header
       if (netIsHost || netplay) return;
-      if (m.nv !== NET_VER || m.v !== NET_SIM_V) { netAbort('version mismatch — you two are on different builds. both of you: reload the page and retry.'); return; }
-      netCfg = { v: m.v, seed: m.seed >>> 0,
-                 c1: clamp(m.c1 | 0, 0, CLASSES.length - 1), c2: clamp(m.c2 | 0, 0, CLASSES.length - 1),
+      if (m.nv !== NET_VER || m.v !== NET_SIM_V) { netAbort('version mismatch — you are on different builds. everyone: reload the page and retry.'); return; }
+      const cs = (Array.isArray(m.cs) ? m.cs : []).slice(0, NET_MAX_SEATS).map((c) => clamp(c | 0, 0, CLASSES.length - 1));
+      if (cs.length < 2) return;
+      netCfg = { v: m.v, seed: m.seed >>> 0, cs,
                  hd: m.hd ? 1 : 0, up0: Array.isArray(m.up0) ? m.up0 : [],
                  tk0: m.tk0 | 0, mw0: m.mw0 | 0,
                  gw: Math.max(320, m.gw | 0), gh: Math.max(240, m.gh | 0) };
       netSend({ t: 'ready' });
       break;
     }
-    case 'ready': if (netIsHost && netCfg && !netplay) { netSend({ t: 'go' }); netBeginRun(); } break;
+    case 'ready':     // host side: a joiner acked the cfg — go when the whole band has
+      if (!netIsHost || !netCfg || netplay || !conn) return;
+      conn.ack = true;
+      if (netConns.every((c) => c.ack)) { netSend({ t: 'go' }); netBeginRun(); }
+      break;
     case 'go':    if (!netIsHost && netCfg && !netplay) netBeginRun(); break;
-    case 'f': {       // a remote input frame for tick m.k
+    case 'f': {       // a seat-tagged input frame for tick m.k
       if (!netplay || m.r !== netRunId || typeof m.k !== 'number') return;
+      const p = m.p | 0;
+      if (p < 0 || p >= netFrames.length || p === netSeat) return;
+      if (netIsHost && (!conn || p !== conn.seat)) return;   // a client only speaks for its own seat
       const fk = m.k | 0;
-      if (fk > netHaveRemote) netHaveRemote = fk;   // resume re-sends start past this
-      netFrames[netIsHost ? 1 : 0].set(fk,
-        { m: m.m | 0, e: m.e | 0, s: (typeof m.s === 'number') ? m.s | 0 : -1, h: m.h | 0 });
+      netFrames[p].set(fk, { m: m.m | 0, e: m.e | 0, s: (typeof m.s === 'number') ? m.s | 0 : -1, h: m.h | 0 });
+      if (netIsHost) { if (fk > conn.have) conn.have = fk; netRelay(m, conn); }
+      else if (netHave && fk > netHave[p]) netHave[p] = fk;
       break;
     }
-    case 'resume': {  // the link is back mid-run: refill whatever the drop swallowed
+    case 'resume': {  // a link is back mid-run: refill whatever the drop swallowed
       if (!netplay || m.r !== netRunId) return;
-      // re-send our own staged frames the peer never received (retained in our half
-      // of netFrames — the loop keeps a trailing window for exactly this)
-      const mine = netFrames[netIsHost ? 0 : 1];
-      for (let k = (m.have | 0) + 1; k <= tick + NET_DELAY; k++) {
-        const f = mine.get(k);
-        if (f) netSend({ t: 'f', r: netRunId, k, m: f.m, e: f.e, s: f.s, h: f.h });
-      }
-      // the host's menu-event log is authoritative: re-send everything past the
-      // peer's tick (the peer wiped its pending list at reopen, so no duplicates)
-      if (netIsHost) {
+      if (netIsHost && conn) {
+        // the client reported per-seat floors — refill EVERY seat from our buffers
+        const floors = Array.isArray(m.have) ? m.have : [];
+        for (let sIdx = 0; sIdx < netFrames.length; sIdx++) {
+          if (sIdx === conn.seat) continue;
+          const from = (floors[sIdx] | 0) + 1;
+          for (let k = from; k <= tick + NET_DELAY; k++) {
+            const f = netFrames[sIdx].get(k);
+            if (f) netSendTo(conn, { t: 'f', r: netRunId, p: sIdx, k, m: f.m, e: f.e, s: f.s, h: f.h });
+          }
+        }
+        for (const ev of netEventLog) {
+          if (ev[0] > (m.k | 0)) netSendTo(conn, { t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
+        }
+        conn.recon = null;
+      } else if (!netIsHost) {
+        // the host reported the scalar floor of OUR frames — resend our own
+        const mine = netFrames[netSeat];
+        for (let k = (m.have | 0) + 1; k <= tick + NET_DELAY; k++) {
+          const f = mine.get(k);
+          if (f) netSend({ t: 'f', r: netRunId, p: netSeat, k, m: f.m, e: f.e, s: f.s, h: f.h });
+        }
         for (const ev of netEventLog) {
           if (ev[0] > (m.k | 0)) netSend({ t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
         }
+        netRecon = null;
       }
-      netRecon = null; netStall = 0;
-      netLog('resumed at tick ' + tick + ' (peer at ' + (m.k | 0) + ', had our frames through ' + (m.have | 0) + ')');
+      netStall = 0;
+      netLog('resumed at tick ' + tick + (conn ? ' (P' + (conn.seat + 1) + ')' : ''));
       break;
     }
-    case 'ev':        // a host menu pick, tick-stamped (client applies via its feeder)
-      if (netplay && !netIsHost && m.r === netRunId && typeof m.k === 'number') {
-        netEvents.push([m.k | 0, m.op | 0, m.a]);
-        netEvents.sort((x, y) => x[0] - y[0]);
+    case 'ev': {      // a tick-stamped menu event. Host-authoritative EXCEPT each
+      // seat's own boon pick (op 12) and shop buys (op 7) — those cross upward
+      // and the host relays them to the rest of the band.
+      if (!netplay || m.r !== netRunId || typeof m.k !== 'number') return;
+      const eop = m.op | 0;
+      if (netIsHost && eop !== 12 && eop !== 7) return;
+      const ek = m.k | 0;
+      // dedupe: reconnect resumes re-send logs, so an event may arrive twice
+      if (ek <= tick || netEvents.some(x => x[0] === ek && x[1] === eop && x[2] === m.a)) return;
+      netEvents.push([ek, eop, m.a]);
+      netEvents.sort((x, y) => x[0] - y[0]);
+      if (netIsHost) {
+        netEventLog.push([ek, eop, m.a]);   // the relay hub's log covers the whole band
+        netRelay(m, conn);
       }
       break;
-    case 'cs':        // the remote's periodic sim checksum
-      if (netplay && m.r === netRunId && typeof m.k === 'number') {
+    }
+    case 'cs':        // a peer's periodic sim checksum
+      if (!netplay || m.r !== netRunId || typeof m.k !== 'number') return;
+      if (netIsHost) {
+        if (!conn) return;
+        conn.csRemote.set(m.k | 0, m.h >>> 0);
+        netCheckCsConn(conn, m.k | 0);
+      } else {
         netCsRemote.set(m.k | 0, m.h >>> 0);
         netCheckCs(m.k | 0);
       }
       break;
-    case 'restart':   // host rematch: same team & cfg, a fresh shared seed
+    case 'restart':   // host rematch: same band & cfg, a fresh shared seed
       if (netplay && !netIsHost && netCfg && typeof m.seed === 'number') { netCfg.seed = m.seed >>> 0; netBeginRun(); }
       break;
     case 'bye':
-      if (netplay) netLeave('THE OTHER PLAYER LEFT');
-      else if (netUi) netAbort('the other player backed out');
+      if (netplay) {
+        if (netIsHost) netSend({ t: 'bye' });   // one leaver disbands the band — tell the rest
+        netLeave('A FIGHTER LEFT — the war band disbands');
+      } else if (netIsHost && conn) netHostDropLink(conn, 'a joiner backed out');
+      else if (netUi) netAbort('the host backed out');
+      break;
+    case 'full':
+      if (!netplay) netAbort('that war band is full (4 fighters max)');
       break;
     case 'err':
-      if (m.why === 'version') netAbort('version mismatch — you two are on different builds. both of you: reload the page and retry.');
+      if (m.why === 'version') netAbort('version mismatch — you are on different builds. everyone: reload the page and retry.');
       break;
   }
 }
-// both players ready → the HOST builds the authoritative run header, and the old
-// cfg → ready → go handshake finishes the job (the lobby is a confirm gate in front
-// of it — nobody's run starts under a class they were still deciding on)
+// the whole band ready → the HOST builds the authoritative run header; each ack
+// (‘ready’) is counted and ‘go’ starts every sim at once
 function netLobbyMaybeStart() {
   if (!netIsHost || netplay || netCfg) return;
-  if (!netUi || netUi.phase !== 'lobby' || !netUi.myReady || !netUi.peerReady) return;
-  const c2 = netUi.peerCls | 0;
+  if (!netUi || netUi.phase !== 'lobby' || !netUi.myReady) return;
+  if (!netConns.length || !netConns.every((c) => c.ready)) return;
+  const cs = [classSel === PAIR_WYRM ? PAIR_WYRM : clamp(classSel, 0, PAIR_WYRM)];
+  for (const c of netConns) cs[c.seat] = clamp(c.cls | 0, 0, PAIR_WYRM - 1);
+  // the WYRM & RIDER pair: the host in the beast binds SEAT 1 to the saddle
+  if (cs[0] === PAIR_WYRM && cs.length > 1) cs[1] = PAIR_RIDER;
   // fresh entropy for the shared seed (the one non-deterministic input, as in init)
   const seed = (((Date.now() >>> 0) ^ ((Math.random() * 0x100000000) >>> 0)) >>> 0);
-  // snapshot the host's own party profile for this duo (upProfile reads classSel2/coop)
+  // snapshot the host's own party profile (upProfile reads classSel2/coop)
   const savedC2 = classSel2, savedCoop = coop;
-  classSel2 = c2; coop = true;
+  classSel2 = cs[1] | 0; coop = true;
   const up0 = [...loadSavedUpgrades()];
   const tk0 = parseInt(loadProfileItem('ilaird_sf_tokens') || '0', 10) || 0;
   const mw0 = parseInt(loadProfileItem('ilaird_sf_maxwave', false) || '0', 10) || 0;
   classSel2 = savedC2; coop = savedCoop;
-  const gw = Math.min(GW, netUi.peerGw || GW);
-  const gh = Math.min(GH, netUi.peerGh || GH);
-  netCfg = { v: NET_SIM_V, seed, c1: classSel, c2, hd: 0, up0, tk0, mw0, gw, gh };
+  let gw = GW, gh = GH;
+  for (const c of netConns) { gw = Math.min(gw, c.gw || GW); gh = Math.min(gh, c.gh || GH); }
+  netCfg = { v: NET_SIM_V, seed, cs, hd: 0, up0, tk0, mw0, gw, gh };
+  for (const c of netConns) c.ack = false;
   netUi.phase = 'starting';
   netSend({ t: 'cfg', nv: NET_VER, ...netCfg });
 }
-// host menu picks (boon / shop / boss-intro / Ian) become tick-stamped events applied
-// by BOTH feeders. Stamped tick+NET_DELAY+1: the other peer can run at most NET_DELAY
-// ticks ahead of our last-sent frame, and the ordered channel delivers this before any
-// frame that would let it pass that stamp — so neither sim can have passed it.
+// menu picks become tick-stamped events applied by EVERY feeder. Stamped
+// tick+NET_DELAY+1: no peer can run more than NET_DELAY ahead of our last-sent
+// frame, and the ordered channel delivers this before any frame that would let
+// it pass the stamp — so no sim can have passed it. (A client's event reaches
+// the far clients one host-relay later, still inside the same bound + delay.)
 function netQueueEvent(op, a) {
   const k = tick + NET_DELAY + 1;
   netEvents.push([k, op, a]);
@@ -4169,39 +4913,38 @@ function netBeginRun() {
   netplay = true;
   netRunId++;
   netUi = null;
+  const cs = netCfg.cs;
   // impersonate the shared config (startReplay-style); netSaved restores on exit
-  classSel = netCfg.c1; classSel2 = netCfg.c2;
+  classSel = cs[0]; classSel2 = cs[1] | 0;
   coop = true; dailyRun = false; hardSel = false;
   sfSeedOverride = netCfg.seed >>> 0;
   setGameDims(netCfg.gw, netCfg.gh);
-  netFrames = [new Map(), new Map()];
-  // pre-seed the first NET_DELAY ticks with silence on both sides, so tick 1 can run
+  netFrames = cs.map(() => new Map());
+  // pre-seed the first NET_DELAY ticks with silence on every seat, so tick 1 can run
   for (let t = 1; t <= NET_DELAY; t++) {
-    netFrames[0].set(t, { m: 0, e: 0, s: -1, h: 0 });
-    netFrames[1].set(t, { m: 0, e: 0, s: -1, h: 0 });
+    for (const fm of netFrames) fm.set(t, { m: 0, e: 0, s: -1, h: 0 });
   }
+  netHave = cs.map(() => NET_DELAY);
+  for (const c of netConns) { c.have = NET_DELAY; c.csRemote = new Map(); c.recon = null; }
   netEvents = []; netEventLog = [];
   netLocal = { dash: false, atk: false, cycle: false, summon: -1, mash: 0 };
+  netMasks = [0, 0, 0, 0];
   netStall = 0; netCsLocal = new Map(); netCsRemote = new Map();
-  // reconnect bookkeeping: the rejoin room is a pure function of (room code, seed),
-  // so both peers derive the identical rendezvous with nothing exchanged — and a
-  // rematch (new seed) moves to a fresh room automatically
-  netRecon = null; netHaveRemote = NET_DELAY;   // the pre-seeded silence counts as received
-  netRejoin = rejoinHash(netRoomCode, netCfg.seed >>> 0);
+  netRecon = null;
+  netRejoin = netSeatRoom(netSeat);   // my seat's reconnect rendezvous
   simAcc = 0; lastFrameTs = null;
-  netLog('run begins — you are ' + (netIsHost ? 'P1 (host)' : 'P2 (client)') +
-         ' · P1 ' + CLASSES[netCfg.c1] + ' / P2 ' + CLASSES[netCfg.c2] +
-         ' · seed ' + (netCfg.seed >>> 0) + ' · field ' + netCfg.gw + 'x' + netCfg.gh +
-         ' (desktop ' + xp.offsetWidth + 'x' + (xp.offsetHeight - 40) + ')');
+  netLog('run begins — you are P' + (netSeat + 1) + ' of ' + cs.length +
+         ' · band ' + cs.map((c) => CLASSES[c]).join(' / ') +
+         ' · seed ' + (netCfg.seed >>> 0) + ' · field ' + netCfg.gw + 'x' + netCfg.gh);
   init();                              // netplay branch: state from netCfg, recorder disarmed
   started = true; frame = 0;
-  banner = '🌐 ONLINE CO-OP · WAVE 1';
-  bannerSub = 'you are ' + (netIsHost ? 'PLAYER 1 (white)' : 'PLAYER 2 (green)') + ' · no scores are saved online';
+  banner = '🌐 ONLINE ' + (cs.length > 2 ? 'WAR BAND (' + cs.length + ')' : 'CO-OP') + ' · WAVE 1';
+  bannerSub = 'you are PLAYER ' + (netSeat + 1) + ' · no scores are saved online';
   bannerT = 150;
-  openBoonMenu('CHOOSE YOUR BOON');    // synchronous, the seed's first draws — identical on both sims
+  openBoonMenu('CHOOSE YOUR BOON');    // synchronous, the seed's first draws — identical on every sim
   startSfMusic();
 }
-// back to the title screen (partner left, desync, or a chosen exit) — restore
+// back to the title screen (a leaver, a desync, or a chosen exit) — restore
 // everything the impersonated run changed and leave a sticky notice
 function netLeave(msg) {
   netTeardown();
@@ -4209,6 +4952,7 @@ function netLeave(msg) {
   netFrames = null; netEvents = []; netLocal = null;
   netCsLocal = null; netCsRemote = null;
   netRecon = null; netEventLog = []; netRoomCode = ''; netRejoin = '';
+  netConns = []; netSeat = 0; netHave = null; netMasks = [0, 0, 0, 0];
   if (netSaved) {
     classSel = netSaved.c1; classSel2 = netSaved.c2;
     coop = netSaved.coop; dailyRun = netSaved.daily; hardSel = netSaved.hs;
@@ -4230,25 +4974,29 @@ function netTeardown() {
   if (netPoll) { clearInterval(netPoll); netPoll = 0; }
   if (netTimeout) { clearTimeout(netTimeout); netTimeout = 0; }
   if (netDiscoT) { clearTimeout(netDiscoT); netDiscoT = 0; }
-  netReconSeq++;   // any in-flight reconnect loop sees a stale token and goes inert
+  netReconSeq++;   // any in-flight reconnect/join loop sees a stale token and goes inert
+  const links = [...netConns];
+  if (netArming) links.push(netArming);
+  netConns = []; netArming = null;
+  for (const c of links) {
+    try { if (c.pollId) clearInterval(c.pollId); } catch (_) {}
+    try { if (c.discoT) clearTimeout(c.discoT); } catch (_) {}
+    try { if (c.chan) { c.chan.onmessage = c.chan.onopen = c.chan.onclose = null; c.chan.close(); } } catch (_) {}
+    try { if (c.pc) { c.pc.onconnectionstatechange = null; c.pc.ondatachannel = null; c.pc.close(); } } catch (_) {}
+  }
   const pc = netPc, ch = netChan;
   netPc = null; netChan = null;        // nulled FIRST so late events see a stale handle and bail
   try { if (ch) { ch.onmessage = null; ch.onopen = null; ch.onclose = null; ch.close(); } } catch (_) {}
   try { if (pc) { pc.onconnectionstatechange = null; pc.ondatachannel = null; pc.close(); } } catch (_) {}
 }
-/* ── mid-run reconnection ──
-   A dropped link no longer ends the game. The lockstep gate already freezes both
-   sims the moment frames stop, so the run is perfectly preserved — we tear down
-   the dead transport, keep every bit of run state, and re-signal through a REJOIN
-   room both peers derive from (room code, seed) with nothing exchanged. The host
-   re-posts a fresh offer to it each attempt (the worker overwrites the room and
-   stamps a gen so the joiner can't answer a stale offer); the joiner polls until
-   a fresh offer appears. This retries for up to NET_RECON_MAX_MS (10 minutes) —
-   then the run ends cleanly via netLeave; Q (or the desktop shutting down) ends
-   the wait sooner. When the channel reopens, both peers send
-   'resume' and refill what the drop swallowed: their own retained input frames
-   past the peer's last-received tick, and (host) any menu events lost in flight —
-   then the gate simply unblocks and lockstep continues bit-exact. */
+/* ── mid-run reconnection (per seat) ──
+   A dropped link holds the WHOLE band (the lockstep gate freezes every sim the
+   moment a seat's frames stop) and re-signals through that seat's rejoin room,
+   derived from (room code, seat, seed). The HOST re-posts fresh gen-stamped
+   offers there; the dropped CLIENT polls for them. Retries for up to
+   NET_RECON_MAX_MS (10 minutes), then the run concedes for everyone. On reopen
+   both ends exchange 'resume' and refill the swallowed frames/events, and the
+   gate simply unblocks — bit-exact, band-wide. */
 function rejoinHash(code, seed) {
   const AB = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   const s = code + ':' + (seed >>> 0);
@@ -4259,19 +5007,99 @@ function rejoinHash(code, seed) {
   return 'R' + out;
 }
 const NET_RECON_MAX_MS = 600000;   // give reconnection 10 minutes, then concede the run
-function netStartRecon(why) {
-  if (!netplay || netRecon) return;
-  netLog('link lost mid-run (' + why + ') — holding the run, re-signaling via ' + netRejoin);
-  netTeardown();   // closes the dead pc/channel; bumps netReconSeq (old loops go inert)
-  netRecon = { attempt: 0, t0: performance.now(), gen: '' };
-  netReconAttempt(netReconSeq);
+// something reconnecting? (drives the overlay + blocks the rematch key)
+function netReconActive() {
+  if (netRecon) return netRecon;
+  for (const c of netConns) if (c.recon) return c.recon;
+  return null;
 }
-// one signaling attempt; reschedules itself until the run resumes or the session
-// ends. Cadence keeps the host under the worker's /mp-host rate limit (~2/min here).
-async function netReconAttempt(tok) {
-  // live() doubles as the deadline check — the attempt loops consult it every ~2s,
-  // so the 10-minute cap lands promptly wherever the loop happens to be waiting
-  // (netLeave tears down the in-flight pc and restores the intro)
+function netReconSeat() {
+  if (netRecon) return netSeat;
+  for (const c of netConns) if (c.recon) return c.seat;
+  return -1;
+}
+function netStartRecon(conn, why) {
+  if (!netplay) return;
+  if (conn) {
+    // HOST: one seat's link died — re-signal just that seat, keep the others
+    if (conn.recon) return;
+    netLog('P' + (conn.seat + 1) + ' link lost (' + why + ') — holding the run, re-signaling');
+    try { if (conn.discoT) clearTimeout(conn.discoT); conn.discoT = 0; } catch (_) {}
+    try { if (conn.chan) { conn.chan.onmessage = conn.chan.onopen = conn.chan.onclose = null; conn.chan.close(); } } catch (_) {}
+    try { if (conn.pc) { conn.pc.onconnectionstatechange = null; conn.pc.close(); } } catch (_) {}
+    conn.pc = null; conn.chan = null;
+    conn.recon = { attempt: 0, t0: performance.now(), gen: '' };
+    netReconSeq++;
+    netReconHostAttempt(conn, netReconSeq);
+    return;
+  }
+  // CLIENT: our link to the host died
+  if (netRecon) return;
+  netLog('link lost mid-run (' + why + ') — holding the run, re-signaling via ' + netRejoin);
+  if (netDiscoT) { clearTimeout(netDiscoT); netDiscoT = 0; }
+  const pc = netPc, ch = netChan;
+  netPc = null; netChan = null;
+  try { if (ch) { ch.onmessage = ch.onopen = ch.onclose = null; ch.close(); } } catch (_) {}
+  try { if (pc) { pc.onconnectionstatechange = null; pc.ondatachannel = null; pc.close(); } } catch (_) {}
+  netReconSeq++;
+  netRecon = { attempt: 0, t0: performance.now(), gen: '' };
+  netReconClientAttempt(netReconSeq);
+}
+// HOST: repost offers into the dropped seat's rejoin room until it answers
+async function netReconHostAttempt(conn, tok) {
+  const live = () => {
+    if (!(netplay && conn.recon && tok === netReconSeq && netConns.includes(conn))) return false;
+    if (performance.now() - conn.recon.t0 > NET_RECON_MAX_MS) {
+      netLog('reconnect window exhausted — conceding the run');
+      netSend({ t: 'bye' });
+      netLeave('CONNECTION LOST — P' + (conn.seat + 1) + ' could not return within 10 minutes');
+      return false;
+    }
+    return true;
+  };
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  const again = (ms) => { if (live()) setTimeout(() => { if (live()) netReconHostAttempt(conn, tok); }, ms); };
+  if (!live()) return;
+  conn.recon.attempt++;
+  const base = lbBase();
+  if (!base) { again(10000); return; }
+  const room = netSeatRoom(conn.seat);
+  try {
+    const pc = new RTCPeerConnection(NET_RTC_CONF);
+    conn.pc = pc; netWirePc(pc, conn);
+    netWireChannel(pc.createDataChannel('sf', { ordered: true }), conn);
+    await pc.setLocalDescription(await pc.createOffer());
+    await netWaitIce(pc, () => live() && conn.pc === pc);
+    if (!live() || conn.pc !== pc) return;
+    const r = await fetch(base + '/mp-host', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rejoin: room,
+        offer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }),
+    });
+    if (!r.ok) throw new Error('mp-host ' + r.status);
+    if (!live() || conn.pc !== pc) return;
+    for (let i = 0; i < 12 && live() && conn.pc === pc; i++) {   // ~24s of answer polling
+      await wait(2000);
+      if (!live() || conn.pc !== pc) return;
+      try {
+        const rr = await fetch(base + '/mp-answer?code=' + encodeURIComponent(room));
+        if (!rr.ok) continue;
+        const dd = await rr.json();
+        if (dd && dd.answer && pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(dd.answer);
+          for (let j = 0; j < 7 && live() && conn.pc === pc && conn.recon; j++) await wait(2000);
+          break;
+        }
+      } catch (_) { /* transient poll failure — keep polling */ }
+    }
+    if (!live() || conn.pc !== pc || !conn.recon) return;   // resumed or gone
+    try { pc.close(); } catch (_) { /* already dead */ }
+    if (conn.pc === pc) { conn.pc = null; conn.chan = null; }
+    again(2000);
+  } catch (_) { again(8000); }
+}
+// CLIENT: poll our seat's rejoin room until the host's fresh offer appears
+async function netReconClientAttempt(tok) {
   const live = () => {
     if (!(netplay && netRecon && tok === netReconSeq)) return false;
     if (performance.now() - netRecon.t0 > NET_RECON_MAX_MS) {
@@ -4282,110 +5110,82 @@ async function netReconAttempt(tok) {
     return true;
   };
   const wait = (ms) => new Promise((res) => setTimeout(res, ms));
-  const again = (ms) => { if (live()) setTimeout(() => { if (live()) netReconAttempt(tok); }, ms); };
+  const again = (ms) => { if (live()) setTimeout(() => { if (live()) netReconClientAttempt(tok); }, ms); };
   if (!live()) return;
   netRecon.attempt++;
   const base = lbBase();
   if (!base) { again(10000); return; }
   try {
-    if (netIsHost) {
-      // host: park a fresh offer in the rejoin room, then poll for the answer
-      const pc = new RTCPeerConnection(NET_RTC_CONF);
-      netPc = pc; netWirePc(pc);
-      netWireChannel(pc.createDataChannel('sf', { ordered: true }));
-      await pc.setLocalDescription(await pc.createOffer());
-      await netWaitIce();
-      if (!live() || netPc !== pc) return;
-      const r = await fetch(base + '/mp-host', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rejoin: netRejoin,
-          offer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }),
-      });
-      if (!r.ok) throw new Error('mp-host ' + r.status);
-      if (!live() || netPc !== pc) return;
-      for (let i = 0; i < 12 && live() && netPc === pc; i++) {   // ~24s of answer polling
-        await wait(2000);
+    const r = await fetch(base + '/mp-offer?code=' + encodeURIComponent(netRejoin));
+    if (r.ok) {
+      const d = await r.json();
+      const gen = d && d.gen ? String(d.gen) : '';
+      if (d && d.offer && gen && gen !== netRecon.gen) {
+        netRecon.gen = gen;
+        const pc = new RTCPeerConnection(NET_RTC_CONF);
+        netPc = pc; netWirePc(pc, null);
+        pc.ondatachannel = (ev) => { if (netPc === pc) netWireChannel(ev.channel, null); };
+        await pc.setRemoteDescription(d.offer);
+        await pc.setLocalDescription(await pc.createAnswer());
+        await netWaitIce(pc, () => live() && netPc === pc);
         if (!live() || netPc !== pc) return;
-        try {
-          const rr = await fetch(base + '/mp-answer?code=' + encodeURIComponent(netRejoin));
-          if (!rr.ok) continue;
-          const dd = await rr.json();
-          if (dd && dd.answer && pc.signalingState === 'have-local-offer') {
-            await pc.setRemoteDescription(dd.answer);
-            // give ICE time to land — the channel's onopen → 'resume' ends the recon
-            for (let j = 0; j < 7 && live() && netPc === pc; j++) await wait(2000);
-            break;
-          }
-        } catch (_) { /* transient poll failure — keep polling */ }
-      }
-      if (!live() || netPc !== pc) return;   // resumed (or session ended) — leave the live pc alone
-      try { pc.close(); } catch (_) { /* already dead */ }
-      if (netPc === pc) { netPc = null; netChan = null; }
-      again(2000);   // this attempt aged out — re-post a fresh offer
-    } else {
-      // joiner: poll the rejoin room until a FRESH offer appears (gen changes on
-      // every host re-post; answering the same gen twice would 409 anyway)
-      const r = await fetch(base + '/mp-offer?code=' + encodeURIComponent(netRejoin));
-      if (r.ok) {
-        const d = await r.json();
-        const gen = d && d.gen ? String(d.gen) : '';
-        if (d && d.offer && gen && gen !== netRecon.gen) {
-          netRecon.gen = gen;
-          const pc = new RTCPeerConnection(NET_RTC_CONF);
-          netPc = pc; netWirePc(pc);
-          pc.ondatachannel = (ev) => { if (netPc === pc) netWireChannel(ev.channel); };
-          await pc.setRemoteDescription(d.offer);
-          await pc.setLocalDescription(await pc.createAnswer());
-          await netWaitIce();
-          if (!live() || netPc !== pc) return;
-          const rr = await fetch(base + '/mp-join', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ code: netRejoin, gen,
-              answer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }),
-          });
-          if (rr.ok) {   // wait out ICE; onopen → 'resume' ends the recon
-            for (let j = 0; j < 7 && live() && netPc === pc; j++) await wait(2000);
-          }
-          if (!live() || netPc !== pc) return;
-          try { pc.close(); } catch (_) { /* already dead */ }
-          if (netPc === pc) { netPc = null; netChan = null; }
+        const rr = await fetch(base + '/mp-join', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ code: netRejoin, gen,
+            answer: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }),
+        });
+        if (rr.ok) {   // wait out ICE; onopen → 'resume' ends the recon
+          for (let j = 0; j < 7 && live() && netPc === pc && netRecon; j++) await wait(2000);
         }
+        if (!live() || netPc !== pc || !netRecon) return;
+        try { pc.close(); } catch (_) { /* already dead */ }
+        if (netPc === pc) { netPc = null; netChan = null; }
       }
-      again(2500);
     }
+    again(2500);
   } catch (_) { again(8000); }
 }
-// both peers may advance to tick T only when both input frames for T are buffered.
-// No deadlock: each peer always has its own future frames and the remote's through
-// (remoteTick + NET_DELAY), so stalls only ever reflect real latency.
+// the band may advance to tick T only when EVERY seat's frame for T is buffered.
+// No deadlock: each sim always has its own future frames, and every other seat's
+// through (thatSeatTick + NET_DELAY), so stalls only ever reflect real latency.
 function netCanStep() {
-  return !!(netFrames && netFrames[0].has(tick + 1) && netFrames[1].has(tick + 1));
+  if (!netFrames) return false;
+  for (const fm of netFrames) if (!fm.has(tick + 1)) return false;
+  return true;
 }
-// the desync tripwire: every 60 ticks, fold the load-bearing sim state into a hash
-// and swap it with the peer — a mismatch means the sims silently diverged (a bug),
-// and a clean in-character failure beats two players seeing different worlds
+// the desync tripwire: every 60 ticks, fold the load-bearing sim state into a
+// hash and swap it — the host checks every client's stream, the clients check
+// the host's. Any mismatch means a sim silently diverged (a bug) and the run
+// ends cleanly for everyone.
 function netChecksum() {
   let hsh = 5381 >>> 0;
   const mix = (v) => { hsh = (((hsh << 5) + hsh) ^ (v | 0)) >>> 0; };
   mix(tick); mix(score); mix(kills); mix(wave); mix(enemies.length);
   mix(tokens); mix(Math.round(meter));
-  mix(Math.round(player.x * 8)); mix(Math.round(player.y * 8));
-  if (p2) { mix(Math.round(p2.x * 8)); mix(Math.round(p2.y * 8)); }
+  for (const h of heroesAll()) { mix(Math.round(h.x * 8)); mix(Math.round(h.y * 8)); }
   netCsLocal.set(tick, hsh);
   netSend({ t: 'cs', r: netRunId, k: tick, h: hsh });
-  netCheckCs(tick);
+  if (!netIsHost) netCheckCs(tick);
   if (netCsLocal.size > 40) {          // prune — a laggy peer's checksums arrive late, not never
     const min = tick - 2400;
     for (const k of netCsLocal.keys()) if (k < min) netCsLocal.delete(k);
-    for (const k of netCsRemote.keys()) if (k < min) netCsRemote.delete(k);
+    if (netCsRemote) for (const k of netCsRemote.keys()) if (k < min) netCsRemote.delete(k);
+    for (const c of netConns) for (const k of c.csRemote.keys()) if (k < min) c.csRemote.delete(k);
   }
 }
-function netCheckCs(k) {
+function netCheckCs(k) {   // client: compare the host's stream against our own
   if (!netCsLocal || !netCsRemote) return;
   const a = netCsLocal.get(k), b = netCsRemote.get(k);
   if (a === undefined || b === undefined) return;
-  netCsLocal.delete(k); netCsRemote.delete(k);
-  if (a !== b) netLeave('DESYNC — the two worlds drifted apart. reconnect and try again.');
+  netCsRemote.delete(k);
+  if (a !== b) { netSend({ t: 'bye' }); netLeave('DESYNC — the worlds drifted apart. reconnect and try again.'); }
+}
+function netCheckCsConn(conn, k) {   // host: compare one client's stream (local entries stay for the others)
+  if (!netCsLocal) return;
+  const a = netCsLocal.get(k), b = conn.csRemote.get(k);
+  if (a === undefined || b === undefined) return;
+  conn.csRemote.delete(k);
+  if (a !== b) { netSend({ t: 'bye' }); netLeave('DESYNC — the worlds drifted apart. reconnect and try again.'); }
 }
 
 // ── screens — connect screens, net-wait badge, panel(), the death screen ──
@@ -4455,39 +5255,58 @@ function drawNetScreen() {
     ctx.font = 'bold 14px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
     ctx.fillText('Z — try again', GW / 2, cy + 24);
   } else if (netUi.phase === 'lobby' || netUi.phase === 'starting') {
-    // ── the READY LOBBY: both fighters, side by side, with room to breathe.
-    // Each player still picks freely; the run starts only when BOTH confirm. ──
+    // ── the READY LOBBY: the whole war band side by side (2–4 seats). Everyone
+    // picks freely; the run starts only when EVERY seat confirms. ──
     const starting = netUi.phase === 'starting';
-    sub(starting ? 'both ready — forging a shared world' + dots
-                 : 'the fight begins when BOTH of you ready up', cy - 84,
+    const mySeatIdx = netIsHost ? 0 : Math.max(1, netSeat);
+    const seats = [];
+    const raw = netUi.seats && netUi.seats.length ? netUi.seats : [];
+    for (let i = 0; i < Math.max(raw.length, mySeatIdx + 1); i++) {
+      seats.push(raw[i] ? { c: raw[i].c | 0, r: !!raw[i].r } : { c: 0, r: false });
+    }
+    // my own live pick shows immediately (the host echo can lag a beat)
+    seats[mySeatIdx] = { c: classSel, r: !!netUi.myReady };
+    // the WYRM & RIDER pair binds seat 1 to the saddle
+    const paired = CLASSES[clamp(seats[0].c, 0, CLASSES.length - 1)] === 'wyrm';
+    if (paired && seats.length > 1) seats[1] = { c: PAIR_RIDER, r: seats[1].r };
+    sub(starting ? 'the whole band is ready — forging a shared world' + dots
+                 : 'the fight begins when EVERY fighter readies up', cy - 84,
         starting ? '#caffa0' : '#9fb0c0');
-    const podX = Math.min(150, Math.round(GW * 0.19));
+    if (!starting && seats.length < NET_MAX_SEATS) {
+      sub('room ' + (netUi.code || netRoomCode) + ' — up to four can ride; latecomers use the same code', cy - 64, '#ffd24d');
+    }
     const py = cy + 2;
-    const myCls = CLASSES[classSel];
-    const peerCls = CLASSES[clamp(netUi.peerCls | 0, 0, CLASSES.length - 1)];
-    // P1 = the host (white), P2 = the joiner (green) — YOU are hot on your side
-    const seatL = { cls: netIsHost ? myCls : peerCls, self: netIsHost };
-    const seatR = { cls: netIsHost ? peerCls : myCls, self: !netIsHost };
-    drawClassPreview(GW / 2 - podX, py, seatL.cls, 'white', seatL.self && !starting,
-                     'P1' + (seatL.self ? ' · YOU' : ''));
-    drawClassPreview(GW / 2 + podX, py, seatR.cls, P2_COL, seatR.self && !starting,
-                     'P2' + (seatR.self ? ' · YOU' : ''));
-    ctx.textAlign = 'center';
-    const badge = (x, ready) => {
+    const n = seats.length;
+    const gap = n > 1 ? Math.min(180, (GW - 160) / (n - 1)) : 0;
+    for (let i = 0; i < n; i++) {
+      const x = GW / 2 + (i - (n - 1) / 2) * gap;
+      const self = i === mySeatIdx;
+      drawClassPreview(x, py, CLASSES[clamp(seats[i].c, 0, CLASSES.length - 1)],
+                       SEAT_COLS[i] || 'white', self && !starting,
+                       'P' + (i + 1) + (self ? ' · YOU' : ''));
+      ctx.textAlign = 'center';
       ctx.font = 'bold 13px Tahoma,Arial';
-      ctx.fillStyle = ready ? '#7CFC8A' : '#8494a4';
-      ctx.fillText(ready ? '✓ READY' : 'choosing…', x, py + 54);
-    };
-    badge(GW / 2 - podX, seatL.self ? netUi.myReady : netUi.peerReady);
-    badge(GW / 2 + podX, seatR.self ? netUi.myReady : netUi.peerReady);
-    // your class row — all four options visible, none of the old corner-cycler cramp
-    if (!starting) {
-      const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL };
-      const n = CLASSES.length, gap2 = 10, chh = 24;
-      const cw2 = Math.min(104, Math.floor((GW - 60 - gap2 * (n - 1)) / n));
-      const x0 = GW / 2 - (cw2 * n + gap2 * (n - 1)) / 2;
-      for (let i = 0; i < n; i++) {
-        const sel = i === classSel, col = clsCol[CLASSES[i]];
+      ctx.fillStyle = seats[i].r ? '#7CFC8A' : '#8494a4';
+      ctx.fillText(seats[i].r ? '✓ READY' : 'choosing…', x, py + 54);
+    }
+    // your class row — every option visible (bound to the saddle when the host
+    // rides the wyrm and you are seat 1: your pick is the pair's)
+    if (!starting && paired && mySeatIdx === 1) {
+      ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffab91';
+      ctx.fillText('🐲 the host chose the WYRM & RIDER — you take the saddle', GW / 2, py + 92);
+      ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+      ctx.fillText('your keys AIM the lance · E breathes fire from the heat your wyrm earns', GW / 2, py + 110);
+      ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
+      ctx.fillText('Z / ENTER — ' + (netUi.myReady ? 'un-ready' : 'READY UP'), GW / 2, py + 132);
+    } else if (!starting) {
+      const clsCol = { melee: '#ffd24d', ranged: '#9ccc65', caster: '#ce93d8', necro: NECRO_COL, dragoon: DRAGOON_COL, wyrm: DRAGOON_COL };
+      const list = netIsHost ? [0, 1, 2, 3, 4, PAIR_WYRM] : [0, 1, 2, 3, 4];
+      const nn = list.length, gap2 = 10, chh = 24;
+      const cw2 = Math.min(104, Math.floor((GW - 60 - gap2 * (nn - 1)) / nn));
+      const x0 = GW / 2 - (cw2 * nn + gap2 * (nn - 1)) / 2;
+      for (let i = 0; i < nn; i++) {
+        const ci = list[i];
+        const sel = ci === classSel, col = clsCol[CLASSES[ci]];
         roundRectPath(x0 + i * (cw2 + gap2), py + 76, cw2, chh, chh / 2);
         if (sel) {
           ctx.shadowColor = col; ctx.shadowBlur = RM ? 10 : 8 + 4 * Math.sin(frame * 0.09);
@@ -4498,7 +5317,7 @@ function drawNetScreen() {
           ctx.fillStyle = '#93a3b3';
         }
         ctx.font = (sel ? 'bold ' : '') + '12px Tahoma,Arial';
-        ctx.fillText(CLASS_ICON[CLASSES[i]] + ' ' + CLASSES[i].toUpperCase(),
+        ctx.fillText(CLASS_ICON[CLASSES[ci]] + ' ' + CLASSES[ci].toUpperCase(),
                      x0 + i * (cw2 + gap2) + cw2 / 2, py + 76 + chh / 2 + 4.5);
       }
       ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
@@ -4506,7 +5325,7 @@ function drawNetScreen() {
                    GW / 2, py + 128);
     }
     ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#69788a';
-    ctx.fillText('online co-op is score-free — nothing is saved · Q — leave', GW / 2, GH - 28);
+    ctx.fillText('online play is score-free — nothing is saved · Q — leave', GW / 2, GH - 28);
     ctx.restore(); ctx.textAlign = 'left';
     return;
   }
@@ -4541,7 +5360,10 @@ function drawNetWait() {
 // the mid-run reconnect banner (netRecon set): the run is held frozen while the
 // transport re-signals — drawn over the last frame from frameStep, render-only
 function drawNetRecon() {
-  const secs = Math.max(0, Math.floor((performance.now() - netRecon.t0) / 1000));
+  const rc = netReconActive();
+  if (!rc) return;
+  const seat = netReconSeat();
+  const secs = Math.max(0, Math.floor((performance.now() - rc.t0) / 1000));
   const left = Math.max(0, Math.floor(NET_RECON_MAX_MS / 1000) - secs);
   const clock = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
   ctx.save();
@@ -4550,10 +5372,147 @@ function drawNetRecon() {
   ctx.fillStyle = 'rgba(18,6,8,0.9)'; ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = '#ff8a80'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
   ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ff8a80';
-  ctx.fillText('🔌 CONNECTION LOST — RECONNECTING…', GW / 2, y + 20);
+  ctx.fillText(netRecon ? '🔌 CONNECTION LOST — RECONNECTING…' : '🔌 PLAYER ' + (seat + 1) + ' DROPPED — RE-SIGNALING…', GW / 2, y + 20);
   ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
-  ctx.fillText('attempt ' + netRecon.attempt + ' — the run is held · gives up in ' + clock + ' · Q leaves now', GW / 2, y + 40);
+  ctx.fillText('attempt ' + rc.attempt + ' — the run is held · gives up in ' + clock + ' · Q leaves now', GW / 2, y + 40);
   ctx.restore(); ctx.textAlign = 'left';
+}
+
+/* ── PAUSE & SETTINGS (the shell) ──
+   Solo/couch runs truly pause (toggles cross the recorder as opcode 13, so a
+   replay holds the same beats); online it is an overlay over the live sim.
+   Every option is PRESENTATION ONLY — the iron rule from reduceMotion: options
+   change what you see, never what the sim does. */
+function drawShellMenu() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 0, GW, GH);
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
+  const y0 = Math.round(GH * 0.24);
+  ctx.font = 'bold 26px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
+  ctx.fillText(netplay ? 'SETTINGS' : 'PAUSED', GW / 2, y0);
+  ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+  ctx.fillText(netplay ? 'the war band fights on — settings are yours alone' : 'the horde waits', GW / 2, y0 + 22);
+  ctx.shadowBlur = 0;
+  const rows = [
+    ['screen shake', sfOpts.shake === 0 ? 'off' : sfOpts.shake < 1 ? 'half' : 'full'],
+    ['camera kicks', sfOpts.kick > 0 ? 'on' : 'off'],
+    ['impact flashes', sfOpts.flash > 0 ? 'full' : 'reduced'],
+    ['high-contrast elites', sfOpts.hiVis ? 'on' : 'off'],
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    const hot = i === shellSel;
+    const y = y0 + 60 + i * 30;
+    ctx.font = (hot ? 'bold ' : '') + '14px Tahoma,Arial';
+    ctx.fillStyle = hot ? '#ffe9ad' : '#9aa3a8'; ctx.textAlign = 'right';
+    ctx.fillText(rows[i][0], GW / 2 - 16, y);
+    ctx.fillStyle = hot ? '#7fd8ff' : '#77828c'; ctx.textAlign = 'left';
+    ctx.fillText((hot ? '◀ ' : '') + rows[i][1] + (hot ? ' ▶' : ''), GW / 2 + 16, y);
+  }
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+  ctx.fillText('↑ ↓ — choose   ·   ◀ ▶ — change   ·   P — ' + (netplay ? 'close' : 'resume'), GW / 2, y0 + 60 + rows.length * 30 + 16);
+  ctx.restore(); ctx.textAlign = 'left';
+}
+
+/* ── the LIVING CAMERA (see the cam state note in 02-state) ── */
+function camKick(dx, dy, mag) {
+  if (api.reduceMotion) return;
+  const d = Math.hypot(dx, dy) || 1;
+  cam.kx += (dx / d) * mag * sfOpts.kick;
+  cam.ky += (dy / d) * mag * sfOpts.kick;
+}
+// one camera step per loop call (= per sim tick — the cadence tests depend on it)
+function camUpdate() {
+  if (api.reduceMotion) {
+    cam.x = cam.y = cam.kx = cam.ky = 0; cam.zoom = 1; cam.pulse = 0;
+    cam.prevBreather = breatherT;
+    return;
+  }
+  // drift toward the party's center of mass — only on the open field (the
+  // battlefield draws with an overscan bleed for exactly this; the set-piece
+  // rooms are framed compositions and hold still)
+  const roomBound = swActive || jojoActive || ianActive;
+  let tx = 0, ty = 0;
+  if (!roomBound) {
+    const hs = heroesLive();
+    if (hs.length) {
+      let ax = 0, ay = 0;
+      for (const h of hs) { ax += h.x; ay += h.y; }
+      tx = clamp((ax / hs.length - GW / 2) * 0.12, -14, 14);
+      ty = clamp((ay / hs.length - GH / 2) * 0.12, -10, 10);
+    }
+  }
+  cam.x += (tx - cam.x) * 0.05;
+  cam.y += (ty - cam.y) * 0.05;
+  // zoom: boss cards punch in; the wave's final kill breathes in and settles
+  if (breatherT > 0 && cam.prevBreather <= 0) cam.pulse = 44;
+  cam.prevBreather = breatherT;
+  if (cam.pulse > 0) cam.pulse--;
+  const zt = bossIntro ? 1.08 : cam.pulse > 0 ? 1 + 0.09 * (cam.pulse / 44) : 1;
+  cam.zoom += (zt - cam.zoom) * 0.08;
+  // kicks decay fast
+  cam.kx *= 0.8; cam.ky *= 0.8;
+}
+function camApply() {
+  if (api.reduceMotion) return;
+  ctx.translate(GW / 2, GH / 2);
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-GW / 2, -GH / 2);
+  ctx.translate(-cam.x + cam.kx, -cam.y + cam.ky);
+}
+
+/* ── the DEATH KILL CAM ──
+   The last seconds of the run replay in slow motion off the ghost tape, the
+   camera easing in tight on the fallen hero, letterboxed under a closing red
+   wash, ending on the title. Strictly render-only: the sim (and netplay's
+   lockstep ticks) keep running underneath; advancement happens once per loop
+   call so the deterministic draw-stream and 60/120Hz cadence tests hold. */
+function drawKillCam() {
+  const kc = killCam;
+  const N = kc.tape.length;
+  const idx = Math.min(N - 1, Math.floor(kc.i));
+  const snap = kc.tape[idx];
+  const atEnd = idx >= N - 1;
+  const p = Math.min(1, kc.t / 50);
+  const ease = 1 - (1 - p) * (1 - p);
+  const zoom = 1.12 + ease * 0.68;
+  const fx = clamp(kc.fx, GW * 0.22, GW * 0.78);
+  const fy = clamp(kc.fy, GH * 0.26, GH * 0.74);
+  ctx.save();
+  ctx.translate(GW / 2, GH / 2);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-fx, -fy + ease * 8);
+  if (!swActive && !jojoActive && !ianActive) drawBattlefield();
+  else { ctx.fillStyle = '#04060a'; ctx.fillRect(-GW, -GH, GW * 3, GH * 3); }
+  for (const e of snap.enemies) drawEnemy(e);
+  for (const h of snap.heroes) drawHero(h);
+  ctx.restore();
+  kc.t++;
+  if (!atEnd) kc.i += CAM_SPEED;
+  else kc.hold++;
+  // screen-space drama: letterbox bars + a red wash leaning in + the title
+  const bar = Math.min(GH * 0.11, kc.t * 2.5);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, GW, bar); ctx.fillRect(0, GH - bar, GW, bar);
+  const rv = ctx.createRadialGradient(GW / 2, GH / 2, Math.min(GW, GH) * 0.2, GW / 2, GH / 2, Math.max(GW, GH) * 0.7);
+  rv.addColorStop(0, 'rgba(120,8,8,0)');
+  rv.addColorStop(1, 'rgba(120,8,8,' + (0.12 + ease * 0.16).toFixed(3) + ')');
+  ctx.fillStyle = rv; ctx.fillRect(0, 0, GW, GH);
+  ctx.textAlign = 'center';
+  if (atEnd) {
+    ctx.globalAlpha = Math.min(1, kc.hold / 24);
+    ctx.font = 'bold 34px Tahoma,Arial';
+    ctx.strokeStyle = '#2a0505'; ctx.lineWidth = 6;
+    ctx.strokeText('THOU ART SLAIN', GW / 2, GH / 2 - 8);
+    ctx.fillStyle = '#ff6e6e';
+    ctx.fillText('THOU ART SLAIN', GW / 2, GH / 2 - 8);
+    ctx.globalAlpha = 1;
+  }
+  ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = 'rgba(200,210,220,0.7)';
+  ctx.fillText('the final moments · any key skips', GW / 2, GH - bar - 10);
+  ctx.textAlign = 'left';
+  if (kc.hold > 64) killCam = null;   // ...and the death screen takes over
 }
 
 function panel(lines) {
@@ -4572,7 +5531,54 @@ function panel(lines) {
 
 /* the game-over screen: epitaph + the online "hall of legends" leaderboard.
    Off when the worker's unreachable (lbState 'off') → just the local best. */
+/* ── the RESULTS CEREMONY ──
+   Before the boards: the run gets a reckoning. Lines land one per beat and the
+   score counts up — all deadT-driven (deterministic; any key fast-forwards
+   deadT past it, see onKey). Replay watchers skip straight to their ending. */
+function drawResults() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.66)'; ctx.fillRect(0, 0, GW, GH);
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
+  const y0 = Math.round(GH * 0.2);
+  ctx.font = 'bold 30px Tahoma,Arial'; ctx.fillStyle = '#ff6e6e';
+  ctx.fillText('THE RECKONING', GW / 2, y0);
+  // the fallen, ranked — the horde knows who did the work
+  const byN = Object.entries(killsByType).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const row = (i, label, value, col) => {
+    const at = 56 + i * 22;                       // each line lands on its own beat
+    if (deadT < at) return;
+    const a = Math.min(1, (deadT - at) / 12);
+    ctx.globalAlpha = a;
+    ctx.font = '14px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0'; ctx.textAlign = 'right';
+    ctx.fillText(label, GW / 2 - 14, y0 + 44 + i * 27);
+    ctx.font = 'bold 15px Tahoma,Arial'; ctx.fillStyle = col || '#e8eef4'; ctx.textAlign = 'left';
+    ctx.fillText(value, GW / 2 + 14, y0 + 44 + i * 27);
+    ctx.globalAlpha = 1;
+  };
+  let i = 0;
+  row(i++, 'waves survived', String(wave) + (hardMode ? '  ☠' : '') + (endless ? '  ∞' : ''), '#ffd24d');
+  row(i++, 'the fallen', String(kills), '#ff8a80');
+  if (byN.length) row(i++, 'mostly', byN.map(([t, n]) => t + ' ×' + n).join(' · '), '#c8d2da');
+  row(i++, 'tokens banked', String(tokens), '#80deea');
+  // the score counts up over the last stretch of the ceremony
+  const sAt = 56 + i * 22;
+  if (deadT >= sAt) {
+    const sp = Math.min(1, (deadT - sAt) / 40);
+    const shown = Math.round(score * (1 - (1 - sp) * (1 - sp)));
+    ctx.font = 'bold 26px Tahoma,Arial'; ctx.fillStyle = '#ffd24d'; ctx.textAlign = 'center';
+    ctx.fillText(shown.toLocaleString(), GW / 2, y0 + 60 + i * 27 + 14);
+    if (sp >= 1 && newBest) {
+      ctx.font = 'bold 14px Tahoma,Arial'; ctx.fillStyle = '#7CFC8A';
+      ctx.fillText('★ A NEW LEGEND — your best ★', GW / 2, y0 + 88 + i * 27);
+    }
+  }
+  ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = 'rgba(200,210,220,0.6)'; ctx.textAlign = 'center';
+  ctx.fillText('any key — the hall of legends awaits', GW / 2, GH - 44);
+  ctx.restore(); ctx.textAlign = 'left';
+}
 function drawDeathScreen() {
+  if (!replayMode && deadT < 178) { drawResults(); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.62)';
   ctx.fillRect(0, 0, GW, GH);
   ctx.textAlign = 'center';
@@ -4783,17 +5789,20 @@ function makeEnemy(type, x, y, elite) {
   }
   if (type === 'ogre') {
     // a horde mini-boss: lumbers, telegraphs, then bull-rushes straight across the field
-    e.spd = 1.25; e.kr = 30; e.hp = 8; e.maxhp = 8; e.mode = 'stalk'; e.st = 80; e.lx = 0; e.ly = 0;
+    const bandO = partySize() - 1;   // the ogre toughens with the party
+    e.spd = 1.25; e.kr = 30; e.hp = 8 + bandO * 3; e.maxhp = e.hp; e.mode = 'stalk'; e.st = 80; e.lx = 0; e.ly = 0;
   }
   if (type === 'wraith') {
-    e.spd = 2.6; e.kr = 14; e.hp = 2; e.mode = 'circle';
+    // the Nine harden with the party (2P/3P take 3 blows, a full band 4)
+    e.spd = 2.6; e.kr = 14; e.hp = 2 + Math.ceil((partySize() - 1) / 2); e.mode = 'circle';
     // keep the bearing it spawned at so the ring forms without crossing paths
     e.slot = Math.atan2(y - player.y, x - player.x) - frame * 0.004;
     e.ring = Math.hypot(x - player.x, y - player.y) || 300;
   }
   if (type === 'witchking') {
     // rises mounted on a fell beast; a few hits down the beast, then he fights on foot
-    e.spd = 2.88; e.kr = 24; e.hp = 4; e.mountMax = 4; e.footMax = 6;
+    const bandK = partySize() - 1;   // the king endures more blades
+    e.spd = 2.88; e.kr = 24; e.mountMax = 4 + bandK; e.footMax = 6 + bandK * 2; e.hp = e.mountMax;
     e.mounted = true; e.mode = 'hover'; e.st = 80; e.flailAng = 0;
   }
   if (type === 'trooper') {
@@ -4802,7 +5811,8 @@ function makeEnemy(type, x, y, elite) {
   }
   if (type === 'vader') {
     // a proper duel: advances, telegraphs, melee slashes AND Force powers; escalates at half health
-    e.spd = 1.5; e.kr = 20; e.hp = 10; e.maxhp = 10;
+    const bandV = partySize() - 1;
+    e.spd = 1.5; e.kr = 20; e.hp = 10 + bandV * 3; e.maxhp = e.hp;
     e.mode = 'advance'; e.st = 50; e.slashAng = 0;
     e.phase2 = false; e.power = null; e.combo = false; e.disarmed = false;
     e.intro = 50;   // a brief menacing entrance: holds position, harmless to touch — no instant spawn-kill
@@ -4810,7 +5820,8 @@ function makeEnemy(type, x, y, elite) {
   if (type === 'sidious') {
     // Clone Wars Sidious: fast & acrobatic, twin red sabers, a spin attack and Force lightning;
     // at half HP he stows the sabers and turns to pure lightning (e.phase2)
-    e.spd = 2.7; e.kr = 17; e.hp = 14; e.maxhp = 14;
+    const bandS = partySize() - 1;
+    e.spd = 2.7; e.kr = 17; e.hp = 14 + bandS * 4; e.maxhp = e.hp;
     e.mode = 'enter'; e.st = 60; e.spinAng = 0; e.lit = 0; e.hop = 0;
     e.phase2 = false; e.castKind = 'bolt';
   }
@@ -4820,7 +5831,8 @@ function makeEnemy(type, x, y, elite) {
   }
   if (type === 'dio') {
     // DIO + The World: trolls you with stopped time, then knives / MUDA rushes / the road roller
-    e.spd = 1.95; e.kr = 17; e.hp = 16; e.maxhp = 16;   // a deliberate saunter — readable, not frantic
+    const bandD = partySize() - 1;
+    e.spd = 1.95; e.kr = 17; e.hp = 16 + bandD * 4; e.maxhp = e.hp;   // a deliberate saunter — readable, not frantic
     e.mode = 'troll'; e.tstep = 0; e.tt = 0; e.st = 0; e.stand = 0; e.cape = 0; e.rollerDone = false;
   }
   if (type === 'ian') {
@@ -5272,6 +6284,7 @@ function farPoint(margin) {
 /* ── enemy AI ── */
 function updateEnemy(e) {
   if (e.grz > 0) e.grz--;
+  if (e.flashT > 0) e.flashT--;   // the impact flash fades (held while hit-stop freezes this)
   if (e.stun > 0) { e.stun--; return; }
   if (e.frozen > 0) { e.frozen--; e.vx = 0; e.vy = 0; return; }  // encased in ice by the frost nova
   if (freezeT > 0) return;
@@ -6052,7 +7065,7 @@ function frameStep(ts) {
   // and is being re-signaled (see netStartRecon); a plain stall = the link is alive
   // but the peer is lagging or tabbed away — deliberately NOT a reconnect trigger.
   if (netplay && started) {
-    if (netRecon) drawNetRecon();
+    if (netReconActive()) drawNetRecon();
     else if (netStall > 30) drawNetWait();
   }
 }
@@ -6082,6 +7095,7 @@ function loop() {
         case 10: if (ianChoice) chooseIan(e[2] ? 1 : 0); break;
         case 11: if (e[2]) pend.cycleP2 = true; else pend.cycleP1 = true; break;
         case 12: if (boonMenu) pickBoon(e[2]); break;
+        case 13: shellToggle(); break;   // the recorded pause — replays hold the same beats
       }
     }
   }
@@ -6094,9 +7108,9 @@ function loop() {
      3. apply BOTH players' buffered frames for THIS tick into pend/netMask. */
   if (netplay && started) {
     const nt = tick + NET_DELAY;
-    const mine = netFrames[netIsHost ? 0 : 1];
+    const mine = netFrames[netSeat];
     if (!mine.has(nt)) {
-      let lm = 0;   // both peers play with the full solo bindings (arrows OR WASD)
+      let lm = 0;   // every seat plays with the full solo bindings (arrows OR WASD)
       if (keys['ArrowLeft'] || keys['a']) lm |= 1;
       if (keys['ArrowRight'] || keys['d']) lm |= 2;
       if (keys['ArrowUp'] || keys['w']) lm |= 4;
@@ -6106,7 +7120,7 @@ function loop() {
                   s: netLocal.summon, h: netLocal.mash };
       netLocal.dash = netLocal.atk = netLocal.cycle = false; netLocal.summon = -1; netLocal.mash = 0;
       mine.set(nt, f);
-      netSend({ t: 'f', r: netRunId, k: nt, m: f.m, e: f.e, s: f.s, h: f.h });
+      netSend({ t: 'f', r: netRunId, p: netSeat, k: nt, m: f.m, e: f.e, s: f.s, h: f.h });
     }
     while (netEvents.length && netEvents[0][0] <= tick) {
       const ev = netEvents.shift();
@@ -6118,23 +7132,29 @@ function loop() {
         case 12: if (boonMenu) pickBoon(ev[2]); break;
       }
     }
-    const hf = netFrames[0].get(tick), cf = netFrames[1].get(tick);
-    if (hf && cf) {
-      netMask = (hf.m & 15) | ((cf.m & 15) << 4);   // host nibble = P1 arrows, client nibble = P2 WASD bits
-      if (hf.e & 1) pend.dashP1 = true;
-      if (hf.e & 2) pend.atkP1 = true;
-      if (hf.e & 4) pend.cycleP1 = true;
-      if (cf.e & 1) pend.dashP2 = true;
-      if (cf.e & 2) pend.atkP2 = true;
-      if (cf.e & 4) pend.cycleP2 = true;
-      if (hf.s >= 0) pend.summon = ['gandalf', 'luke', 'jotaro'][hf.s] || null;
-      if (cf.s >= 0) pend.summon2 = ['gandalf', 'luke', 'jotaro'][cf.s] || null;
-      if (hf.h > 0) pend.mash += hf.h;   // the Force choke grips P1 — only host mashes count
-      // the remote's frame is spent; our OWN side keeps a trailing 30-tick window so
-      // a reconnect resume can re-send anything the drop swallowed (transport
+    // apply EVERY seat's frame for THIS tick (the gate guaranteed they're here)
+    const fs = netFrames.map((fm) => fm.get(tick));
+    if (fs.every(Boolean)) {
+      netMask = (fs[0].m & 15) | (((fs[1] ? fs[1].m : 0) & 15) << 4);   // P1 low nibble, P2 high
+      netMasks[2] = fs[2] ? fs[2].m & 15 : 0;   // P3/P4 movement reads these directly
+      netMasks[3] = fs[3] ? fs[3].m & 15 : 0;
+      const DASH = ['dashP1', 'dashP2', 'dashP3', 'dashP4'];
+      const ATK  = ['atkP1', 'atkP2', 'atkP3', 'atkP4'];
+      const CYC  = ['cycleP1', 'cycleP2', 'cycleP3', 'cycleP4'];
+      const SUM  = ['summon', 'summon2', 'summon3', 'summon4'];
+      for (let i = 0; i < fs.length; i++) {
+        if (fs[i].e & 1) pend[DASH[i]] = true;
+        if (fs[i].e & 2) pend[ATK[i]] = true;
+        if (fs[i].e & 4) pend[CYC[i]] = true;
+        if (fs[i].s >= 0) pend[SUM[i]] = ['gandalf', 'luke', 'jotaro'][fs[i].s] || null;
+      }
+      if (fs[0].h > 0) pend.mash += fs[0].h;   // the Force choke grips P1 — only seat 0 mashes count
+      // spent frames are dropped; our OWN seat keeps a trailing 30-tick window so
+      // a reconnect resume can re-send anything a drop swallowed (transport
       // bookkeeping only — never read by the sim, so determinism is untouched)
-      netFrames[netIsHost ? 1 : 0].delete(tick);
-      netFrames[netIsHost ? 0 : 1].delete(tick - 30);
+      for (let i = 0; i < netFrames.length; i++) {
+        netFrames[i].delete(i === netSeat ? tick - 30 : tick);
+      }
     }
     if (tick % 60 === 0) netChecksum();
   }
@@ -6161,8 +7181,12 @@ function loop() {
 
   /* death animation + game-over screen */
   if (!alive) {
+    // the KILL CAM plays first — it advances itself once per loop call (= per
+    // tick), and any key skips it; deadT holds so the fall animation still plays
+    if (killCam) { drawKillCam(); return; }
     deadT++;
     ctx.clearRect(0, 0, GW, GH);
+    if (started && !swActive && !jojoActive && !ianActive) drawBattlefield();
     if (stone) drawStone();
     for (const e of enemies) drawEnemy(e);
     const fall = Math.min(1, deadT / 28);
@@ -6186,12 +7210,14 @@ function loop() {
   /* a paused overlay — a boon offer, or the upgrade shop between waves */
   if (paused) {
     if (boonMenu) drawBoonPanel();
-    else drawUpgradePanel();
+    else if (upMenu) drawUpgradePanel();
+    else if (shellMenu) drawShellMenu();
     drawTrophyToasts();
-    hud.innerHTML = netplay && !netIsHost && boonMenu
-      ? '⏳ Player 1 is choosing…<br>(P1 picks the party\'s boon)'
+    hud.innerHTML = netplay && boonMenu && (boonMenu.who | 0) !== netSeat
+      ? '⏳ Player ' + ((boonMenu.who | 0) + 1) + ' is choosing…<br>(everyone picks their OWN boon)'
+      : shellMenu ? 'PAUSED — settings<br>↑↓ rows · ◀ ▶ change · P resumes'
       : (boonMenu
-        ? (boonMenu.bane ? 'a bane must be borne' : 'a boon is offered') + '<br>◀ ▶ choose · Z takes it'
+        ? (boonMenu.bane ? 'a bane must be borne' : (coop ? 'P' + ((boonMenu.who | 0) + 1) + ' — your boon is offered' : 'a boon is offered')) + '<br>◀ ▶ choose · Z takes it'
         : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left'
           + (netplay ? '<br>🌐 you both shop · Continue closes it for both' : ''));
     return;
@@ -6204,6 +7230,15 @@ function loop() {
 
   frame++;
 
+  /* ── HIT-STOP: on a heavy impact the whole sim holds its breath for a few
+     ticks and falls straight through to the render — the frozen frame IS the
+     impact. The feeders above already ran (frames/events keep flowing online),
+     pend edges queue up and land when the world unfreezes, and the living
+     camera keeps moving over the stillness. Labeled block so the untouched
+     gameplay section below needs no re-indentation. ── */
+  simStep: {
+  if (hitStop > 0) { hitStop--; break simStep; }
+
   /* per-tick input: queued edge-triggered presses enter the sim only here, on the
      tick boundary (see resetPend) — with the held-key reads just below, this is the
      sim's complete input surface for this tick (the replay/lockstep capture point) */
@@ -6213,17 +7248,29 @@ function loop() {
   if (coop && p2) {
     if (pend.dashP2) { pend.dashP2 = false; recPush([tick, 3]); tryDash(p2); }
     if (pend.atkP2)  { pend.atkP2 = false;  recPush([tick, 4]); tryAttack(p2); }
-    if (pend.cycleP2) { pend.cycleP2 = false; recPush([tick, 11, 1]); cycleSpell(p2); }
+    if (pend.cycleP2) { pend.cycleP2 = false; recPush([tick, 11, 1]); p2.cls === 'rider' ? tryBreath(p2) : cycleSpell(p2); }
+    if (p3) {   // seats 3/4 exist only online — the recorder is disarmed there
+      if (pend.dashP3) { pend.dashP3 = false; tryDash(p3); }
+      if (pend.atkP3)  { pend.atkP3 = false;  tryAttack(p3); }
+      if (pend.cycleP3) { pend.cycleP3 = false; cycleSpell(p3); }
+    }
+    if (p4) {
+      if (pend.dashP4) { pend.dashP4 = false; tryDash(p4); }
+      if (pend.atkP4)  { pend.atkP4 = false;  tryAttack(p4); }
+      if (pend.cycleP4) { pend.cycleP4 = false; cycleSpell(p4); }
+    }
   } else { pend.dashP2 = false; pend.atkP2 = false; pend.cycleP2 = false; }
   if (pend.summon) {
     const sk = pend.summon; pend.summon = null;
     recPush([tick, 5, ['gandalf', 'luke', 'jotaro'].indexOf(sk)]);
     trySummon(sk);
   }
-  if (pend.summon2) {   // netplay only — the client's summon, after the host's (deterministic meter order)
+  if (pend.summon2) {   // netplay only — the joiners' summons, after the host's, in seat order (deterministic meter spend)
     const sk = pend.summon2; pend.summon2 = null;
     trySummon(sk);
   }
+  if (pend.summon3) { const sk = pend.summon3; pend.summon3 = null; trySummon(sk); }
+  if (pend.summon4) { const sk = pend.summon4; pend.summon4 = null; trySummon(sk); }
   if (pend.prompt) { pend.prompt = false; championPrompt(); }   // banner only — not recorded
   if (player.choke <= 0) pend.mash = 0;   // mashes only mean anything mid-choke
 
@@ -6288,12 +7335,45 @@ function loop() {
     if (jx || jy) { p2.fx = jx; p2.fy = jy; }
     if (sidFinale || dioFinale || ianActive || dioStopT > 0) { jx = 0; jy = 0; }
     if (p2.stunT > 0) { jx = 0; jy = 0; p2.stunT--; }   // Force-push recoil carries
-    moveHero(p2, jx, jy);
+    if (p2.cls === 'rider' && p2.mounted && !player.down) {
+      // MOUNTED: the rider never steers — the keys above already set the turret
+      // aim (p2.fx/fy); the body just rides the saddle. No moveHero at all.
+      p2.x = player.x; p2.y = player.y - RIDER_SADDLE;
+      p2.vx = 0; p2.vy = 0;
+      if (p2.iframe > 0) p2.iframe--;
+    } else {
+      if (p2.cls === 'rider') p2.mounted = false;   // the wyrm fell — thrown to your feet
+      moveHero(p2, jx, jy);
+      // an unhorsed rider REMOUNTS by reaching the living wyrm (the revive verb's twin)
+      if (p2.cls === 'rider' && !p2.mounted && !player.down && player.cls === 'wyrm' &&
+          Math.hypot(p2.x - player.x, p2.y - player.y) < up.remountR) {
+        p2.mounted = true;
+        sparks.push({ x: player.x, y: player.y - 40, t: 14, color: DRAGOON_COL, txt: 'MOUNTED' });
+      }
+    }
+  }
+
+  /* seats 3 and 4 (online war band only): the same physics, masks straight from
+     the lockstep frames — no local keys, no mounted-rider special cases */
+  for (const [hx, mi] of [[p3, 2], [p4, 3]]) {
+    if (!hx || hx.down) continue;
+    let kx = 0, ky = 0;
+    const hm = netMasks[mi];
+    if (hm & 1) kx = -1;
+    if (hm & 2) kx = 1;
+    if (hm & 4) ky = -1;
+    if (hm & 8) ky = 1;
+    if (kx && ky) { kx *= 0.707; ky *= 0.707; }
+    if (kx || ky) { hx.fx = kx; hx.fy = ky; }
+    if (sidFinale || dioFinale || ianActive || dioStopT > 0) { kx = 0; ky = 0; }
+    if (hx.stunT > 0) { kx = 0; ky = 0; hx.stunT--; }
+    moveHero(hx, kx, ky);
   }
 
   /* the dragoon's lance rides its velocity — the joust resolves right after movement
-     and BEFORE the contact loop below, so a skewer lands before the body would */
-  for (const h of heroesLive()) if (h.cls === 'dragoon') joustSweep(h);
+     and BEFORE the contact loop below, so a skewer lands before the body would.
+     The wyrm tramples by the identical rules (and feeds the heat gauge). */
+  for (const h of heroesLive()) if (h.cls === 'dragoon' || h.cls === 'wyrm') joustSweep(h);
 
   /* reviving a downed partner: stand close to one and a ring fills; let go and it drains */
   if (coop && p2) {
@@ -6310,12 +7390,13 @@ function loop() {
     if (--breatherT === 0) {
       wave++;
       if (wave >= 5) sfUnlock('wave_5');
+      if (wave >= 4 && player.cls === 'wyrm') sfUnlock('pair_bond');
       if (wave >= 10) sfUnlock('wave_10');
       if (wave >= 15) sfUnlock('deep_15');
       if (hardMode && wave >= 5) sfUnlock('hard_5');
       if (wave >= 6 && runFlawless) sfUnlock('unscathed');       // five waves, not one blow landed
       if (wave >= 5 && tick <= 3 * 60 * SIM_HZ) sfUnlock('swift'); // tick-based, so replays agree
-      waveQuota = Math.min(30, 8 + wave * 3);
+      waveQuota = Math.min(30 + 10 * (partySize() - 1), bandScale(8 + wave * 3));
       if (up.shield) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave
       banner = 'WAVE ' + wave;
       bannerSub = { 2: 'the wolves are loosed', 3: 'skeleton archers nock their arrows', 4: 'the trolls have come' }[wave] || '';
@@ -6399,8 +7480,9 @@ function loop() {
   }
 
   /* spawn warnings → enemies (each wave is a fixed war band) */
-  const spawnEvery = Math.max(24, 92 - wave * 8);
-  const maxFoes = Math.min(26, 7 + wave * 3);
+  const band = partySize() - 1;   // extra fighters bring a denser, faster horde
+  const spawnEvery = Math.max(Math.max(14, 24 - band * 3), 92 - wave * 8 - band * 10);
+  const maxFoes = Math.min(26 + band * 4, 7 + wave * 3 + band * 2);
   if (!nineActive && !awaitExit && !swActive && swFadeT <= 0 && breatherT <= 0 && !ianActive && ianCue <= 0 && waveQuota > 0 && frame > 50 && frame % spawnEvery === 0 && enemies.length + warns.length < maxFoes) {
     const p = edgePoint();
     warns.push({ x: p.x, y: p.y, type: rollType(), elite: rollElite(), t: 45 });
@@ -6441,6 +7523,7 @@ function loop() {
       if (pu.kind === 'freeze') {
         // frost nova — a ring of ice snaps out and encases only the foes it reaches
         sfSfx.freeze();
+        fieldWashSet('130,200,255', 0.16, 45); addDecal(ph.x, ph.y, 'frost');   // (render-only)
         blasts.push({ kind: 'frost', x: ph.x, y: ph.y, r: 0, t: 0, life: 26 });
         let n = 0;
         for (const e of enemies) {
@@ -6452,6 +7535,7 @@ function loop() {
       } else if (pu.kind === 'fire') {
         // fireball — a billowing wall of flame erupts and engulfs the nearby mob
         sfSfx.bomb(); shake = 16;
+        fieldWashSet('255,120,40', 0.18, 50); addDecal(ph.x, ph.y, 'scorch');   // (render-only)
         blasts.push({ kind: 'fire', x: ph.x, y: ph.y, r: 0, t: 0, life: 30 });
         knockback(ph.x, ph.y, FIRE_R, 220, 50);
         sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#ff8a65', txt: 'FWOOSH' });
@@ -6479,6 +7563,7 @@ function loop() {
           else { best.stun = Math.max(best.stun || 0, 26); sparks.push({ x: best.x, y: best.y - 30, t: 16, color: '#b3e5fc', txt: '⚡' }); }
         }
         enemies = enemies.filter(e => !e.dead);
+        fieldWashSet('170,130,255', 0.16, 45);   // (render-only) the field strobes violet — one eased lift
         blasts.push({ kind: 'chain', pts, t: 0, life: 18 });
         sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#80d8ff', txt: hops ? 'CHAIN x' + hops : 'ZAP' });
       }
@@ -6527,6 +7612,7 @@ function loop() {
     stone = null; stoneCd = 150;   // a beat before the next stone (lets a co-op partner arm too, but not instantly)
     sfUnlock('excalibur');
     stoneGrabber.swordT = Math.round(SWORD_T * up.swordMul);   // Keen Edge holds the blade longer
+    fieldWashSet('255,200,80', 0.2, 60);   // (render-only) the pull washes the whole field gold
     banner = '⚔ EXCALIBUR ⚔'; bannerSub = 'X — swing the blade'; bannerT = 100;
     sfSfx.sword(); shake = 8;
     knockback(stoneGrabber.x, stoneGrabber.y, 0, 0, 30);  // a stunned beat — nobody moves, nobody is shoved
@@ -6603,7 +7689,7 @@ function loop() {
           rangedHit(prey, up.minionDmg, dx / d, dy / d);
           if (kills > k0) {                                            // a minion's kill still feeds the master
             const boss = heroesLive().find(hh => hh.cls === 'necro');
-            if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + (SOUL_MKILL + bn.soulBonus) * (kills - k0));
+            if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + (SOUL_MKILL + boss.bn.soulBonus) * (kills - k0));
           }
         }
         if (up.trueForms && m.src === 'archer' && m.shotCd <= 0 && d > 60 && d < 340) {
@@ -6789,15 +7875,19 @@ function loop() {
     // every standing hero is tested against this foe (in co-op the boss arcs can fell either)
     for (const h of heroesLive()) {
       if (h.dashT > 0) continue;               // i-frames: untouchable mid-dash
+      // a MOUNTED rider sits above the fray: ground bodies can't touch them (the
+      // named boss arcs below still can — archers and flails un-horse riders)
+      const inSaddle = h.cls === 'rider' && h.mounted;
       const d = Math.hypot(h.x - e.x, h.y - e.y);
-      if (d < e.kr + PLAYER_R) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
+      const bodyR = e.kr + PLAYER_R + (h.cls === 'wyrm' ? WYRM_R : 0);
+      if (!inSaddle && d < bodyR) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
       // the frost wolf chills a hero who brushes close; the DIRE wolf's chill is
       // a full 90px aura (drawn as an icy ring) — no brush needed
-      if (e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
+      if (!inSaddle && e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
         if (h.chillT <= 0) sparks.push({ x: h.x, y: h.y - 34, t: 14, color: '#8fd8ff', txt: 'CHILLED' });
         h.chillT = 90;
       }
-      if (d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
+      if (!inSaddle && d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
         e.grz = 50; score += 5 * mult;
         addMeter(1);
         sfSfx.graze();
@@ -6850,6 +7940,7 @@ function loop() {
     kegs.splice(i, 1);
     sfSfx.bomb(); shake = Math.max(shake, 8);
     blasts.push({ kind: 'fire', x: k.tx, y: k.ty, r: 0, t: 0, life: 22, rMax: KEG_R + 14 });
+    addDecal(k.tx, k.ty, 'scorch');   // (render-only) the ground remembers
     sparks.push({ x: k.tx, y: k.ty - 12, t: 16, color: '#ff8a65', txt: 'BOOM' });
     for (const h of heroesLive()) {
       if (h.dashT > 0) continue;                 // i-frames clear the blast
@@ -6944,14 +8035,36 @@ function loop() {
   /* stopped time ticks down last, so the whole frame agrees it is stopped */
   if (dioStopT > 0 && --dioStopT === 0) { dioStopFx = 12; sfSfx.zawarudo(); sparks.push({ x: GW / 2, y: 50, t: 18, color: '#fff', txt: 'time resumes' }); }
 
+  }   // ── end simStep (hit-stop falls through to here) ──
+
+  /* the kill cam's ghost tape: one draw-ready snapshot per live tick (clones +
+     baked tint so seat colors survive; render bookkeeping only — no sim reads) */
+  if (started && alive && !paused && !bossIntro && !boonMenu) {
+    camTape.push({
+      heroes: heroesAll().map((h) => ({ ...h, tint: heroTint(h) })),
+      enemies: enemies.map((e) => ({ ...e })),
+    });
+    if (camTape.length > CAM_TAPE_MAX) camTape.shift();
+  }
+
   /* ── render ── */
   ctx.clearRect(0, 0, GW, GH);
+  camUpdate();
   ctx.save();
-  if (shake > 0) { shake--; const sx = (rnd() - 0.5) * shake, sy = (rnd() - 0.5) * shake; if (!api.reduceMotion) ctx.translate(sx, sy); }
+  camApply();   // the living camera (render-only; identity under reduced motion)
+  if (shake > 0) { shake--; const sx = (rnd() - 0.5) * shake, sy = (rnd() - 0.5) * shake; if (!api.reduceMotion) ctx.translate(sx * sfOpts.shake, sy * sfOpts.shake); }   // rnd ALWAYS drawn (stream!), option scales only the translate
+
+  // ── the battlefield (atmosphere pass): the open field is a painted night
+  // world now, not a window onto the desktop — see drawBattlefield. The
+  // set-piece rooms below paint their own worlds instead.
+  if (started && !swActive && !jojoActive && !ianActive) {
+    drawBattlefield();
+    drawLightPools();
+  }
 
   if (swActive) {
     // the corridor: black void + a fixed starfield
-    ctx.fillStyle = '#04060a'; ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = '#04060a'; ctx.fillRect(-30, -30, GW + 60, GH + 60);
     ctx.fillStyle = '#cdd6e0';
     for (const st of swStars) {
       ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin((frame + st.x) * 0.02));
@@ -7485,6 +8598,21 @@ function loop() {
   }
   if (ianChoice) drawIanChoice();
   ctx.restore();
+  // directional HURT FLASH (render-only, screen-space): the edge the blow came
+  // from flares red and fades — you always know which way death was standing
+  if (hurtFlash) {
+    const hf2 = hurtFlash;
+    const d = Math.hypot(hf2.dx, hf2.dy) || 1;
+    const a = (api.reduceMotion ? 0.16 : 0.24) * (hf2.t / 26) * (0.5 + 0.5 * sfOpts.flash);
+    const ex = GW / 2 + (hf2.dx / d) * GW * 0.62, ey = GH / 2 + (hf2.dy / d) * GH * 0.62;
+    const fg = ctx.createRadialGradient(ex, ey, 0, ex, ey, Math.max(GW, GH) * 0.55);
+    fg.addColorStop(0, 'rgba(255,40,30,' + a.toFixed(3) + ')');
+    fg.addColorStop(1, 'rgba(255,40,30,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(0, 0, GW, GH);
+    if (--hf2.t <= 0) hurtFlash = null;   // once per loop call — cadence-safe
+  }
+  if (shellMenu && netplay) drawShellMenu();   // online: settings overlay over a LIVE sim (nothing pauses)
   drawSummonMeter();   // the ally charge gauge sits in the UI layer, unaffected by screen shake
   drawManaGauge();     // ...and the wizard's well mirrors it bottom-right
   drawTrophyToasts();
@@ -7566,6 +8694,7 @@ function loop() {
 
 // ── hero-actions — enemyColor, movement, dash, swing/shoot/cast/scythe, summons, the Nine ──
 function enemyColor(e) {
+  if (e.flashT > 0 && sfOpts.flash > 0) return '#ffffff';   // impact frame — the flash outranks everything (player-optional)
   if (freezeT > 0 || e.stun > 0 || e.frozen > 0) return '#8fd8ff';
   if (e.type === 'wraith')
     return e.mode === 'aim' && (api.reduceMotion || Math.floor(frame / 4) % 2 === 0) ? '#5d4f8a' : '#16121e';
@@ -7618,11 +8747,12 @@ function enemyColor(e) {
 // (and RNG consumption — there is none here) is identical to the old inline block.
 function moveHero(h, ix, iy) {
   // a frost-wolf chill drags the hero's acceleration and top speed (dash unaffected — the escape valve)
-  const chill = (h.chillT > 0 ? 0.55 : 1) * bn.spd;   // Fleet Foot raises both accel and the cap
+  const chill = (h.chillT > 0 ? 0.55 : 1) * bn.spd * h.bn.spd;   // banes are global, Fleet Foot is the picker's own
   if (h.chillT > 0) h.chillT--;
   // the dragoon rides Joust physics: heavy glide (little friction), sluggish
-  // steering, and a far higher ceiling — momentum is the class's whole weapon
-  const drag = h.cls === 'dragoon';
+  // steering, and a far higher ceiling — momentum is the class's whole weapon.
+  // The wyrm (the co-op pair's beast) shares them wholesale.
+  const drag = h.cls === 'dragoon' || h.cls === 'wyrm';
   const fr = drag ? 0.93 : 0.86, ac = drag ? 0.3 : 0.62;
   h.vx = h.vx * fr + ix * ac * chill;
   h.vy = h.vy * fr + iy * ac * chill;
@@ -7635,7 +8765,7 @@ function moveHero(h, ix, iy) {
   if (pv > 0.4) h.phase += 0.06 + pv * 0.045;
   if (h.dashT > 0) {
     h.dashT--;
-    ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
+    if (h.cls !== 'wyrm') ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 16, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });   // the beast leaves dust, not afterimages
     // Phantom Strike: dashing through a foe staggers it (the no-flinch bosses shrug it off)
     if (up.dashStrike) {
       for (const e of enemies) {
@@ -7685,6 +8815,7 @@ function trySwing(h) {
     if (d > up.swingR + (e.type === 'troll' ? 14 : e.type === 'ogre' ? 20 : 0)) continue;
     if ((dx / d) * fx + (dy / d) * fy < -0.2) continue;  // ~220° cleave in front
     if (e.hp && --e.hp > 0) {
+      e.flashT = 2;   // impact frames (see rangedHit)
       if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') {
         // bosses / the war-ogre don't flinch — a brief parry stagger, no stunlock
         e.stun = Math.max(e.stun || 0, e.type === 'ogre' ? 10 : 6);
@@ -7731,8 +8862,65 @@ function tryAttack(h) {
   if (h.cls === 'ranged') return tryShoot(h);
   if (h.cls === 'caster') return tryCast(h);
   if (h.cls === 'necro') return tryScythe(h);
-  if (h.cls === 'dragoon') return tryFlap(h);
+  if (h.cls === 'dragoon' || h.cls === 'wyrm') return tryFlap(h);
+  if (h.cls === 'rider') return tryLance(h);
   return trySwing(h);
+}
+/* ── the rider (the co-op pair's saddle seat) ──
+   Mounted, the rider never steers — their movement keys are an 8-way TURRET AIM
+   (set in the loop's P2 block) and the attack key JABS a lance along it: the
+   nearest foe in a narrow cone takes a rangedHit. Thrown/dismounted, the same
+   key is a short desperate stab. Lance kills top up the shared heat gauge. */
+function tryLance(h) {
+  if (!h || h.down || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0 || tick < h.swingReadyTick) return;
+  h.swingReadyTick = tick + Math.max(8, Math.round(up.jabT)); h.swingT = 8;
+  const fd = Math.hypot(h.fx, h.fy) || 1;
+  const ux = h.fx / fd, uy = h.fy / fd;
+  const reach = h.mounted ? up.riderReach : 34;
+  let best = null, bd = Infinity;
+  for (const e of enemies) {
+    if (untouchable(e) || e.type === 'ian') continue;
+    const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
+    if (d > e.kr + reach) continue;
+    if ((dx / d) * ux + (dy / d) * uy < 0.6) continue;   // a jab, not a sweep
+    if (d < bd) { bd = d; best = e; }
+  }
+  if (!best) { sfSfx.blip(); return; }
+  sfSfx.thud();
+  if (rangedHit(best, 1, ux, uy) && p2 && p2.cls === 'rider') heat = Math.min(up.heatMax, heat + HEAT_LANCE);
+  enemies = enemies.filter(e => !e.dead);
+}
+// FIRE BREATH — the rider's spender (the spell-cycle key, E): drinks BREATH_COST
+// from the shared heat gauge and rakes a cone along the aim. Bosses stagger by
+// the usual no-flinch rules; the pack burns. Only tramples and lance kills
+// refill the gauge — the beast earns, the rider spends.
+function tryBreath(h) {
+  if (!h || h.down || !h.mounted || !started || !alive || paused || sidFinale || dioFinale || dioStopT > 0) return;
+  if (heat < up.breathCost) {
+    sparks.push({ x: h.x, y: h.y - 20, t: 12, color: '#ff8a65', txt: 'no heat' });
+    sfSfx.blip();
+    return;
+  }
+  heat -= up.breathCost;
+  const fd = Math.hypot(h.fx, h.fy) || 1;
+  const ux = h.fx / fd, uy = h.fy / fd;
+  fieldWashSet('255,120,40', 0.12, 32);   // (render-only)
+  addDecal(h.x + ux * BREATH_R * 0.5, h.y + uy * BREATH_R * 0.5, 'scorch');
+  sfSfx.bomb(); shake = Math.max(shake, 6);
+  blasts.push({ kind: 'fire', x: h.x + ux * BREATH_R * 0.45, y: h.y + uy * BREATH_R * 0.45, r: 0, t: 0, life: 22, rMax: BREATH_R * 0.6 });
+  const kills0 = kills;
+  for (const e of enemies) {
+    if (untouchable(e) || e.type === 'ian') continue;
+    const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
+    if (d > BREATH_R + e.kr) continue;
+    if ((dx / d) * ux + (dy / d) * uy < up.breathCone) continue;   // a tight cone along the aim
+    rangedHit(e, up.breathDmg, ux, uy);
+    if (!e.dead && e.hp > 0) e.stun = Math.max(e.stun || 0, 24);   // scorched
+  }
+  enemies = enemies.filter(e => !e.dead);
+  const slain = kills - kills0;
+  if (slain >= 4) sfUnlock('dragonfire');
+  if (slain > 1) sparks.push({ x: h.x + ux * 60, y: h.y - 30, t: 16, color: '#ff8a65', txt: slain + ' BURNED' });
 }
 /* ── the dragoon (arcade JOUST) ──
    The attack key carries no weapon at all — it's a WING FLAP, an impulse along the
@@ -7745,7 +8933,7 @@ function tryFlap(h) {
   const d = Math.hypot(h.fx, h.fy) || 1;
   h.vx += h.fx / d * FLAP_IMP;
   h.vy += h.fy / d * FLAP_IMP;
-  ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 12, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
+  if (h.cls !== 'wyrm') ghosts.push({ x: h.x, y: h.y, phase: h.phase, t: 12, cls: h.cls, dir: h.fx >= 0 ? 1 : -1 });
   sfSfx.flap();
 }
 // a foe's skewer bar: how fast the lance must fly to take it (null = unjoustable)
@@ -7773,11 +8961,17 @@ function joustSweep(h) {
     const bar = joustBar(e);
     if (bar === null || pv < bar) continue;
     const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
-    if (d > e.kr + PLAYER_R + LANCE_R + up.lanceR) continue;
+    if (d > e.kr + PLAYER_R + LANCE_R + up.lanceR + (h.cls === 'wyrm' ? WYRM_R : 0)) continue;
     if ((dx / d) * ux + (dy / d) * uy < 0.35) continue;   // the lance points where you fly
     e.joustTick = tick + 26;
     const survived = !rangedHit(e, up.joustDmg, ux, uy);
-    sparks.push({ x: (h.x + e.x) / 2, y: (h.y + e.y) / 2 - 20, t: 14, color: DRAGOON_COL, txt: 'SKEWER' });
+    sparks.push({ x: (h.x + e.x) / 2, y: (h.y + e.y) / 2 - 20, t: 14, color: DRAGOON_COL, txt: h.cls === 'wyrm' ? 'TRAMPLE' : 'SKEWER' });
+    if (!survived && h.cls === 'wyrm') {
+      heat = Math.min(up.heatMax, heat + HEAT_TRAMPLE + up.heatTrampleB);   // the beast earns
+      trampleN++;
+      if (trampleN >= 15) sfUnlock('trampler');
+    }
+    if (!survived && h.cls === 'dragoon' && e.type === 'troll') sfUnlock('skewered');
     if (survived) {
       // carom: bounce off the contact normal, keep most of the speed
       const nx = dx / d, ny = dy / d;
@@ -7787,7 +8981,7 @@ function joustSweep(h) {
       h.x = clamp(h.x - nx * 6, 14, GW - 14);
       h.y = clamp(h.y - ny * 6, 40, GH - 10);
     } else {
-      if (bn.cry) knockback(e.x, e.y, 0, 60, 12);     // SHRILL CRY: the kill scatters the pack
+      if (h.bn.cry) knockback(e.x, e.y, 0, 60, 12);   // SHRILL CRY: the picker's kills scatter the pack
       if (up.tailwind) {                              // Tailwind: a kill feeds the gallop
         const s = Math.min(1.15, (DRAG_CAP * up.dragCap) / Math.max(pv, 0.1));
         h.vx *= s; h.vy *= s;
@@ -7805,6 +8999,7 @@ function untouchable(e) {
 // an arrow/bolt lands on e: the blade's no-flinch rules, with a gentler shove
 function rangedHit(e, dmg, ux, uy) {
   if (e.hp && (e.hp -= dmg) > 0) {
+    e.flashT = 2;   // impact frames: the survivor blazes white for a beat (persists through hit-stop)
     if (e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'ogre') {
       e.stun = Math.max(e.stun || 0, e.type === 'ogre' ? 10 : 6);
       sparks.push({ x: e.x, y: e.y - 34, t: 14, color: '#ff8a80', txt: 'TSSS' });
@@ -7887,7 +9082,7 @@ function tryCast(h) {
   h.mana -= sp.cost;                            // committed — the incantation drinks up front
   h.manaHoldTick = tick + MANA_HOLD;            // ...and the well holds its breath (no regen for a beat)
   h.swingReadyTick = tick + Math.round(up.zapMs * SIM_HZ / 1000);
-  const castT = Math.max(4, Math.round(sp.cast * bn.castMul));   // Flicker Cast trims the wind-up
+  const castT = Math.max(4, Math.round(sp.cast * h.bn.castMul));   // Flicker Cast trims the picker's wind-up
   h.castT = castT; h.castMax = castT; h.casting = key;
   sfSfx.bolt();
 }
@@ -7911,7 +9106,7 @@ function resolveCast(h) {
   h.swingT = 10;
   const slain = kills - kills0;                 // soul sparks: kills feed the well (Siphon doubles them)
   if (slain > 0) {
-    const back = slain * (bn.sparks2 ? 10 : 5) + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
+    const back = slain * (h.bn.sparks2 ? 10 : 5) + (up.overcharge ? Math.round(sp.cost * 0.3) : 0);
     h.mana = Math.min(up.manaMax, h.mana + back);
     sparks.push({ x: h.x, y: h.y - 34, t: 12, color: '#b39ddb', txt: '🔮+' + back });
   }
@@ -7944,6 +9139,7 @@ function castBolt(h) {
 // FROST NOVA — an ice ring around the caster; always erupts (positioning IS the aim)
 function castNova(h) {
   sfSfx.freeze();
+  addDecal(h.x, h.y, 'frost');   // (render-only) a bloom the field remembers
   blasts.push({ kind: 'frost', x: h.x, y: h.y, r: 0, t: 0, life: 26, rMax: NOVA_R });
   let n = 0;
   for (const e of enemies) {
@@ -7960,6 +9156,7 @@ function castFire(h) {
   if (!t) return false;
   const cx = t.x, cy = t.y;                     // the eruption outlives its mark
   sfSfx.bomb(); shake = Math.max(shake, 10);
+  addDecal(cx, cy, 'scorch');   // (render-only)
   blasts.push({ kind: 'fire', x: cx, y: cy, r: 0, t: 0, life: 30, rMax: FIREB_R });
   knockback(cx, cy, FIREB_R, 180, 40);
   sparks.push({ x: cx, y: cy - 36, t: 24, color: '#ff8a65', txt: 'FWOOSH' });
@@ -8016,7 +9213,7 @@ function tryScythe(h) {
   enemies = enemies.filter(e => !e.dead);
   const slain = kills - kills0;
   if (slain > 0) {
-    const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0) + bn.soulBonus);
+    const gain = slain * (SOUL_KILL + (up.reaper ? 3 : 0) + h.bn.soulBonus);
     h.souls = Math.min(SOULS_MAX, h.souls + gain);
     sparks.push({ x: h.x, y: h.y - 36, t: 14, color: NECRO_COL, txt: '+' + gain + ' souls' });
     shake = Math.max(shake, Math.min(8, 2 + slain * 2));
@@ -8031,7 +9228,7 @@ function tryScythe(h) {
       husks.splice(i, 1);
       h.souls -= up.raiseCost;
       minions.push({ src: k.src, x: k.x, y: k.y, hp: up.minionHp + (k.elite ? 1 : 0),
-                     t: Math.round(MINION_T * bn.minionMul),   // Restless: the loan runs longer
+                     t: Math.round(MINION_T * h.bn.minionMul),   // Restless: the picker's loans run longer
                      phase: 0, fx: 1, hitCd: 20, hurtCd: 30, shotCd: 60, elite: k.elite });
       if (minions.length >= 4) sfUnlock('army_4');
       blasts.push({ kind: 'frost', x: k.x, y: k.y, r: 0, t: 0, life: 16, rMax: 44 });
@@ -8149,6 +9346,8 @@ function stopGame() {
   document.removeEventListener('paste',   onPaste);
   window.removeEventListener('blur', dropKeys);
   canvas.remove(); hud.remove(); xp._sfCleanup = null;
+  const matte = document.getElementById('sf-matte');
+  if (matte) matte.remove();   // the letterbox backdrop must never outlive the game
 }
 
 let cheatBuf = '', nineKeyCount = 0, last9 = 0, eightKeyCount = 0, last8 = 0;
@@ -8245,10 +9444,50 @@ function onKey(e) {
     e.preventDefault();
     return;
   }
+  // the pause/settings shell owns the keys while it is up (and un-holds them:
+  // online the sim runs underneath, and menu arrows must not steer your hero)
+  if (shellMenu) {
+    keys[keyName(e.key)] = false;
+    if (e.key === 'ArrowUp') shellSel = (shellSel + 3) % 4;
+    else if (e.key === 'ArrowDown') shellSel = (shellSel + 1) % 4;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (shellSel === 0) sfOpts.shake = sfOpts.shake === 1 ? 0.5 : sfOpts.shake === 0.5 ? 0 : 1;
+      else if (shellSel === 1) sfOpts.kick = sfOpts.kick > 0 ? 0 : 1;
+      else if (shellSel === 2) sfOpts.flash = sfOpts.flash > 0 ? 0 : 1;
+      else sfOpts.hiVis = !sfOpts.hiVis;
+      saveOpts();
+      if (sfSfx.killE) sfSfx.killE();
+    } else if (!e.repeat && ['p', 'P', 'q', 'Q', 'Enter', 'z', 'Z'].includes(e.key)) {
+      if (!netplay) recPush([tick + 1, 13, 0]);   // the unpause is a sim beat too
+      shellToggle();
+    }
+    e.preventDefault();
+    return;
+  }
+  // P — pause & settings (solo/couch truly pause, recorded as opcode 13 so
+  // replays hold the beats; online it overlays a live sim and records nothing)
+  if ((e.key === 'p' || e.key === 'P') && !e.repeat && started && alive && !bossIntro && !killCam && !paused) {
+    if (!netplay) recPush([tick + 1, 13, 0]);
+    shellToggle();
+    e.preventDefault();
+    return;
+  }
   // an online run: Q leaves cleanly at any point (tell the partner first)
   if (netplay && !e.repeat && (e.key === 'q' || e.key === 'Q')) {
     netSend({ t: 'bye' });
     netLeave('you left the game');
+    e.preventDefault();
+    return;
+  }
+  // the kill cam holds the stage — any key skips straight to the death screen
+  if (!alive && killCam) {
+    if (!e.repeat) killCam = null;
+    e.preventDefault();
+    return;
+  }
+  // the results ceremony: any key fast-forwards to the hall of legends
+  if (!alive && !killCam && !replayMode && deadT > 34 && deadT < 176) {
+    if (!e.repeat) deadT = 176;
     e.preventDefault();
     return;
   }
@@ -8295,12 +9534,16 @@ function onKey(e) {
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
           ['creating', 'waiting', 'code', 'err', 'lobby'].includes(netUi.phase)) {
         const d = e.key === 'ArrowRight' ? 1 : -1;
-        classSel = (classSel + d + CLASSES.length) % CLASSES.length;
+        // only the HOST (P1) may pick the WYRM & RIDER pair — the joiner is the
+        // saddle seat by definition, so their cycle never reaches it
+        const list = netUi.mode === 'host' ? [0, 1, 2, 3, 4, PAIR_WYRM] : [0, 1, 2, 3, 4];
+        let ci = list.indexOf(classSel); if (ci < 0) ci = 0;
+        classSel = list[(ci + d + list.length) % list.length];
         try { localStorage.setItem('ilaird_sf_cls', String(classSel)); } catch (err) { /* private mode */ }
         if (netUi.phase === 'lobby') {
           // re-picking un-readies you (the run must never start under a stale pick)
-          if (netUi.myReady) { netUi.myReady = false; netSend({ t: 'rdy', v: 0 }); }
-          netSend({ t: 'cls', c: classSel });
+          if (netUi.myReady) netLobbyReady(false);
+          netLobbyCls();
         }
         if (sfSfx.killE) sfSfx.killE();
         e.preventDefault();
@@ -8317,11 +9560,9 @@ function onKey(e) {
           netUi.input += e.key.toUpperCase();
         }
       } else if (netUi.phase === 'lobby' && !e.repeat && ['z', 'Z', 'Enter', ' '].includes(e.key)) {
-        // the READY gate: the run starts only when BOTH players have confirmed
-        netUi.myReady = !netUi.myReady;
-        netSend({ t: 'rdy', v: netUi.myReady ? 1 : 0 });
+        // the READY gate: the run starts only when the WHOLE band has confirmed
+        netLobbyReady(!netUi.myReady);
         if (sfSfx.killE) sfSfx.killE();
-        netLobbyMaybeStart();
       } else if (!e.repeat && (e.key === 'q' || e.key === 'Q')) {
         backOut();
       } else if (netUi.phase === 'waiting' && !e.repeat && (e.key === 'c' || e.key === 'C')) {
@@ -8373,8 +9614,20 @@ function onKey(e) {
           subMulti = (subMulti + d + 3) % 3;
         }
       }
-      else if (introRow === 2) classSel  = (classSel  + d + nc) % nc;
-      else                     classSel2 = (classSel2 + d + nc) % nc;
+      else if (introRow === 2) {
+        // P1 cycles the five solo classes, plus the WYRM & RIDER pair in couch
+        // co-op; picking the wyrm binds P2 to the rider (and unbinds on leaving)
+        const list = isLocalMulti() ? [0, 1, 2, 3, 4, PAIR_WYRM] : [0, 1, 2, 3, 4];
+        let ci = list.indexOf(classSel); if (ci < 0) ci = 0;
+        classSel = list[(ci + d + list.length) % list.length];
+        if (classSel === PAIR_WYRM) classSel2 = PAIR_RIDER;
+        else if (classSel2 >= PAIR_WYRM) classSel2 = 0;
+      }
+      else if (classSel !== PAIR_WYRM) {   // the rider's seat isn't negotiable
+        const list = [0, 1, 2, 3, 4];
+        let ci = list.indexOf(classSel2); if (ci < 0) ci = 0;
+        classSel2 = list[(ci + d + list.length) % list.length];
+      }
       if (sfSfx.killE) sfSfx.killE();
       e.preventDefault(); return;
     }
@@ -8420,7 +9673,9 @@ function onKey(e) {
   // event (netQueueEvent) applied by BOTH feeders at the same tick — never a direct
   // call, which would fire it on one sim only and desync. The client just watches.
   if (paused && boonMenu) {
-    if (netplay && !netIsHost) { e.preventDefault(); return; }
+    // each seat confirms its OWN boon — everyone else just watches
+    // (locally the players share the keyboard, so no gate is needed)
+    if (netplay && (boonMenu.who | 0) !== netSeat) { e.preventDefault(); return; }
     const n = boonMenu.opts.length;
     if (['ArrowLeft', 'a', 'A'].includes(e.key))       { boonMenu.sel = (boonMenu.sel + n - 1) % n; sfSfx.killE(); }
     else if (['ArrowRight', 'd', 'D'].includes(e.key)) { boonMenu.sel = (boonMenu.sel + 1) % n; sfSfx.killE(); }
@@ -8554,7 +9809,7 @@ function onKey(e) {
     if (netplay) {
       // rematch is host-authoritative: a fresh shared seed, same team & snapshot
       // (blocked while reconnecting — a restart the peer can't hear would desync)
-      if (netIsHost && netCfg && !netRecon && !e.repeat) {
+      if (netIsHost && netCfg && !netReconActive() && !e.repeat) {
         const seed = (((Date.now() >>> 0) ^ ((Math.random() * 0x100000000) >>> 0)) >>> 0);
         netCfg.seed = seed;
         netSend({ t: 'restart', seed });

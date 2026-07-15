@@ -31,7 +31,7 @@ function frameStep(ts) {
   // and is being re-signaled (see netStartRecon); a plain stall = the link is alive
   // but the peer is lagging or tabbed away — deliberately NOT a reconnect trigger.
   if (netplay && started) {
-    if (netRecon) drawNetRecon();
+    if (netReconActive()) drawNetRecon();
     else if (netStall > 30) drawNetWait();
   }
 }
@@ -61,6 +61,7 @@ function loop() {
         case 10: if (ianChoice) chooseIan(e[2] ? 1 : 0); break;
         case 11: if (e[2]) pend.cycleP2 = true; else pend.cycleP1 = true; break;
         case 12: if (boonMenu) pickBoon(e[2]); break;
+        case 13: shellToggle(); break;   // the recorded pause — replays hold the same beats
       }
     }
   }
@@ -73,9 +74,9 @@ function loop() {
      3. apply BOTH players' buffered frames for THIS tick into pend/netMask. */
   if (netplay && started) {
     const nt = tick + NET_DELAY;
-    const mine = netFrames[netIsHost ? 0 : 1];
+    const mine = netFrames[netSeat];
     if (!mine.has(nt)) {
-      let lm = 0;   // both peers play with the full solo bindings (arrows OR WASD)
+      let lm = 0;   // every seat plays with the full solo bindings (arrows OR WASD)
       if (keys['ArrowLeft'] || keys['a']) lm |= 1;
       if (keys['ArrowRight'] || keys['d']) lm |= 2;
       if (keys['ArrowUp'] || keys['w']) lm |= 4;
@@ -85,7 +86,7 @@ function loop() {
                   s: netLocal.summon, h: netLocal.mash };
       netLocal.dash = netLocal.atk = netLocal.cycle = false; netLocal.summon = -1; netLocal.mash = 0;
       mine.set(nt, f);
-      netSend({ t: 'f', r: netRunId, k: nt, m: f.m, e: f.e, s: f.s, h: f.h });
+      netSend({ t: 'f', r: netRunId, p: netSeat, k: nt, m: f.m, e: f.e, s: f.s, h: f.h });
     }
     while (netEvents.length && netEvents[0][0] <= tick) {
       const ev = netEvents.shift();
@@ -97,23 +98,29 @@ function loop() {
         case 12: if (boonMenu) pickBoon(ev[2]); break;
       }
     }
-    const hf = netFrames[0].get(tick), cf = netFrames[1].get(tick);
-    if (hf && cf) {
-      netMask = (hf.m & 15) | ((cf.m & 15) << 4);   // host nibble = P1 arrows, client nibble = P2 WASD bits
-      if (hf.e & 1) pend.dashP1 = true;
-      if (hf.e & 2) pend.atkP1 = true;
-      if (hf.e & 4) pend.cycleP1 = true;
-      if (cf.e & 1) pend.dashP2 = true;
-      if (cf.e & 2) pend.atkP2 = true;
-      if (cf.e & 4) pend.cycleP2 = true;
-      if (hf.s >= 0) pend.summon = ['gandalf', 'luke', 'jotaro'][hf.s] || null;
-      if (cf.s >= 0) pend.summon2 = ['gandalf', 'luke', 'jotaro'][cf.s] || null;
-      if (hf.h > 0) pend.mash += hf.h;   // the Force choke grips P1 — only host mashes count
-      // the remote's frame is spent; our OWN side keeps a trailing 30-tick window so
-      // a reconnect resume can re-send anything the drop swallowed (transport
+    // apply EVERY seat's frame for THIS tick (the gate guaranteed they're here)
+    const fs = netFrames.map((fm) => fm.get(tick));
+    if (fs.every(Boolean)) {
+      netMask = (fs[0].m & 15) | (((fs[1] ? fs[1].m : 0) & 15) << 4);   // P1 low nibble, P2 high
+      netMasks[2] = fs[2] ? fs[2].m & 15 : 0;   // P3/P4 movement reads these directly
+      netMasks[3] = fs[3] ? fs[3].m & 15 : 0;
+      const DASH = ['dashP1', 'dashP2', 'dashP3', 'dashP4'];
+      const ATK  = ['atkP1', 'atkP2', 'atkP3', 'atkP4'];
+      const CYC  = ['cycleP1', 'cycleP2', 'cycleP3', 'cycleP4'];
+      const SUM  = ['summon', 'summon2', 'summon3', 'summon4'];
+      for (let i = 0; i < fs.length; i++) {
+        if (fs[i].e & 1) pend[DASH[i]] = true;
+        if (fs[i].e & 2) pend[ATK[i]] = true;
+        if (fs[i].e & 4) pend[CYC[i]] = true;
+        if (fs[i].s >= 0) pend[SUM[i]] = ['gandalf', 'luke', 'jotaro'][fs[i].s] || null;
+      }
+      if (fs[0].h > 0) pend.mash += fs[0].h;   // the Force choke grips P1 — only seat 0 mashes count
+      // spent frames are dropped; our OWN seat keeps a trailing 30-tick window so
+      // a reconnect resume can re-send anything a drop swallowed (transport
       // bookkeeping only — never read by the sim, so determinism is untouched)
-      netFrames[netIsHost ? 1 : 0].delete(tick);
-      netFrames[netIsHost ? 0 : 1].delete(tick - 30);
+      for (let i = 0; i < netFrames.length; i++) {
+        netFrames[i].delete(i === netSeat ? tick - 30 : tick);
+      }
     }
     if (tick % 60 === 0) netChecksum();
   }
@@ -140,8 +147,12 @@ function loop() {
 
   /* death animation + game-over screen */
   if (!alive) {
+    // the KILL CAM plays first — it advances itself once per loop call (= per
+    // tick), and any key skips it; deadT holds so the fall animation still plays
+    if (killCam) { drawKillCam(); return; }
     deadT++;
     ctx.clearRect(0, 0, GW, GH);
+    if (started && !swActive && !jojoActive && !ianActive) drawBattlefield();
     if (stone) drawStone();
     for (const e of enemies) drawEnemy(e);
     const fall = Math.min(1, deadT / 28);
@@ -165,12 +176,14 @@ function loop() {
   /* a paused overlay — a boon offer, or the upgrade shop between waves */
   if (paused) {
     if (boonMenu) drawBoonPanel();
-    else drawUpgradePanel();
+    else if (upMenu) drawUpgradePanel();
+    else if (shellMenu) drawShellMenu();
     drawTrophyToasts();
-    hud.innerHTML = netplay && !netIsHost && boonMenu
-      ? '⏳ Player 1 is choosing…<br>(P1 picks the party\'s boon)'
+    hud.innerHTML = netplay && boonMenu && (boonMenu.who | 0) !== netSeat
+      ? '⏳ Player ' + ((boonMenu.who | 0) + 1) + ' is choosing…<br>(everyone picks their OWN boon)'
+      : shellMenu ? 'PAUSED — settings<br>↑↓ rows · ◀ ▶ change · P resumes'
       : (boonMenu
-        ? (boonMenu.bane ? 'a bane must be borne' : 'a boon is offered') + '<br>◀ ▶ choose · Z takes it'
+        ? (boonMenu.bane ? 'a bane must be borne' : (coop ? 'P' + ((boonMenu.who | 0) + 1) + ' — your boon is offered' : 'a boon is offered')) + '<br>◀ ▶ choose · Z takes it'
         : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left'
           + (netplay ? '<br>🌐 you both shop · Continue closes it for both' : ''));
     return;
@@ -183,6 +196,15 @@ function loop() {
 
   frame++;
 
+  /* ── HIT-STOP: on a heavy impact the whole sim holds its breath for a few
+     ticks and falls straight through to the render — the frozen frame IS the
+     impact. The feeders above already ran (frames/events keep flowing online),
+     pend edges queue up and land when the world unfreezes, and the living
+     camera keeps moving over the stillness. Labeled block so the untouched
+     gameplay section below needs no re-indentation. ── */
+  simStep: {
+  if (hitStop > 0) { hitStop--; break simStep; }
+
   /* per-tick input: queued edge-triggered presses enter the sim only here, on the
      tick boundary (see resetPend) — with the held-key reads just below, this is the
      sim's complete input surface for this tick (the replay/lockstep capture point) */
@@ -192,17 +214,29 @@ function loop() {
   if (coop && p2) {
     if (pend.dashP2) { pend.dashP2 = false; recPush([tick, 3]); tryDash(p2); }
     if (pend.atkP2)  { pend.atkP2 = false;  recPush([tick, 4]); tryAttack(p2); }
-    if (pend.cycleP2) { pend.cycleP2 = false; recPush([tick, 11, 1]); cycleSpell(p2); }
+    if (pend.cycleP2) { pend.cycleP2 = false; recPush([tick, 11, 1]); p2.cls === 'rider' ? tryBreath(p2) : cycleSpell(p2); }
+    if (p3) {   // seats 3/4 exist only online — the recorder is disarmed there
+      if (pend.dashP3) { pend.dashP3 = false; tryDash(p3); }
+      if (pend.atkP3)  { pend.atkP3 = false;  tryAttack(p3); }
+      if (pend.cycleP3) { pend.cycleP3 = false; cycleSpell(p3); }
+    }
+    if (p4) {
+      if (pend.dashP4) { pend.dashP4 = false; tryDash(p4); }
+      if (pend.atkP4)  { pend.atkP4 = false;  tryAttack(p4); }
+      if (pend.cycleP4) { pend.cycleP4 = false; cycleSpell(p4); }
+    }
   } else { pend.dashP2 = false; pend.atkP2 = false; pend.cycleP2 = false; }
   if (pend.summon) {
     const sk = pend.summon; pend.summon = null;
     recPush([tick, 5, ['gandalf', 'luke', 'jotaro'].indexOf(sk)]);
     trySummon(sk);
   }
-  if (pend.summon2) {   // netplay only — the client's summon, after the host's (deterministic meter order)
+  if (pend.summon2) {   // netplay only — the joiners' summons, after the host's, in seat order (deterministic meter spend)
     const sk = pend.summon2; pend.summon2 = null;
     trySummon(sk);
   }
+  if (pend.summon3) { const sk = pend.summon3; pend.summon3 = null; trySummon(sk); }
+  if (pend.summon4) { const sk = pend.summon4; pend.summon4 = null; trySummon(sk); }
   if (pend.prompt) { pend.prompt = false; championPrompt(); }   // banner only — not recorded
   if (player.choke <= 0) pend.mash = 0;   // mashes only mean anything mid-choke
 
@@ -267,12 +301,45 @@ function loop() {
     if (jx || jy) { p2.fx = jx; p2.fy = jy; }
     if (sidFinale || dioFinale || ianActive || dioStopT > 0) { jx = 0; jy = 0; }
     if (p2.stunT > 0) { jx = 0; jy = 0; p2.stunT--; }   // Force-push recoil carries
-    moveHero(p2, jx, jy);
+    if (p2.cls === 'rider' && p2.mounted && !player.down) {
+      // MOUNTED: the rider never steers — the keys above already set the turret
+      // aim (p2.fx/fy); the body just rides the saddle. No moveHero at all.
+      p2.x = player.x; p2.y = player.y - RIDER_SADDLE;
+      p2.vx = 0; p2.vy = 0;
+      if (p2.iframe > 0) p2.iframe--;
+    } else {
+      if (p2.cls === 'rider') p2.mounted = false;   // the wyrm fell — thrown to your feet
+      moveHero(p2, jx, jy);
+      // an unhorsed rider REMOUNTS by reaching the living wyrm (the revive verb's twin)
+      if (p2.cls === 'rider' && !p2.mounted && !player.down && player.cls === 'wyrm' &&
+          Math.hypot(p2.x - player.x, p2.y - player.y) < up.remountR) {
+        p2.mounted = true;
+        sparks.push({ x: player.x, y: player.y - 40, t: 14, color: DRAGOON_COL, txt: 'MOUNTED' });
+      }
+    }
+  }
+
+  /* seats 3 and 4 (online war band only): the same physics, masks straight from
+     the lockstep frames — no local keys, no mounted-rider special cases */
+  for (const [hx, mi] of [[p3, 2], [p4, 3]]) {
+    if (!hx || hx.down) continue;
+    let kx = 0, ky = 0;
+    const hm = netMasks[mi];
+    if (hm & 1) kx = -1;
+    if (hm & 2) kx = 1;
+    if (hm & 4) ky = -1;
+    if (hm & 8) ky = 1;
+    if (kx && ky) { kx *= 0.707; ky *= 0.707; }
+    if (kx || ky) { hx.fx = kx; hx.fy = ky; }
+    if (sidFinale || dioFinale || ianActive || dioStopT > 0) { kx = 0; ky = 0; }
+    if (hx.stunT > 0) { kx = 0; ky = 0; hx.stunT--; }
+    moveHero(hx, kx, ky);
   }
 
   /* the dragoon's lance rides its velocity — the joust resolves right after movement
-     and BEFORE the contact loop below, so a skewer lands before the body would */
-  for (const h of heroesLive()) if (h.cls === 'dragoon') joustSweep(h);
+     and BEFORE the contact loop below, so a skewer lands before the body would.
+     The wyrm tramples by the identical rules (and feeds the heat gauge). */
+  for (const h of heroesLive()) if (h.cls === 'dragoon' || h.cls === 'wyrm') joustSweep(h);
 
   /* reviving a downed partner: stand close to one and a ring fills; let go and it drains */
   if (coop && p2) {
@@ -289,12 +356,13 @@ function loop() {
     if (--breatherT === 0) {
       wave++;
       if (wave >= 5) sfUnlock('wave_5');
+      if (wave >= 4 && player.cls === 'wyrm') sfUnlock('pair_bond');
       if (wave >= 10) sfUnlock('wave_10');
       if (wave >= 15) sfUnlock('deep_15');
       if (hardMode && wave >= 5) sfUnlock('hard_5');
       if (wave >= 6 && runFlawless) sfUnlock('unscathed');       // five waves, not one blow landed
       if (wave >= 5 && tick <= 3 * 60 * SIM_HZ) sfUnlock('swift'); // tick-based, so replays agree
-      waveQuota = Math.min(30, 8 + wave * 3);
+      waveQuota = Math.min(30 + 10 * (partySize() - 1), bandScale(8 + wave * 3));
       if (up.shield) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave
       banner = 'WAVE ' + wave;
       bannerSub = { 2: 'the wolves are loosed', 3: 'skeleton archers nock their arrows', 4: 'the trolls have come' }[wave] || '';
@@ -378,8 +446,9 @@ function loop() {
   }
 
   /* spawn warnings → enemies (each wave is a fixed war band) */
-  const spawnEvery = Math.max(24, 92 - wave * 8);
-  const maxFoes = Math.min(26, 7 + wave * 3);
+  const band = partySize() - 1;   // extra fighters bring a denser, faster horde
+  const spawnEvery = Math.max(Math.max(14, 24 - band * 3), 92 - wave * 8 - band * 10);
+  const maxFoes = Math.min(26 + band * 4, 7 + wave * 3 + band * 2);
   if (!nineActive && !awaitExit && !swActive && swFadeT <= 0 && breatherT <= 0 && !ianActive && ianCue <= 0 && waveQuota > 0 && frame > 50 && frame % spawnEvery === 0 && enemies.length + warns.length < maxFoes) {
     const p = edgePoint();
     warns.push({ x: p.x, y: p.y, type: rollType(), elite: rollElite(), t: 45 });
@@ -420,6 +489,7 @@ function loop() {
       if (pu.kind === 'freeze') {
         // frost nova — a ring of ice snaps out and encases only the foes it reaches
         sfSfx.freeze();
+        fieldWashSet('130,200,255', 0.16, 45); addDecal(ph.x, ph.y, 'frost');   // (render-only)
         blasts.push({ kind: 'frost', x: ph.x, y: ph.y, r: 0, t: 0, life: 26 });
         let n = 0;
         for (const e of enemies) {
@@ -431,6 +501,7 @@ function loop() {
       } else if (pu.kind === 'fire') {
         // fireball — a billowing wall of flame erupts and engulfs the nearby mob
         sfSfx.bomb(); shake = 16;
+        fieldWashSet('255,120,40', 0.18, 50); addDecal(ph.x, ph.y, 'scorch');   // (render-only)
         blasts.push({ kind: 'fire', x: ph.x, y: ph.y, r: 0, t: 0, life: 30 });
         knockback(ph.x, ph.y, FIRE_R, 220, 50);
         sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#ff8a65', txt: 'FWOOSH' });
@@ -458,6 +529,7 @@ function loop() {
           else { best.stun = Math.max(best.stun || 0, 26); sparks.push({ x: best.x, y: best.y - 30, t: 16, color: '#b3e5fc', txt: '⚡' }); }
         }
         enemies = enemies.filter(e => !e.dead);
+        fieldWashSet('170,130,255', 0.16, 45);   // (render-only) the field strobes violet — one eased lift
         blasts.push({ kind: 'chain', pts, t: 0, life: 18 });
         sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#80d8ff', txt: hops ? 'CHAIN x' + hops : 'ZAP' });
       }
@@ -506,6 +578,7 @@ function loop() {
     stone = null; stoneCd = 150;   // a beat before the next stone (lets a co-op partner arm too, but not instantly)
     sfUnlock('excalibur');
     stoneGrabber.swordT = Math.round(SWORD_T * up.swordMul);   // Keen Edge holds the blade longer
+    fieldWashSet('255,200,80', 0.2, 60);   // (render-only) the pull washes the whole field gold
     banner = '⚔ EXCALIBUR ⚔'; bannerSub = 'X — swing the blade'; bannerT = 100;
     sfSfx.sword(); shake = 8;
     knockback(stoneGrabber.x, stoneGrabber.y, 0, 0, 30);  // a stunned beat — nobody moves, nobody is shoved
@@ -582,7 +655,7 @@ function loop() {
           rangedHit(prey, up.minionDmg, dx / d, dy / d);
           if (kills > k0) {                                            // a minion's kill still feeds the master
             const boss = heroesLive().find(hh => hh.cls === 'necro');
-            if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + (SOUL_MKILL + bn.soulBonus) * (kills - k0));
+            if (boss) boss.souls = Math.min(SOULS_MAX, boss.souls + (SOUL_MKILL + boss.bn.soulBonus) * (kills - k0));
           }
         }
         if (up.trueForms && m.src === 'archer' && m.shotCd <= 0 && d > 60 && d < 340) {
@@ -768,15 +841,19 @@ function loop() {
     // every standing hero is tested against this foe (in co-op the boss arcs can fell either)
     for (const h of heroesLive()) {
       if (h.dashT > 0) continue;               // i-frames: untouchable mid-dash
+      // a MOUNTED rider sits above the fray: ground bodies can't touch them (the
+      // named boss arcs below still can — archers and flails un-horse riders)
+      const inSaddle = h.cls === 'rider' && h.mounted;
       const d = Math.hypot(h.x - e.x, h.y - e.y);
-      if (d < e.kr + PLAYER_R) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
+      const bodyR = e.kr + PLAYER_R + (h.cls === 'wyrm' ? WYRM_R : 0);
+      if (!inSaddle && d < bodyR) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
       // the frost wolf chills a hero who brushes close; the DIRE wolf's chill is
       // a full 90px aura (drawn as an icy ring) — no brush needed
-      if (e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
+      if (!inSaddle && e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
         if (h.chillT <= 0) sparks.push({ x: h.x, y: h.y - 34, t: 14, color: '#8fd8ff', txt: 'CHILLED' });
         h.chillT = 90;
       }
-      if (d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
+      if (!inSaddle && d < e.kr + PLAYER_R + 17 && e.grz <= 0) {        // a near miss just past the body
         e.grz = 50; score += 5 * mult;
         addMeter(1);
         sfSfx.graze();
@@ -829,6 +906,7 @@ function loop() {
     kegs.splice(i, 1);
     sfSfx.bomb(); shake = Math.max(shake, 8);
     blasts.push({ kind: 'fire', x: k.tx, y: k.ty, r: 0, t: 0, life: 22, rMax: KEG_R + 14 });
+    addDecal(k.tx, k.ty, 'scorch');   // (render-only) the ground remembers
     sparks.push({ x: k.tx, y: k.ty - 12, t: 16, color: '#ff8a65', txt: 'BOOM' });
     for (const h of heroesLive()) {
       if (h.dashT > 0) continue;                 // i-frames clear the blast
@@ -923,14 +1001,36 @@ function loop() {
   /* stopped time ticks down last, so the whole frame agrees it is stopped */
   if (dioStopT > 0 && --dioStopT === 0) { dioStopFx = 12; sfSfx.zawarudo(); sparks.push({ x: GW / 2, y: 50, t: 18, color: '#fff', txt: 'time resumes' }); }
 
+  }   // ── end simStep (hit-stop falls through to here) ──
+
+  /* the kill cam's ghost tape: one draw-ready snapshot per live tick (clones +
+     baked tint so seat colors survive; render bookkeeping only — no sim reads) */
+  if (started && alive && !paused && !bossIntro && !boonMenu) {
+    camTape.push({
+      heroes: heroesAll().map((h) => ({ ...h, tint: heroTint(h) })),
+      enemies: enemies.map((e) => ({ ...e })),
+    });
+    if (camTape.length > CAM_TAPE_MAX) camTape.shift();
+  }
+
   /* ── render ── */
   ctx.clearRect(0, 0, GW, GH);
+  camUpdate();
   ctx.save();
-  if (shake > 0) { shake--; const sx = (rnd() - 0.5) * shake, sy = (rnd() - 0.5) * shake; if (!api.reduceMotion) ctx.translate(sx, sy); }
+  camApply();   // the living camera (render-only; identity under reduced motion)
+  if (shake > 0) { shake--; const sx = (rnd() - 0.5) * shake, sy = (rnd() - 0.5) * shake; if (!api.reduceMotion) ctx.translate(sx * sfOpts.shake, sy * sfOpts.shake); }   // rnd ALWAYS drawn (stream!), option scales only the translate
+
+  // ── the battlefield (atmosphere pass): the open field is a painted night
+  // world now, not a window onto the desktop — see drawBattlefield. The
+  // set-piece rooms below paint their own worlds instead.
+  if (started && !swActive && !jojoActive && !ianActive) {
+    drawBattlefield();
+    drawLightPools();
+  }
 
   if (swActive) {
     // the corridor: black void + a fixed starfield
-    ctx.fillStyle = '#04060a'; ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = '#04060a'; ctx.fillRect(-30, -30, GW + 60, GH + 60);
     ctx.fillStyle = '#cdd6e0';
     for (const st of swStars) {
       ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin((frame + st.x) * 0.02));
@@ -1464,6 +1564,21 @@ function loop() {
   }
   if (ianChoice) drawIanChoice();
   ctx.restore();
+  // directional HURT FLASH (render-only, screen-space): the edge the blow came
+  // from flares red and fades — you always know which way death was standing
+  if (hurtFlash) {
+    const hf2 = hurtFlash;
+    const d = Math.hypot(hf2.dx, hf2.dy) || 1;
+    const a = (api.reduceMotion ? 0.16 : 0.24) * (hf2.t / 26) * (0.5 + 0.5 * sfOpts.flash);
+    const ex = GW / 2 + (hf2.dx / d) * GW * 0.62, ey = GH / 2 + (hf2.dy / d) * GH * 0.62;
+    const fg = ctx.createRadialGradient(ex, ey, 0, ex, ey, Math.max(GW, GH) * 0.55);
+    fg.addColorStop(0, 'rgba(255,40,30,' + a.toFixed(3) + ')');
+    fg.addColorStop(1, 'rgba(255,40,30,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(0, 0, GW, GH);
+    if (--hf2.t <= 0) hurtFlash = null;   // once per loop call — cadence-safe
+  }
+  if (shellMenu && netplay) drawShellMenu();   // online: settings overlay over a LIVE sim (nothing pauses)
   drawSummonMeter();   // the ally charge gauge sits in the UI layer, unaffected by screen shake
   drawManaGauge();     // ...and the wizard's well mirrors it bottom-right
   drawTrophyToasts();

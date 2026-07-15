@@ -25,7 +25,9 @@ let pend = null;   // built by resetPend() in init()
 function resetPend() {
   // summon2 is netplay-only (the client's summon, applied after the host's so the
   // shared meter spends in a deterministic order) — solo/replay never set it
-  pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, cycleP1: false, cycleP2: false, summon: null, summon2: null, prompt: false, mash: 0 };
+  pend = { dashP1: false, atkP1: false, dashP2: false, atkP2: false, cycleP1: false, cycleP2: false,
+           dashP3: false, atkP3: false, cycleP3: false, dashP4: false, atkP4: false, cycleP4: false,   // online war-band seats
+           summon: null, summon2: null, summon3: null, summon4: null, prompt: false, mash: 0 };
 }
 // ── daily challenge ──
 // One shared seed per UTC day: everyone who picks DAILY plays the identical run
@@ -41,6 +43,12 @@ function dailySeed() {
 }
 
 function init() {
+  // the wyrm & rider are a co-op-only PAIR — a stale localStorage pick (or any
+  // other path into a solo run) falls back to the classic kit, and a paired P1
+  // always binds P2 (selection normally enforces this; this is the belt)
+  if (!coop && classSel >= PAIR_WYRM) classSel = 0;
+  if (classSel === PAIR_WYRM) classSel2 = PAIR_RIDER;
+  else if (classSel2 >= PAIR_WYRM) classSel2 = 0;
   // Seed the run. sfSeedOverride lets a future MP handshake pin a shared seed;
   // otherwise we draw fresh entropy (Math.random/Date.now here is the ONE
   // intentional non-deterministic input — it picks the seed, then never again).
@@ -54,16 +62,20 @@ function init() {
              swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
              cls: CLASSES[classSel], castT: 0, castMax: 0, casting: null, mana: 0, spellSel: 0, souls: 25, chillT: 0,
              manaHoldTick: 0, flapReadyTick: 0, flapT: -99 };
-  p2 = null;
+  p2 = null; p3 = null; p4 = null;
   enemies = []; warns = []; coins = []; powerups = []; blasts = []; sparks = []; ghosts = [];
   bolts = []; arrows = []; kegs = []; minions = []; husks = [];
   score = 0; mult = 1; wave = 1; alive = true; started = false; frame = 0;
   keys = {}; freezeT = 0; banner = ''; bannerSub = ''; bannerT = 0;
   deadT = 0; shake = 0; newBest = false;
   stone = null; stoneCd = 150; stoneSeen = false;
-  meter = 0; meterPrompted = false; allies = []; kills = 0;
+  meter = 0; meterPrompted = false; allies = []; kills = 0; heat = 0; killsByType = {}; trampleN = 0;
+  camTape = []; killCam = null; camVictim = null;
+  cam = { x: 0, y: 0, kx: 0, ky: 0, zoom: 1, pulse: 0, prevBreather: 0 };
+  hitStop = 0;
+  decals = []; fieldWash = null; dreadF = 0; hurtFlash = null;
   nineActive = false; nineDone = false; wraithsLeft = 0;
-  waveQuota = 11; breatherT = 0;
+  waveQuota = bandScale(11); breatherT = 0;   // the opening war band scales with the party
   corpses = []; bossActive = false;
   bossRiseT = 0; bossRiseX = 0; bossRiseY = 0;
   awaitExit = false; swActive = false; swState = '';
@@ -78,9 +90,11 @@ function init() {
   wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
   lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
   cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true;
-  bn = { picked: [], spd: 1, cheatDeath: false, gold: false, tithe: false, bounty: 0,
-         sparks2: false, castMul: 1, soulBonus: 0, minionMul: 1,
-         toll: 0, foeSpd: 1, miser: false };   // bane fields (hard mode)
+  // the GLOBAL bn holds only bane + party-economy effects; each hero's personal
+  // boon effects live on h.bn (resetHeroBn — co-op picks are per player)
+  bn = { spd: 1, gold: false, tithe: false, bounty: 0,
+         toll: 0, foeSpd: 1, miser: false };
+  resetHeroBn(player);
   boonMenu = null;
   up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
          champs: { gandalf: false, luke: false, jotaro: false },
@@ -94,8 +108,10 @@ function init() {
          swordMul: 1, riposte: false,                                    // BLADE extras
          arrowSpd: 1, ricochet: false,                                   // BOW extras
          shatter: false, overcharge: false,                              // SORCERY extras
-         lanceR: 0, joustDmg: 1, flapCd: FLAP_CD, dragCap: 1, tailwind: false };  // SKYLANCE (dragoon)
-  paused = false; upMenu = null;
+         lanceR: 0, joustDmg: 1, flapCd: FLAP_CD, dragCap: 1, tailwind: false,   // SKYLANCE (dragoon)
+         heatMax: HEAT_MAX, heatTrampleB: 0, breathCost: BREATH_COST, breathDmg: 2,
+         breathCone: 0.72, riderReach: 76, jabT: 26, remountR: 30 };               // BOND (wyrm & rider)
+  paused = false; upMenu = null; shellMenu = false;
   resetPend();                       // no queued input crosses a restart
   if (replayMode && replay) {
     // the RECORDED player's persistent state, not the watcher's — the sim must
@@ -136,26 +152,56 @@ function init() {
   player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
   player.mana = up.manaMax;          // the wizard starts with a full well (after Deep Well applies)
   if (coop) { setupCoop(); sfUnlock('coop'); }   // a second hero joins; both share allies, meter & upgrades
+  if (netplay && netCfg && Array.isArray(netCfg.cs) && netCfg.cs.length > 2) {
+    // the ONLINE WAR BAND: seats 3 and 4 spawn flanking the pair
+    p3 = makeAllyHero(netCfg.cs[2], GW / 2, GH / 2 - 48, 1);
+    if (netCfg.cs.length > 3) p4 = makeAllyHero(netCfg.cs[3], GW / 2, GH / 2 + 48, -1);
+  }
 }
 
 /* ── couch co-op helpers ── */
 // Build P2 and stand the two heroes apart at centre-screen. Called from init() (so R
 // restarts straight into co-op) and the moment 2-PLAYER is confirmed on the intro.
+function makeAllyHero(clsIdx, x, y, fx) {
+  const h = { x, y, vx: 0, vy: 0, phase: 0, fx, fy: 0,
+              dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
+              shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
+              swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
+              cls: CLASSES[clamp(clsIdx | 0, 0, CLASSES.length - 1)], castT: 0, castMax: 0, casting: null,
+              mana: up.manaMax, spellSel: 0, souls: 25, chillT: 0,
+              manaHoldTick: 0, flapReadyTick: 0, flapT: -99,
+              mounted: CLASSES[clsIdx] === 'rider' };   // a rider starts in the saddle
+  resetHeroBn(h);
+  return h;
+}
 function setupCoop() {
   player.x = GW / 2 - 48; player.y = GH / 2;
-  p2 = { x: GW / 2 + 48, y: GH / 2, vx: 0, vy: 0, phase: 0, fx: -1, fy: 0,
-         dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
-         shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
-         swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-         cls: CLASSES[classSel2], castT: 0, castMax: 0, casting: null, mana: up.manaMax, spellSel: 0, souls: 25, chillT: 0,
-         manaHoldTick: 0, flapReadyTick: 0, flapT: -99 };
+  p2 = makeAllyHero(classSel2, GW / 2 + 48, GH / 2, -1);
 }
 // each hero arms independently — the blade (Excalibur / lightsaber) lives on the hero,
 // not the run. helpers for the scripted interlude transitions that arm/disarm everyone.
 function armSaberAll(v) { for (const h of heroesAll()) if (h.cls === 'melee') h.heldSaber = v; }  // blades are the melee kit; ranged/caster keep their own weapons
 function clearBlades() { for (const h of heroesAll()) { h.swordT = 0; h.swingT = 0; h.heldSaber = false; } }
 // the active heroes; in single-player this is just [player], so co-op code stays a no-op
-function heroesAll()  { return (coop && p2) ? [player, p2] : [player]; }
+// ── party-size difficulty ──
+// Every fighter past the first raises the pressure: bigger war bands (wave
+// quota ~+35% per extra seat, higher cap), denser spawns, and tougher named
+// bosses (see makeEnemy). Derived from the run's INTENT (netCfg/coop) — never
+// from live hero state — so every sim in a lockstep band and every replay
+// computes the identical number.
+function partySize() {
+  if (!coop) return 1;
+  return netplay && netCfg && Array.isArray(netCfg.cs) ? netCfg.cs.length : 2;
+}
+function bandScale(base) { return Math.round(base * (1 + 0.35 * (partySize() - 1))); }
+function heroesAll()  {
+  if (!coop || !p2) return [player];
+  const a = [player, p2];
+  if (p3) a.push(p3);
+  if (p4) a.push(p4);
+  return a;
+}
+function heroSeat(h) { return h === player ? 0 : h === p2 ? 1 : h === p3 ? 2 : 3; }
 function heroesLive() { return heroesAll().filter(h => !h.down); }
 // frames a partner must stand by to revive — halved by the Medic upgrade
 function reviveNeed() { return up.medic ? Math.round(REVIVE_T * 0.5) : REVIVE_T; }

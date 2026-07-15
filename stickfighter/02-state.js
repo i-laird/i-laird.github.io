@@ -62,14 +62,22 @@ function recPush(ev) {
 const NET_VER = 2;      // wire-protocol version (handshake-checked); 2 = resume/reconnect protocol
 const NET_SIM_V = 4;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 4 = the mana-regen nerf
 const NET_DELAY = 5;    // ticks of input delay (~83ms) — local input applies at tick+NET_DELAY on both sims
+const NET_MAX_SEATS = 4; // the WAR BAND: up to four fighters — host = seat 0 (P1), joiners 1..3.
+                         // Topology is a host-relayed STAR: every client links only to the host,
+                         // which relays frames/events — 2-player is simply the 2-seat case.
 let netplay = false;    // an online run is live (gates ALL persistence, like replayMode)
 let netIsHost = false;
 let netCfg = null;      // the authoritative run header (host-built; both sims init from it)
 let netRunId = 0;       // bumps on every netBeginRun — stale frames from a previous run are dropped
-let netPc = null, netChan = null, netPoll = 0, netTimeout = 0;
+let netPc = null, netChan = null, netPoll = 0, netTimeout = 0;  // the CLIENT's single link to the host
+let netConns = [];      // HOST only: one conn per joined client { seat, pc, chan, have, csRemote, recon, ack, cls, gw, gh }
+let netArming = null;   // HOST only: the pc currently parked in a room awaiting the next joiner
+let netSeat = 0;        // my seat (0 = host/P1; joiners 1..3)
+let netMasks = [0, 0, 0, 0];   // this tick's held-direction nibble per seat (fed by the frame consumer)
+let netHave = null;     // CLIENT: per-seat highest frame tick received (resume tells the host where to refill)
 let netUi = null;       // the connect screens: { mode:'host'|'join', phase, code, input, err }
 let netSaved = null;    // the local player's own intro selections, restored on exit
-let netFrames = null;   // [hostMap, clientMap]: tick → { m: held-dir nibble, e: edge bits, s: summon, h: mash }
+let netFrames = null;   // per-seat Maps (length = party size): tick → { m: held-dir nibble, e: edge bits, s: summon, h: mash }
 let netEvents = [];     // host menu picks in flight: [tick, op, arg] (same opcodes as the recorder)
 let netLocal = null;    // local edge staging between ticks (the netplay `pend`)
 let netMask = 0;        // the combined 8-bit held mask applied this tick (host low nibble, client high)
@@ -84,7 +92,6 @@ let netRoomCode = '';   // the minted/typed room code — kept to derive the rej
 let netRejoin = '';     // 'R'+5 chars: the reconnect rendezvous room (recomputed each netBeginRun)
 let netRecon = null;    // reconnect state { attempt, t0, gen } — non-null while the link is down
 let netReconSeq = 0;    // bumped by netTeardown so an in-flight reconnect loop from a dead session goes inert
-let netHaveRemote = 0;  // highest remote input-frame tick received — resume tells the peer where to re-send from
 let netEventLog = [];   // every host menu event queued this run ([k,op,a], tiny) — re-sent on resume so none are lost in flight
 let netDiscoT = 0;      // grace timer: pc 'disconnected' must persist ~10s before it counts as a drop
 // ── local couch co-op (chosen on the intro screen; persists across R-restarts) ──
@@ -98,18 +105,76 @@ let netDiscoT = 0;      // grace timer: pc 'disconnected' must persist ~10s befo
 // only once hardUnlocked) · 2=☀ DAILY; subMulti 0=LOCAL (couch co-op) · 1=HOST ·
 // 2=JOIN (online). coop/dailyRun stay the derived per-run flags, persisting across
 // R-restarts exactly as before.
-let coop = false, dailyRun = false, p2 = null;
+let coop = false, dailyRun = false, p2 = null, p3 = null, p4 = null;
+let heat = 0;   // the wyrm & rider's shared fire gauge (reset in init; see WYRM & RIDER)
+// ── the death KILL CAM (render-only): a rolling ghost tape of draw-ready entity
+//    snapshots; on death the last seconds replay in slow motion, camera tight on
+//    the fallen hero. Advanced once per loop call (= per sim tick) so the
+//    60/120Hz draw-stream comparison holds; consumes no rnd(); skipped under
+//    reduced motion and for replay watchers. ──
+let camTape = [];       // ring of { heroes:[clones+tint], enemies:[clones] }, ~3.5s
+let killCam = null;     // { tape, i, t, hold, fx, fy } while the cam plays
+let camVictim = null;   // the hero whose fall ended it (set in downHero)
+const CAM_TAPE_MAX = 210, CAM_SHOW = 110, CAM_SPEED = 0.5;
+// ── the LIVING CAMERA (render-only): a soft drift toward the party's center of
+//    mass, a punch-in behind boss cards, a zoom pulse on the wave's final kill,
+//    and directional KICKS on heavy blows (a statement, not a wobble — distinct
+//    from shake's noise). Updated once per loop call (= per sim tick, so the
+//    60/120Hz cadence draw-stream comparison holds), consumes no rnd(), and is
+//    skipped wholesale under reduced motion. The sim never reads it. ──
+let cam = { x: 0, y: 0, kx: 0, ky: 0, zoom: 1, pulse: 0, prevBreather: 0 };
+// ── HIT-STOP (sim-side, deterministic): heavy impacts hold the world for a beat.
+//    Set by kills/blows with Math.max semantics (a multi-kill punctuates, never
+//    stutters), capped at 14 ticks. tick still advances and the feeders keep
+//    running (the `paused` precedent), so netplay lockstep and replays carry it
+//    bit-exactly — it IS gameplay, folded into sim v4. ──
+let hitStop = 0;
+// ── ATMOSPHERE II (render-only buffers, written by sim events like camKick —
+//    deterministic per tick, never read by the sim) ──
+let decals = [];       // ground memory: { x, y, kind:'ash'|'scorch'|'frost', t0 } — the field remembers
+const DECAL_MAX = 90;
+let fieldWash = null;  // one full-field event light wash: { rgb, a, t, T } (Excalibur, powerups, a hero falling)
+let dreadF = 0;        // eased 0..1 — the Nine/Witch-king snuff the field's warmth (see drawBattlefield)
+let killsByType = {};
+let trampleN = 0;      // this run's tramples (the TRAMPLER trophy)
+// ── PLAYER OPTIONS (persisted; strictly presentation — the iron rule: options
+//    change what you SEE, never what the sim DOES, same as reduceMotion) ──
+let sfOpts = { shake: 1, kick: 1, flash: 1, hiVis: false };
+try {
+  const so = JSON.parse(localStorage.getItem('ilaird_sf_opts') || '{}');
+  if (typeof so.shake === 'number') sfOpts.shake = clamp(so.shake, 0, 1);
+  if (typeof so.kick === 'number') sfOpts.kick = clamp(so.kick, 0, 1);
+  if (typeof so.flash === 'number') sfOpts.flash = clamp(so.flash, 0, 1);
+  sfOpts.hiVis = !!so.hiVis;
+} catch (_) { /* private mode */ }
+function saveOpts() { try { localStorage.setItem('ilaird_sf_opts', JSON.stringify(sfOpts)); } catch (_) {} }
+// the PAUSE/settings overlay: solo & couch runs truly pause (recorded as opcode
+// 13, so replays hold the same beats); online it is an overlay over a live sim
+let shellMenu = false, shellSel = 0;
+function shellToggle() { shellMenu = !shellMenu; if (!netplay) paused = shellMenu; }  // sim state (v4): per-type kill tally — feeds the results ceremony
+let hurtFlash = null;  // { dx, dy, t } — a red edge flash from the DIRECTION of the last blow (render-only)
+function addDecal(x, y, kind) {
+  decals.push({ x, y, kind, t0: tick });
+  if (decals.length > DECAL_MAX) decals.shift();
+}
+function fieldWashSet(rgb, a, T) { fieldWash = { rgb, a, t: 0, T }; }
 let menuTop = 0, subSingle = 0, subMulti = 0;
 const isLocalMulti = () => menuTop === 1 && subMulti === 0;
 const P2_COL    = '#8fe388';   // P2's stick figure — a soft green, distinct from white P1 and enemy red
+const P3_COL    = '#7fd8ff';   // P3 — sky blue
+const P4_COL    = '#f0a5ff';   // P4 — orchid
+const SEAT_COLS = ['#ffffff', P2_COL, P3_COL, P4_COL];   // hero body color by seat
 const REVIVE_T  = 150;         // frames a partner must stand by a downed hero to revive them (~2.5s)
 // ── hero classes (chosen on the intro screen; persist across R-restarts & visits) ──
 //   melee  = the classic kit, unchanged (sword in the stone / lightsaber pickups)
 //   ranged = the bow is always strung — the attack key looses arrows at the nearest foe
 //   caster = the attack key hurls arcing lightning; SORCERY adds auto-cast nova & fireball
 //   Each hero picks independently in co-op; each class has its own upgrade tree.
-const CLASSES   = ['melee', 'ranged', 'caster', 'necro', 'dragoon'];
-const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨', necro: '💀', dragoon: '🐉' };
+const CLASSES   = ['melee', 'ranged', 'caster', 'necro', 'dragoon', 'wyrm', 'rider'];
+const CLASS_ICON = { melee: '⚔', ranged: '🏹', caster: '✨', necro: '💀', dragoon: '🐉', wyrm: '🐲', rider: '🏇' };
+// wyrm+rider are a PAIRED, CO-OP-ONLY pick (see WYRM & RIDER below): they never
+// appear in solo class cycling, and picking the wyrm on P1 binds P2 to the rider.
+const PAIR_WYRM = 5, PAIR_RIDER = 6;
 const ARROW_SPD = 7.4;   // player arrows fly this fast (px/tick)
 const ZAP_R     = 170;   // arcane bolt reaches this far — deliberately short; position matters
 const ZAP_HOP   = 180;   // each chain jump reaches this far
@@ -171,3 +236,21 @@ const JOUST_BAR  = {      // per-foe skewer bars — the Joust rider tiers
   witchking: 4.6, vader: 4.6, sidious: 4.6, dio: 4.6,
 };
 const JOUST_ELITE = 0.5, JOUST_DREAD = 0.9;   // elites raise their bar; dread more
+
+/* WYRM & RIDER — the co-op PAIR: two players, one creature. P1 IS the beast
+   (wyrm): dragoon momentum physics on a bigger body, and its contact resolves by
+   the same joust rules — at speed it TRAMPLES through the pack, caught slow it
+   takes the hit. P2 sits the saddle (rider): their movement keys become an 8-way
+   TURRET AIM (never steering), their attack key jabs a lance along the aim, and
+   their spell-cycle key (E) breathes FIRE — spending the shared HEAT gauge that
+   only tramples and lance kills fill. The beast earns, the rider spends; neither
+   can do both, which is the whole point. Downs ride the existing model: a struck
+   rider is THROWN (an on-foot hero until remounted), a felled wyrm dumps the
+   rider to fight standing over the body; standing close revives/remounts. */
+const WYRM_R      = 8;    // extra body radius over PLAYER_R (contact + trample reach)
+const HEAT_MAX    = 100;
+const HEAT_TRAMPLE = 12;  // heat per trample kill (the wyrm earns)
+const HEAT_LANCE  = 6;    // heat per lance kill (the rider tops up)
+const BREATH_COST = 55;   // fire breath drinks over half the gauge
+const BREATH_R    = 150;  // the cone's reach
+const RIDER_SADDLE = 26;  // the rider sits this far above the wyrm's center

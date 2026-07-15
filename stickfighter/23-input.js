@@ -13,10 +13,50 @@ function onKey(e) {
     e.preventDefault();
     return;
   }
+  // the pause/settings shell owns the keys while it is up (and un-holds them:
+  // online the sim runs underneath, and menu arrows must not steer your hero)
+  if (shellMenu) {
+    keys[keyName(e.key)] = false;
+    if (e.key === 'ArrowUp') shellSel = (shellSel + 3) % 4;
+    else if (e.key === 'ArrowDown') shellSel = (shellSel + 1) % 4;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (shellSel === 0) sfOpts.shake = sfOpts.shake === 1 ? 0.5 : sfOpts.shake === 0.5 ? 0 : 1;
+      else if (shellSel === 1) sfOpts.kick = sfOpts.kick > 0 ? 0 : 1;
+      else if (shellSel === 2) sfOpts.flash = sfOpts.flash > 0 ? 0 : 1;
+      else sfOpts.hiVis = !sfOpts.hiVis;
+      saveOpts();
+      if (sfSfx.killE) sfSfx.killE();
+    } else if (!e.repeat && ['p', 'P', 'q', 'Q', 'Enter', 'z', 'Z'].includes(e.key)) {
+      if (!netplay) recPush([tick + 1, 13, 0]);   // the unpause is a sim beat too
+      shellToggle();
+    }
+    e.preventDefault();
+    return;
+  }
+  // P — pause & settings (solo/couch truly pause, recorded as opcode 13 so
+  // replays hold the beats; online it overlays a live sim and records nothing)
+  if ((e.key === 'p' || e.key === 'P') && !e.repeat && started && alive && !bossIntro && !killCam && !paused) {
+    if (!netplay) recPush([tick + 1, 13, 0]);
+    shellToggle();
+    e.preventDefault();
+    return;
+  }
   // an online run: Q leaves cleanly at any point (tell the partner first)
   if (netplay && !e.repeat && (e.key === 'q' || e.key === 'Q')) {
     netSend({ t: 'bye' });
     netLeave('you left the game');
+    e.preventDefault();
+    return;
+  }
+  // the kill cam holds the stage — any key skips straight to the death screen
+  if (!alive && killCam) {
+    if (!e.repeat) killCam = null;
+    e.preventDefault();
+    return;
+  }
+  // the results ceremony: any key fast-forwards to the hall of legends
+  if (!alive && !killCam && !replayMode && deadT > 34 && deadT < 176) {
+    if (!e.repeat) deadT = 176;
     e.preventDefault();
     return;
   }
@@ -63,12 +103,16 @@ function onKey(e) {
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
           ['creating', 'waiting', 'code', 'err', 'lobby'].includes(netUi.phase)) {
         const d = e.key === 'ArrowRight' ? 1 : -1;
-        classSel = (classSel + d + CLASSES.length) % CLASSES.length;
+        // only the HOST (P1) may pick the WYRM & RIDER pair — the joiner is the
+        // saddle seat by definition, so their cycle never reaches it
+        const list = netUi.mode === 'host' ? [0, 1, 2, 3, 4, PAIR_WYRM] : [0, 1, 2, 3, 4];
+        let ci = list.indexOf(classSel); if (ci < 0) ci = 0;
+        classSel = list[(ci + d + list.length) % list.length];
         try { localStorage.setItem('ilaird_sf_cls', String(classSel)); } catch (err) { /* private mode */ }
         if (netUi.phase === 'lobby') {
           // re-picking un-readies you (the run must never start under a stale pick)
-          if (netUi.myReady) { netUi.myReady = false; netSend({ t: 'rdy', v: 0 }); }
-          netSend({ t: 'cls', c: classSel });
+          if (netUi.myReady) netLobbyReady(false);
+          netLobbyCls();
         }
         if (sfSfx.killE) sfSfx.killE();
         e.preventDefault();
@@ -85,11 +129,9 @@ function onKey(e) {
           netUi.input += e.key.toUpperCase();
         }
       } else if (netUi.phase === 'lobby' && !e.repeat && ['z', 'Z', 'Enter', ' '].includes(e.key)) {
-        // the READY gate: the run starts only when BOTH players have confirmed
-        netUi.myReady = !netUi.myReady;
-        netSend({ t: 'rdy', v: netUi.myReady ? 1 : 0 });
+        // the READY gate: the run starts only when the WHOLE band has confirmed
+        netLobbyReady(!netUi.myReady);
         if (sfSfx.killE) sfSfx.killE();
-        netLobbyMaybeStart();
       } else if (!e.repeat && (e.key === 'q' || e.key === 'Q')) {
         backOut();
       } else if (netUi.phase === 'waiting' && !e.repeat && (e.key === 'c' || e.key === 'C')) {
@@ -141,8 +183,20 @@ function onKey(e) {
           subMulti = (subMulti + d + 3) % 3;
         }
       }
-      else if (introRow === 2) classSel  = (classSel  + d + nc) % nc;
-      else                     classSel2 = (classSel2 + d + nc) % nc;
+      else if (introRow === 2) {
+        // P1 cycles the five solo classes, plus the WYRM & RIDER pair in couch
+        // co-op; picking the wyrm binds P2 to the rider (and unbinds on leaving)
+        const list = isLocalMulti() ? [0, 1, 2, 3, 4, PAIR_WYRM] : [0, 1, 2, 3, 4];
+        let ci = list.indexOf(classSel); if (ci < 0) ci = 0;
+        classSel = list[(ci + d + list.length) % list.length];
+        if (classSel === PAIR_WYRM) classSel2 = PAIR_RIDER;
+        else if (classSel2 >= PAIR_WYRM) classSel2 = 0;
+      }
+      else if (classSel !== PAIR_WYRM) {   // the rider's seat isn't negotiable
+        const list = [0, 1, 2, 3, 4];
+        let ci = list.indexOf(classSel2); if (ci < 0) ci = 0;
+        classSel2 = list[(ci + d + list.length) % list.length];
+      }
       if (sfSfx.killE) sfSfx.killE();
       e.preventDefault(); return;
     }
@@ -188,7 +242,9 @@ function onKey(e) {
   // event (netQueueEvent) applied by BOTH feeders at the same tick — never a direct
   // call, which would fire it on one sim only and desync. The client just watches.
   if (paused && boonMenu) {
-    if (netplay && !netIsHost) { e.preventDefault(); return; }
+    // each seat confirms its OWN boon — everyone else just watches
+    // (locally the players share the keyboard, so no gate is needed)
+    if (netplay && (boonMenu.who | 0) !== netSeat) { e.preventDefault(); return; }
     const n = boonMenu.opts.length;
     if (['ArrowLeft', 'a', 'A'].includes(e.key))       { boonMenu.sel = (boonMenu.sel + n - 1) % n; sfSfx.killE(); }
     else if (['ArrowRight', 'd', 'D'].includes(e.key)) { boonMenu.sel = (boonMenu.sel + 1) % n; sfSfx.killE(); }
@@ -322,7 +378,7 @@ function onKey(e) {
     if (netplay) {
       // rematch is host-authoritative: a fresh shared seed, same team & snapshot
       // (blocked while reconnecting — a restart the peer can't hear would desync)
-      if (netIsHost && netCfg && !netRecon && !e.repeat) {
+      if (netIsHost && netCfg && !netReconActive() && !e.repeat) {
         const seed = (((Date.now() >>> 0) ^ ((Math.random() * 0x100000000) >>> 0)) >>> 0);
         netCfg.seed = seed;
         netSend({ t: 'restart', seed });

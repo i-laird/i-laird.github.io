@@ -36,6 +36,10 @@ const SF_ACH = [
   { id: 'wolf_100',    name: 'WOLFSBANE',              desc: 'put down 100 frost wolves' },
   { id: 'the_weight',  name: 'THE WEIGHT OF IT',       desc: "hold the creator's fate for a full minute before deciding",         secret: true },
   { id: 'hoisted',     name: 'HOISTED',                desc: 'bait a powder keg into blowing up a goblin shaman',                 secret: true },
+  { id: 'skewered',    name: 'SKEWERED',               desc: 'run a troll through at full gallop' },
+  { id: 'trampler',    name: 'TRAMPLER',               desc: 'trample fifteen foes in one ride' },
+  { id: 'dragonfire',  name: 'DRAGONFIRE',             desc: 'burn four foes with a single breath' },
+  { id: 'pair_bond',   name: 'BEAST AND BRAVE',        desc: 'carry the pair to wave 4' },
 ];
 const SF_ACH_KEY = 'ilaird_sf_trophies';
 const sfTrophies = (() => {

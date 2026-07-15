@@ -54,6 +54,8 @@ function stopGame() {
   document.removeEventListener('paste',   onPaste);
   window.removeEventListener('blur', dropKeys);
   canvas.remove(); hud.remove(); xp._sfCleanup = null;
+  const matte = document.getElementById('sf-matte');
+  if (matte) matte.remove();   // the letterbox backdrop must never outlive the game
 }
 
 let cheatBuf = '', nineKeyCount = 0, last9 = 0, eightKeyCount = 0, last8 = 0;

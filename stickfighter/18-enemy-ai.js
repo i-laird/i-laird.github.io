@@ -2,6 +2,7 @@
 /* ── enemy AI ── */
 function updateEnemy(e) {
   if (e.grz > 0) e.grz--;
+  if (e.flashT > 0) e.flashT--;   // the impact flash fades (held while hit-stop freezes this)
   if (e.stun > 0) { e.stun--; return; }
   if (e.frozen > 0) { e.frozen--; e.vx = 0; e.vy = 0; return; }  // encased in ice by the frost nova
   if (freezeT > 0) return;

@@ -1,5 +1,19 @@
 // ── render-field — drawEnemy dispatch, champions, stone/saber pickups, held weapons, husks/minions ──
 function drawEnemy(e) {
+  // ── readability grammar (render-only) ──
+  // ONE language for "about to strike": every telegraphing foe stands on a red
+  // underglow, whatever its sprite does (steady pulse under reduced motion)
+  if (!e.dead && e.frozen <= 0 && ['aim', 'wind', 'cast', 'gather'].includes(e.mode)) {
+    const ua = api.reduceMotion ? 0.22 : 0.16 + 0.10 * Math.sin(frame * 0.25);
+    ctx.fillStyle = 'rgba(255,60,50,' + ua.toFixed(3) + ')';
+    ctx.beginPath(); ctx.ellipse(e.x, e.y + 3, 22, 8, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // the vignette must never HIDE a live threat: foes hugging the dark rim get a
+  // faint self-light so the atmosphere pass can't cost you a death
+  if (!e.dead && (e.x < 70 || e.x > GW - 70 || e.y < 90 || e.y > GH - 60)) {
+    ctx.fillStyle = 'rgba(255,90,70,0.10)';
+    ctx.beginPath(); ctx.ellipse(e.x, e.y - 8, 26, 18, 0, 0, Math.PI * 2); ctx.fill();
+  }
   const col = enemyColor(e);
   if (e.type === 'goblin') drawGoblin(e, col);
   else if (e.type === 'shaman') drawShaman(e, col);
@@ -24,6 +38,12 @@ function drawEnemy(e) {
       ctx.fillStyle = '#ffd24d'; ctx.font = 'bold 11px Tahoma,Arial'; ctx.textAlign = 'center';
       ctx.fillText('♥'.repeat(e.hp), e.x, e.y - 78); ctx.textAlign = 'left';
     }
+  }
+  // HIGH-CONTRAST ELITES (accessibility option): tier as SHAPE, not just tint
+  if (sfOpts.hiVis && e.elite && !e.dead) {
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px Tahoma,Arial'; ctx.textAlign = 'center';
+    ctx.fillText(e.elite === 2 ? '◆◆' : '◆', e.x, e.y - 60);
+    ctx.textAlign = 'left';
   }
 }
 
@@ -268,6 +288,22 @@ function drawHeldBow(h) {
   ctx.beginPath(); ctx.arc(handX, handY, 2.6, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
+// the unhorsed rider's dirk: short, desperate, held out front — matches the
+// on-foot jab's reach so the picture tells the truth
+function drawHeldDirk(h) {
+  const fl = Math.hypot(h.fx, h.fy) || 1;
+  const ux = h.fx / fl, uy = h.fy / fl;
+  const hx = h.x + ux * 9, hy = h.y - 18 + uy * 4;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = heroTint(h); ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(h.x, h.y - 22); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.strokeStyle = '#cdd8e2'; ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx + ux * 13, hy + uy * 13); ctx.stroke();
+  ctx.fillStyle = heroTint(h);
+  ctx.beginPath(); ctx.arc(hx, hy, 2.4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
 // the dragoon's couched lance: it points where you FLY (the velocity), falling
 // back to the facing at a standstill — so the joust reads exactly like it kills.
 // The tip ignites ember-orange once you're moving fast enough to skewer the
@@ -415,5 +451,231 @@ function drawMinion(m) {
   const fr = clamp(m.t / MINION_T, 0, 1);
   ctx.strokeStyle = 'rgba(100,255,218,0.55)'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(m.x, m.y + 2, 12, -Math.PI / 2, -Math.PI / 2 + fr * Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+/* ── THE BATTLEFIELD (atmosphere pass) ──
+   The open field used to be a transparent canvas showing the XP desktop through
+   it. Now the fight happens somewhere: a scorched night field — mottled earth,
+   old battle debris, fog breathing at the rim, embers rising off unseen fires —
+   under a WAVE TINT that runs cold dawn-blue to blood red as the run deepens
+   (grey in the mournful world). STRICTLY render-only and rnd()-free: everything
+   animates off `frame` + a position hash, so the deterministic draw-stream and
+   60/120Hz cadence tests hold, and no sim version bump is needed. The set-piece
+   rooms (corridor / mansion / Ian) still paint their own worlds. Steady (never
+   flashing) under prefers-reduced-motion. */
+function drawBattlefield() {
+  const RM = api.reduceMotion;
+  const ih = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+  // ── the run's MOOD, stepped once per draw call (= per tick) ──
+  // dread: the Nine (and the Witch-king after them) snuff the field's warmth —
+  // embers die, fog flees outward, the tint drops to a dead grey-violet, and
+  // the light pools dim to half (see drawLightPools). Eases over ~30 ticks and
+  // relights the same way once the king falls.
+  dreadF += (((nineActive || (bossActive && !nineDone)) ? 1 : 0) - dreadF) * 0.04;
+  const dread = dreadF;
+  // the gathering storm: still air early, the wind rising as the Nine draw near
+  // (wave 4 is the eve), settling to a war-torn breeze after
+  const wind = wave === 4 ? 1 : wave === 3 ? 0.4 : wave >= 6 ? 0.5 : 0;
+  const ogreUp = enemies.some((e) => e.type === 'ogre' && !e.dead);
+  // 1) the ground — deep and cold, faintly lifted at the fight's heart
+  let g = ctx.createLinearGradient(0, 0, 0, GH);
+  g.addColorStop(0, '#0d1119'); g.addColorStop(0.55, '#0a0e14'); g.addColorStop(1, '#06080c');
+  ctx.fillStyle = g; ctx.fillRect(-30, -30, GW + 60, GH + 60);   // overscan bleed — the living camera drifts
+  // 2) mottled earth: fixed hashed scorch patches and faint dead moss
+  for (let i = 0; i < 32; i++) {
+    const x = ih(i) * GW, y = 44 + ih(i + 51) * (GH - 54);
+    const r = 26 + ih(i + 97) * 58;
+    ctx.fillStyle = i % 3 ? 'rgba(0,0,0,0.15)' : 'rgba(34,46,38,0.09)';
+    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.42, ih(i + 13) * 3.14, 0, Math.PI * 2); ctx.fill();
+  }
+  // 2b) GROUND MEMORY: the field remembers this run — ash where they fell,
+  //     scorch rings where fire landed, frost blooms melting away (~40s fades;
+  //     recorded by sim events via addDecal, pruned here as they expire)
+  for (let i = decals.length - 1; i >= 0; i--) {
+    const d = decals[i];
+    const age = tick - d.t0;
+    const life = d.kind === 'frost' ? 700 : 2400;
+    if (age >= life) { decals.splice(i, 1); continue; }
+    const a = (1 - age / life) * (d.kind === 'ash' ? 0.22 : d.kind === 'frost' ? 0.2 : 0.3);
+    if (d.kind === 'scorch') {
+      ctx.strokeStyle = 'rgba(10,6,4,' + a.toFixed(3) + ')'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, 26, 11, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(0,0,0,' + (a * 0.8).toFixed(3) + ')';
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, 16, 7, 0, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = d.kind === 'frost'
+        ? 'rgba(150,200,230,' + a.toFixed(3) + ')'
+        : 'rgba(20,16,14,' + a.toFixed(3) + ')';
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, d.kind === 'frost' ? 20 : 13, d.kind === 'frost' ? 8 : 5.5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // 3) the debris of older battles: half-buried skulls, snapped spears, ribs
+  for (let i = 0; i < 15; i++) {
+    const x = ih(i + 201) * GW, y = 62 + ih(i + 233) * (GH - 84);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ih(i + 77) * Math.PI);
+    ctx.globalAlpha = 0.2;
+    if (i % 5 === 0) {           // a half-buried skull, staring at nothing
+      ctx.fillStyle = '#9aa3a8';
+      ctx.beginPath(); ctx.arc(0, 0, 3.4, Math.PI, 0); ctx.fill();
+      ctx.fillRect(-2.6, -0.4, 1.4, 1.8); ctx.fillRect(1.2, -0.4, 1.4, 1.8);
+    } else if (i % 5 === 1) {    // a snapped spear
+      ctx.strokeStyle = '#6b5a40'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(6, 0); ctx.stroke();
+      ctx.fillStyle = '#8a939c';
+      ctx.beginPath(); ctx.moveTo(6, -2); ctx.lineTo(11, 0); ctx.lineTo(6, 2); ctx.closePath(); ctx.fill();
+    } else {                     // a rib, or just a rock
+      ctx.strokeStyle = i % 2 ? '#727a82' : '#3c444d'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(0, 0, 4.6, 0.3, 2.4); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  // 4) embers rising off fires just out of sight (a steady field under RM) —
+  //    blown sideways by the storm wind, flushed red while the War-Ogre lives,
+  //    and SNUFFED entirely as dread takes the field
+  const emberA = 1 - dread;
+  if (emberA > 0.02) {
+    for (let i = 0; i < 22; i++) {
+      const sp = 0.25 + ih(i + 301) * 0.5;
+      const yy = GH - ((RM ? i * 37 : frame * sp + ih(i + 331) * GH) % (GH + 20));
+      const drift = RM ? 0 : Math.sin((frame * 0.01 + i) * 1.7) * 14 + frame * 0.5 * wind;
+      const xx = (((ih(i + 359) * GW + drift) % GW) + GW) % GW;
+      const tw = RM ? 0.5 : 0.35 + 0.3 * Math.sin(frame * 0.11 + i * 2.1);
+      const gCh = ogreUp ? 70 + ((i * 37) % 40) : 120 + ((i * 37) % 60);
+      ctx.fillStyle = 'rgba(255,' + gCh + ',40,' + (Math.max(0.08, tw * 0.35) * emberA).toFixed(3) + ')';
+      ctx.fillRect(xx, yy, i % 5 === 0 ? 2 : 1.4, i % 5 === 0 ? 2 : 1.4);
+    }
+  }
+  // 5) fog banks breathing along the rim (very slow — vestibular-safe); the
+  //    storm hurries them, and dread drives them outward and thin
+  for (let i = 0; i < 5; i++) {
+    const t = RM ? 0.5 : 0.5 + 0.5 * Math.sin(frame * 0.004 + i * 1.9);
+    const spd = 0.00015 * (1 + wind * 3);
+    const fx = (((i * 0.23 + 0.06) + (RM ? 0 : frame * spd * (i % 2 ? 1 : -1))) % 1 + 1) % 1 * GW;
+    const fy = i % 2 ? 28 + t * 10 - dread * 40 : GH - 32 - t * 10 + dread * 40;
+    const fr = (130 + ih(i + 407) * 90) * (1 + dread * 0.8);
+    const fg = ctx.createRadialGradient(fx, fy, 0, fx, fy, fr);
+    fg.addColorStop(0, 'rgba(120,140,170,' + (0.10 * (0.5 + t * 0.5) * (1 - dread * 0.55)).toFixed(3) + ')');
+    fg.addColorStop(1, 'rgba(120,140,170,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(fx - fr, fy - fr, fr * 2, fr * 2);
+  }
+  // 5b) the eve of the Nine: silent lightning flickers at the field's edge
+  //     (wave 4 only; skipped under reduced motion — it is a flash by nature)
+  if (wave === 4 && !RM && dread < 0.2) {
+    const cyc = Math.floor(frame / 380);
+    const ph = frame % 380;
+    if (ph < 6) {
+      const side = ih(cyc + 611) < 0.5 ? 0 : GW;
+      const lg = ctx.createRadialGradient(side, GH * (0.2 + ih(cyc + 613) * 0.5), 0, side, GH * 0.4, GW * 0.7);
+      lg.addColorStop(0, 'rgba(200,215,255,' + (0.10 * (1 - ph / 6)).toFixed(3) + ')');
+      lg.addColorStop(1, 'rgba(200,215,255,0)');
+      ctx.fillStyle = lg;
+      ctx.fillRect(-30, -30, GW + 60, GH + 60);
+    }
+  }
+  // 6) the wave tint: cold blue dawn → violet dusk → blood red as the run
+  //    deepens — and dread drains it all to a dead grey-violet
+  const deep = Math.min(1, (wave - 1) / 9);
+  const tr = Math.round((40 + deep * 160) * (1 - dread) + 70 * dread);
+  const tg = Math.round((30 - deep * 14) * (1 - dread) + 60 * dread);
+  const tb = Math.round((90 - deep * 60) * (1 - dread) + 90 * dread);
+  const ta = (0.05 + deep * 0.07) * (1 - dread) + 0.16 * dread;
+  ctx.fillStyle = mournful
+    ? 'rgba(90,90,100,0.10)'
+    : 'rgba(' + tr + ',' + tg + ',' + tb + ',' + ta.toFixed(3) + ')';
+  ctx.fillRect(-30, -30, GW + 60, GH + 60);
+  // 6b) EVENT LIGHT WASH: the big moments light the whole world for a breath —
+  //     Excalibur gold, a powerup's element, the cold drain of a hero falling
+  //     (a smooth eased fade, never a flash; stepped once per draw = per tick)
+  if (fieldWash) {
+    const w = fieldWash;
+    const wa = w.a * (1 - w.t / w.T) * (1 - w.t / w.T);
+    ctx.fillStyle = 'rgba(' + w.rgb + ',' + wa.toFixed(3) + ')';
+    ctx.fillRect(-30, -30, GW + 60, GH + 60);
+    if (++w.t >= w.T) fieldWash = null;
+  }
+  // 7) the dark leans in from the edges — and leans in HARDER under dread
+  const v = ctx.createRadialGradient(GW / 2, GH * 0.52, Math.min(GW, GH) * (0.36 - dread * 0.09), GW / 2, GH * 0.52, Math.max(GW, GH) * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (0.4 + dread * 0.18).toFixed(3) + ')');
+  ctx.fillStyle = v; ctx.fillRect(-30, -30, GW + 60, GH + 60);
+  // 8) EYES IN THE DARK: during the breather, red glints blink open in the
+  //    vignette darkness — the next wave, already watching (steady under RM);
+  //    and while dread holds the field, the horde's silhouettes ring the edge
+  if (breatherT > 0 && waveQuota + enemies.length === 0 && !mournful) {
+    const nEyes = Math.min(8, 3 + wave);
+    const edgeIn = Math.min(1, (BREATHER - breatherT) / 20, breatherT / 20);
+    for (let i = 0; i < nEyes; i++) {
+      const blink = RM ? 1 : (((frame + i * 37) % 90) < 72 ? 1 : 0);
+      if (!blink) continue;
+      const side = Math.floor(ih(wave * 13 + i) * 4);
+      const along = 0.12 + ih(wave * 29 + i + 7) * 0.76;
+      const ex = side === 0 ? 14 + ih(i + wave) * 10 : side === 1 ? GW - 14 - ih(i + wave) * 10 : along * GW;
+      const ey = side < 2 ? 44 + along * (GH - 60) : side === 2 ? 48 + ih(i + wave) * 10 : GH - 16 - ih(i + wave) * 10;
+      ctx.fillStyle = 'rgba(255,60,50,' + (0.55 * edgeIn).toFixed(3) + ')';
+      ctx.fillRect(ex - 2.6, ey, 1.7, 1.7);
+      ctx.fillRect(ex + 1, ey, 1.7, 1.7);
+    }
+  }
+  if (dread > 0.5) {
+    const wA = (dread - 0.5) * 0.36;
+    for (let i = 0; i < 10; i++) {
+      const along = ih(i + 501);
+      const top = i % 2 === 0;
+      const wx = 30 + along * (GW - 60);
+      const wy = top ? 34 : GH - 12;
+      ctx.fillStyle = 'rgba(6,8,12,' + wA.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(wx, wy, 7 + ih(i + 531) * 4, Math.PI, 0);   // a hunched, motionless watcher
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(wx - 5, wy - 6); ctx.lineTo(wx - 8, wy - 12); ctx.lineTo(wx - 3, wy - 8);   // an ear
+      ctx.closePath(); ctx.fill();
+    }
+  }
+}
+/* ── LIGHT POOLS — the fight lights the field ──
+   Soft additive ground glows under everything that burns, hums, or shines:
+   blades, the stone, spell orbs, powerups, blasts, keg fuses, minions, allies,
+   and a cool presence glow anchoring each hero to the dark. Render-only. */
+function drawLightPools() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const dim = 1 - dreadF * 0.5;   // the Nine dim every light on the field
+  const pool = (x, y, r, rgb, a) => {
+    a *= dim;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(' + rgb + ',' + a.toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(' + rgb + ',0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  };
+  const puls = api.reduceMotion ? 0.75 : 0.65 + 0.35 * Math.sin(frame * 0.07);
+  for (const h of heroesLive()) {
+    pool(h.x, h.y + 2, 46, '140,170,210', 0.05);
+    if (h.heldSaber) pool(h.x, h.y - 6, 70, '80,160,255', 0.10 * puls);
+    else if (h.swordT > 0) pool(h.x, h.y - 6, 64, '255,200,80', 0.09 * puls);
+    if (h.cls === 'caster' && h.castT > 0) pool(h.x, h.y - 10, 60, '200,140,255', 0.12);
+    if (h.cls === 'necro') pool(h.x, h.y, 40, '80,255,215', 0.04);
+  }
+  if (stone) pool(stone.x, stone.y, 80, '255,200,80', 0.10 * puls);
+  if (saberPickup) pool(saberPickup.x, saberPickup.y, 70, '80,160,255', 0.10 * puls);
+  for (const pu of powerups) {
+    pool(pu.x, pu.y, 54, pu.kind === 'freeze' ? '120,210,255' : pu.kind === 'fire' ? '255,140,60' : '190,150,255', 0.10 * puls);
+  }
+  for (const b of blasts) {
+    if (b.x == null) continue;   // chain-lightning blasts carry point lists, not a center
+    pool(b.x, b.y, (b.rMax || 80) * 1.1, b.kind === 'frost' ? '120,210,255' : b.kind === 'fire' ? '255,120,40' : '190,150,255', 0.12);
+  }
+  for (const k of kegs) {        // the arcing keg's lit fuse
+    const t = k.t / k.T;
+    pool(k.sx + (k.tx - k.sx) * t, k.sy + (k.ty - k.sy) * t - Math.sin(t * Math.PI) * 60, 26, '255,160,60', 0.10);
+  }
+  for (const m of minions) pool(m.x, m.y, 34, '80,255,215', 0.05);
+  for (const al of allies) {
+    if (al.x == null) continue;
+    pool(al.x, al.y, 50, al.kind === 'luke' ? '120,255,140' : al.kind === 'gandalf' ? '220,220,255' : '160,120,255', 0.07);
+  }
   ctx.restore();
 }
