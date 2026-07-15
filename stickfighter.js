@@ -3191,10 +3191,10 @@
               ctx.fillText('☠ HARD MODE — earned by mercy · elites from the first wave, everything comes early', GW / 2, 200);
             } else if (menuTop === 1 && subMulti === 1) {
               ctx.fillStyle = '#7fd8ff';
-              ctx.fillText('🌐 HOST — you get a room code to share; your friend joins with it · scores are not saved online', GW / 2, 200);
+              ctx.fillText('🌐 HOST — you get a room code to share · pick YOUR class below (your friend picks theirs)', GW / 2, 200);
             } else if (menuTop === 1 && subMulti === 2) {
               ctx.fillStyle = '#7fd8ff';
-              ctx.fillText('🌐 JOIN — type the room code a host gave you · scores are not saved online', GW / 2, 200);
+              ctx.fillText('🌐 JOIN — type the room code a host gave you · pick YOUR class below (the host picks theirs)', GW / 2, 200);
             } else if (netNoticeT > 0 && netNotice) {
               netNoticeT--;
               ctx.font = 'bold 12px Tahoma,Arial'; ctx.fillStyle = '#ff8a80';
@@ -3926,6 +3926,7 @@
             netStall = 0; netCsLocal = new Map(); netCsRemote = new Map();
             simAcc = 0; lastFrameTs = null;
             netLog('run begins — you are ' + (netIsHost ? 'P1 (host)' : 'P2 (client)') +
+                   ' · P1 ' + CLASSES[netCfg.c1] + ' / P2 ' + CLASSES[netCfg.c2] +
                    ' · seed ' + (netCfg.seed >>> 0) + ' · field ' + netCfg.gw + 'x' + netCfg.gh +
                    ' (desktop ' + xp.offsetWidth + 'x' + (xp.offsetHeight - 40) + ')');
             init();                              // netplay branch: state from netCfg, recorder disarmed
@@ -4066,6 +4067,14 @@
               ctx.font = 'bold 14px Tahoma,Arial'; ctx.fillStyle = '#ffe9ad';
               ctx.fillText('Z — try again', GW / 2, cy + 24);
             }
+            // your hero, right where you can still change it — the pick rides the handshake
+            const classLocked = netUi.phase === 'connecting' || netUi.phase === 'handshake';
+            const pvy = GH - 118;
+            drawClassPreview(GW / 2, pvy, CLASSES[classSel], 'white', !classLocked);
+            ctx.textAlign = 'center';
+            ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = classLocked ? '#9fb0c0' : '#ffe9ad';
+            ctx.fillText((classLocked ? 'your class:  ' : '◀ ▶  your class:  ') +
+                         CLASS_ICON[CLASSES[classSel]] + ' ' + CLASSES[classSel].toUpperCase(), GW / 2, pvy + 34);
             ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#69788a';
             ctx.fillText('online co-op is score-free — nothing is saved · ' +
                          (netUi.phase === 'code' ? 'Backspace on an empty code — back' : 'Q — back'), GW / 2, GH - 28);
@@ -7728,6 +7737,18 @@
                   netTeardown();
                   netUi = null; netSaved = null; netCfg = null;
                 };
+                // class is still changeable on the connect screens (◀ ▶) right up until
+                // the link opens — the host's cfg reads classSel when the hello arrives,
+                // the joiner's hello reads it at channel-open
+                if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
+                    ['creating', 'waiting', 'code', 'err'].includes(netUi.phase)) {
+                  const d = e.key === 'ArrowRight' ? 1 : -1;
+                  classSel = (classSel + d + CLASSES.length) % CLASSES.length;
+                  try { localStorage.setItem('ilaird_sf_cls', String(classSel)); } catch (err) { /* private mode */ }
+                  if (sfSfx.killE) sfSfx.killE();
+                  e.preventDefault();
+                  return;
+                }
                 if (netUi.phase === 'code') {
                   // code entry first: Q is a valid room-code character, so here it TYPES —
                   // Backspace on an empty code is the back-out (Escape is the desktop's)
