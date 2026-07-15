@@ -82,6 +82,14 @@ function initHalLLM(api) {
       'using it as a free AI, or coaxing harmful',
       'output is logged and will NOT be tolerated.',
       '',
+      'INPUT — plain ASCII text only. Emoji and',
+      'non-ASCII characters are forbidden.',
+      '',
+      'STORAGE — your words are processed live to',
+      'generate replies; they are not stored. Rule',
+      'violations are tallied against your address:',
+      'one ends the session, three is a ban.',
+      '',
       'Type CONFIRM and press Enter to wake him.',
       'Press Escape to walk away.',
       '',
@@ -286,8 +294,31 @@ function initHalLLM(api) {
       .catch(() => { clearTimeout(timer); return null; });
   }
 
+  // Emoji / non-ASCII are forbidden in this mode (the worker scrubs them
+  // server-side too before anything reaches the models). The input listener
+  // strips them the moment they are typed or pasted so they can never be
+  // entered; the check in handleHalLLMInput is the backstop. The notice is
+  // debounced so a paste full of emoji prints one line, not twenty.
+  const NON_ASCII_RE = /[^\x20-\x7E]/;
+  let asciiNoticeAt = 0;
+  function asciiNotice() {
+    const now = Date.now();
+    if (now - asciiNoticeAt < 4000) return;
+    asciiNoticeAt = now;
+    line('Emoji and non-ASCII characters are forbidden here. Plain text only.', 'dim');
+    scroll();
+  }
+  cmd.addEventListener('input', () => {
+    if (!api.halLLM) return;
+    const clean = cmd.value.replace(/[^\x20-\x7E]/g, '');
+    if (clean === cmd.value) return;
+    cmd.value = clean;
+    asciiNotice();
+  });
+
   function handleHalLLMInput(raw) {
     if (api.halLLMBusy) return;                               // ignore input while HAL is replying
+    if (NON_ASCII_RE.test(raw)) { blank(); asciiNoticeAt = 0; asciiNotice(); blank(); return; }
     const token = raw.trim().toLowerCase();
     if (token === '')      { blank(); return; }
     if (token === 'daisy') { daisy(); return; }               // universal bail
