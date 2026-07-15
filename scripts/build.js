@@ -149,6 +149,15 @@ function build() {
   fs.rmSync(DIST, { recursive: true, force: true });
   fs.mkdirSync(DIST, { recursive: true });
 
+  // stickfighter.js is assembled from stickfighter/ parts — make sure the
+  // artifact is current before bundling (a no-op when nothing changed).
+  const { assemble, OUT: SF_OUT } = require('./assemble-sf');
+  const sf = assemble();
+  if (!fs.existsSync(SF_OUT) || fs.readFileSync(SF_OUT, 'utf8') !== sf) {
+    fs.writeFileSync(SF_OUT, sf);
+    console.log('Assembled stickfighter.js from parts');
+  }
+
   console.log('Obfuscating…');
   // Main bundle: concat in order, join defensively with ;\n, wrap, obfuscate heavy.
   const bundleSrc = iife(BUNDLE.map(read).join('\n;\n'));

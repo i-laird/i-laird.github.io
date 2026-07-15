@@ -5,6 +5,7 @@
 #    no benefit.
 app.js
 stickfighter.js
+stickfighter/
 games.js
 sans.js
 chess.js

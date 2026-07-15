@@ -9,16 +9,21 @@
 //
 // What this pins:
 //   - the intro's MULTIPLAYER → HOST / JOIN flow reaches a connected run
-//   - the lockstep handshake (hello → cfg → ready → go) starts BOTH sims
+//   - the handshake opens a READY LOBBY (hello → lobby), no input frames flow
+//     until BOTH players ready up, then cfg → ready → go starts BOTH sims
 //   - two sims fed different local inputs stay in lockstep for thousands of
 //     ticks: the game's own checksum tripwire (`cs` messages every 60 ticks)
 //     ends the run on ANY divergence, so "both still in the run" IS the
 //     determinism assertion
 //   - nothing persists out of an online run (no profile/tokens/best writes)
-//   - killing the transport boots the survivor back to the intro screen
+//   - killing the transport does NOT end the run: both peers hold it frozen and
+//     re-signal through the derived rejoin room ('R'+5 chars, overwritable,
+//     gen-stamped), the resume handshake refills what the drop swallowed, and
+//     lockstep continues under the same checksum tripwire
+//   - a deliberate exit (Q → 'bye') still lands both peers on the intro
 //
-// Timers are real (the host polls /mp-answer on a 2s interval), so this test
-// takes a few seconds of wall clock.
+// Timers are real (the host polls /mp-answer on a 2s interval; the reconnect
+// loops poll on 2–2.5s timers), so this test takes ~10–20s of wall clock.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -43,7 +48,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── shared stub world: signaling rooms + the RTC loopback ────────────────────
 function makeWorld() {
   const world = {
-    rooms: new Map(), // code → { offer, answer }
+    rooms: new Map(), // code → { offer, answer, gen? }
+    genSeq: 0, // rejoin-room generation stamps (mirrors the worker's gen)
     hostPc: null, // the pc that created a data channel
     clientPc: null, // the pc that received the offer
     hostCh: null,
@@ -62,18 +68,30 @@ function makeWorld() {
     const respond = (status, data) =>
       Promise.resolve({ ok: status === 200, status, json: () => Promise.resolve(data) });
     if (u.pathname === '/mp-host') {
+      // a rejoin re-post overwrites the room and stamps a fresh gen (worker parity)
+      if (body.rejoin) {
+        const gen = 'g' + ++world.genSeq;
+        world.rooms.set(body.rejoin, { offer: body.offer, answer: null, gen });
+        return respond(200, { code: body.rejoin, ttlSec: 300, gen });
+      }
       const code = 'K7QX2';
       world.rooms.set(code, { offer: body.offer, answer: null });
       return respond(200, { code, ttlSec: 300 });
     }
     if (u.pathname === '/mp-offer') {
       const room = world.rooms.get(u.searchParams.get('code'));
-      return room ? respond(200, { offer: room.offer }) : respond(404, { error: 'not_found' });
+      if (!room) return respond(404, { error: 'not_found' });
+      return respond(
+        200,
+        room.gen ? { offer: room.offer, gen: room.gen } : { offer: room.offer }
+      );
     }
     if (u.pathname === '/mp-join') {
       const room = world.rooms.get(body.code);
       if (!room) return respond(404, { error: 'not_found' });
       if (room.answer) return respond(409, { error: 'room_taken' });
+      if (body.gen && room.gen && body.gen !== room.gen)
+        return respond(409, { error: 'room_taken' });
       room.answer = body.answer;
       return respond(200, { ok: true });
     }
@@ -342,12 +360,25 @@ test('two instances host+join, stay in lockstep, persist nothing, survive discon
   for (const ch of 'K7QX2') client.key(ch);
   client.key('Enter'); // join
 
-  // the host polls /mp-answer every 2s; the run starts on both after the handshake
+  // the host polls /mp-answer every 2s; the channel opens into the READY LOBBY
   await waitUntil(
-    () => world.hostCh && world.clientCh && world.msgCounts.f > 0,
+    () => world.hostCh && world.clientCh && world.clientCh.readyState === 'open',
     [host, client],
     8000,
-    'the lockstep handshake to complete'
+    'the peer link to open into the lobby'
+  );
+  // nobody's run starts until BOTH players ready up (the confirm gate)
+  host.pump(2);
+  client.pump(2);
+  assert.equal(world.msgCounts.f, 0, 'no input frames may flow before both players ready up');
+  host.key('z');
+  client.pump(2); // deliver the host's rdy before the client's own
+  client.key('z');
+  await waitUntil(
+    () => world.msgCounts.f > 0,
+    [host, client],
+    4000,
+    'the lockstep handshake to complete after both ready'
   );
 
   // the run opens on the shared boon menu — the HOST picks for the party
@@ -405,12 +436,55 @@ test('two instances host+join, stay in lockstep, persist nothing, survive discon
     }
   }
 
-  // ── transport death: the survivor lands back on the intro with a notice ──
+  // ── transport death mid-run: NOBODY is booted — both peers hold the frozen run
+  // and re-signal through the derived rejoin room, then the resume handshake
+  // refills the gap and lockstep continues under the same checksum tripwire ──
+  const fBefore = world.msgCounts.f;
   world.clientCh.close();
   host.pump(4);
+  client.pump(4);
   assert.ok(
-    host.hud().includes('BEST:'),
-    'after the peer vanishes the host must be back on the intro screen'
+    !host.hud().includes('BEST:'),
+    'a drop must NOT boot the host to the intro — the run is held for reconnection'
+  );
+  assert.ok(
+    !client.hud().includes('BEST:'),
+    'a drop must NOT boot the client to the intro — the run is held for reconnection'
+  );
+  // the reconnect loops run on real 2–2.5s timers (offer re-post + polls)
+  await waitUntil(
+    () => world.msgCounts.f > fBefore + 200,
+    [host, client],
+    20000,
+    'the run to resume over the re-signaled link'
+  );
+  assert.ok(
+    [...world.rooms.keys()].some((c) => /^R[A-Z2-9]{5}$/.test(c)),
+    'the reconnect must rendezvous through a derived R-prefixed rejoin room'
+  );
+  // still in lockstep after the resume: more divergent-input frames, same tripwire
+  for (let i = 0; i < 300; i++) {
+    host.pump(1);
+    client.pump(1);
+    if (i % 100 === 0) await sleep(1);
+  }
+  assert.ok(
+    !host.hud().includes('BEST:'),
+    'host must still be in the run after the reconnect (a DESYNC would boot it)'
+  );
+  assert.ok(
+    !client.hud().includes('BEST:'),
+    'client must still be in the run after the reconnect (a DESYNC would boot it)'
+  );
+
+  // ── a deliberate exit still leaves cleanly: Q sends 'bye', both land on the intro ──
+  host.key('q');
+  host.pump(4);
+  client.pump(4);
+  assert.ok(host.hud().includes('BEST:'), 'Q must land the leaver back on the intro');
+  assert.ok(
+    client.hud().includes('BEST:'),
+    "the peer must land on the intro after the leaver's bye"
   );
 
   assert.deepEqual(

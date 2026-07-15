@@ -25,19 +25,20 @@ python3 -m http.server 8000   # then open http://localhost:8000
 
 ## Project layout
 
-| Path              | What it is                                                       |
-| ----------------- | ---------------------------------------------------------------- |
-| `index.html`      | Bare markup (~100 lines); all behavior is loaded scripts.        |
-| `style.css`       | The whole stylesheet. Theme colors are CSS variables on `:root`. |
-| `app.js`          | The terminal: commands, HAL mode, dispatch.                      |
-| `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~300 KB).     |
-| `games.js`        | The four shell games (racecar/snake/pong/2048), lazy-loaded.     |
-| `sans.js`         | The sans easter egg (command set + battle), lazy-loaded.         |
-| `chess.js`        | Chess (Stockfish-backed), lazy-loaded.                           |
-| `sw.js`           | Service worker: repeat-visit caching (GH Pages caps max-age).    |
-| `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text).       |
-| `test/`           | Node test-runner suites for `lib/`.                              |
-| `assets/`         | Audio, images, and the Open Graph card.                          |
+| Path              | What it is                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `index.html`      | Bare markup (~100 lines); all behavior is loaded scripts.                                                          |
+| `style.css`       | The whole stylesheet. Theme colors are CSS variables on `:root`.                                                   |
+| `app.js`          | The terminal: commands, HAL mode, dispatch.                                                                        |
+| `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~430 KB); generated from `stickfighter/` by `npm run assemble`. |
+| `stickfighter/`   | The game's source-of-truth part files (state, rendering, netplay, bosses, …).                                      |
+| `games.js`        | The four shell games (racecar/snake/pong/2048), lazy-loaded.                                                       |
+| `sans.js`         | The sans easter egg (command set + battle), lazy-loaded.                                                           |
+| `chess.js`        | Chess (Stockfish-backed), lazy-loaded.                                                                             |
+| `sw.js`           | Service worker: repeat-visit caching (GH Pages caps max-age).                                                      |
+| `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text).                                                         |
+| `test/`           | Node test-runner suites for `lib/`.                                                                                |
+| `assets/`         | Audio, images, and the Open Graph card.                                                                            |
 
 ### A note on architecture
 

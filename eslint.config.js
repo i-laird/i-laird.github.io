@@ -86,6 +86,7 @@ module.exports = [
     files: [
       'app.js',
       'stickfighter.js',
+      'stickfighter/**/*.js',
       'games.js',
       'sans.js',
       'chess.js',
@@ -97,6 +98,9 @@ module.exports = [
       ecmaVersion: 2022,
       sourceType: 'script',
       globals: { ...globals.browser },
+      // the stickfighter/ parts are fragments of one function body (assembled
+      // by scripts/assemble-sf.js), so a top-level `return` is legal in context
+      parserOptions: { ecmaFeatures: { globalReturn: true } },
     },
     rules: {
       'no-undef': 'off',
