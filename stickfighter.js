@@ -3925,6 +3925,9 @@
             netLocal = { dash: false, atk: false, cycle: false, summon: -1, mash: 0 };
             netStall = 0; netCsLocal = new Map(); netCsRemote = new Map();
             simAcc = 0; lastFrameTs = null;
+            netLog('run begins — you are ' + (netIsHost ? 'P1 (host)' : 'P2 (client)') +
+                   ' · seed ' + (netCfg.seed >>> 0) + ' · field ' + netCfg.gw + 'x' + netCfg.gh +
+                   ' (desktop ' + xp.offsetWidth + 'x' + (xp.offsetHeight - 40) + ')');
             init();                              // netplay branch: state from netCfg, recorder disarmed
             started = true; frame = 0;
             banner = '🌐 ONLINE CO-OP · WAVE 1';
@@ -5703,11 +5706,12 @@
               if (boonMenu) drawBoonPanel();
               else drawUpgradePanel();
               drawTrophyToasts();
-              hud.innerHTML = netplay && !netIsHost
-                ? '⏳ Player 1 is choosing…<br>(the host drives the menus online)'
+              hud.innerHTML = netplay && !netIsHost && boonMenu
+                ? '⏳ Player 1 is choosing…<br>(P1 picks the party\'s boon)'
                 : (boonMenu
                   ? (boonMenu.bane ? 'a bane must be borne' : 'a boon is offered') + '<br>◀ ▶ choose · Z takes it'
-                  : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left');
+                  : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left'
+                    + (netplay ? '<br>🌐 you both shop · Continue closes it for both' : ''));
               return;
             }
 
@@ -7825,9 +7829,12 @@
               e.preventDefault();
               return;
             }
-            // upgrade menu between waves — input only navigates the shop while paused
+            // upgrade menu between waves — input only navigates the shop while paused.
+            // ONLINE both players shop at once: each navigates their OWN cursor (sel is
+            // view-local — never sim-read), and a confirm crosses as a tick-stamped BUY
+            // event carrying the node id, so simultaneous picks resolve deterministically
+            // (first event wins; a second buy of the same id no-ops in the feeder).
             if (paused && upMenu) {
-              if (netplay && !netIsHost) { e.preventDefault(); return; }   // Player 1 spends the party's tokens
               const rows = availableUpgrades();
               const n = rows.length + 1;                       // +1 = the Continue row
               if (['ArrowUp', 'ArrowLeft', 'w', 'W'].includes(e.key))        { upMenu.sel = (upMenu.sel - 1 + n) % n; sfSfx.killE(); }
