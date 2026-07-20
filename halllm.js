@@ -225,6 +225,9 @@ function initHalLLM(api) {
       const f = Math.round(cl(pct) / 10);
       return `<span style="color:${color}">${'▰'.repeat(f)}${'▱'.repeat(10 - f)}</span> ${cl(pct)}%`;
     };
+    // The label rides with every HUD redraw so a cropped screenshot of the
+    // game still discloses that the dialogue is AI-generated role-play.
+    line('  ── HAL 9000 · experimental AI role-play ──', 'dim');
     line(`  ⏏ <span style="color:#8fd8ff">ESCAPE</span> ${bar(escape, '#8fd8ff')}     ⬤ <span style="color:#ff6b6b">HAL CONTROL</span> ${bar(control, '#ff6b6b')}`);
   }
 

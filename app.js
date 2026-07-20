@@ -2062,10 +2062,17 @@
     blank();
     scroll();
     awaitingInput = name => {
-      // Strip angle brackets and cap length so the name can never inject markup,
-      // no matter which output path (many use innerHTML) interpolates it later.
-      const clean = (name || '').trim().replace(/[<>]/g, '').slice(0, 40);
-      playerName = clean || 'Dave';
+      // Alphanumerics + space ' - . only, 20 chars, must start alphanumeric —
+      // mirrors the hal-worker's sanitizeName exactly. Keeps the name safe for
+      // innerHTML output paths AND for the worker's bracketed turn metadata
+      // (brackets in a name could spoof a [directive] server-side).
+      const clean = (name || '')
+        .replace(/[^A-Za-z0-9 .'-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 20)
+        .trim();
+      playerName = /^[A-Za-z0-9]/.test(clean) ? clean : 'Dave';
       if (playerName.toLowerCase() === 'dave') unlockAchievement('actually-dave');
       blank();
       if (soundEnabled) {
