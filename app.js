@@ -54,6 +54,11 @@
   const HAL_WORKER_BASE = 'https://nlflqwapol.execute-api.us-east-1.amazonaws.com';   // AWS API Gateway backend
   const HAL_WORKER_URL = (() => { try { return localStorage.getItem('ilaird_hal_worker') || HAL_WORKER_BASE; } catch (e) { return HAL_WORKER_BASE; } })();
   const TURNSTILE_SITE_KEY = '0x4AAAAAADn5dDkcE9exLUeE';                              // public Turnstile site key
+  // HAL's real telephone number — a Twilio number whose Voice webhook points at
+  // the hal-worker's POST {base}/voice (see ~/hal-worker README, "HAL on the
+  // telephone"). Empty string hides every mention of it on the site. Display
+  // format is used verbatim, e.g. '+1 (555) 900-9000'.
+  const HAL_PHONE = '';
   let halLLM = false, halLLMBusy = false;   // (the LLM session state lives in the halllm.js chunk)
   // sansBattleActive stays here (the dispatcher, finale idle-poll, and armFinale
   // read it); the battle internals (sansBattle handles, sansDeaths) live in the
@@ -256,8 +261,6 @@
     // Stick Fighter keeps its OWN in-game trophy case (SF_ACH in stickfighter.js) — the
     // site tracks just these two: the doorway in, and the platinum for clearing the case.
     { id: 'the-room',      name: 'room with a view',  desc: 'stepped outside the terminal',    hint: 'the terminal is running on something. zoom out.' },
-    { id: 'moon-gazer',    name: 'moon gazer',        desc: 'admired the moon from the room',  hint: 'look out the window at 3 AM' },
-    { id: 'under-the-pillow', name: 'under the pillow', desc: 'checked under the pillow',      hint: 'where do secrets sleep?' },
     { id: 'watched-back',  name: 'it watches back',   desc: "stared into the poster's red eye", hint: 'something in the room stares back' },
     { id: 'stick-fighter', name: 'stick fighter 2000', desc: 'booted up Stick Fighter 2000',   hint: 'the desktop hides more than wallpaper' },
     { id: 'sf-platinum',   name: 'the platinum trophy', desc: 'earned every Stick Fighter trophy', hint: 'the brawler keeps its own trophy case — fill it' },
@@ -2385,6 +2388,9 @@
       scroll,
       unlockAchievement,
       _chirp,
+      halSpeak,
+      halD,
+      halPhone: HAL_PHONE,
       get soundEnabled() { return soundEnabled; },
       get reduceMotion() { return reduceMotion; },
       get achOverlayOpen() { return !!achOverlayEl; },

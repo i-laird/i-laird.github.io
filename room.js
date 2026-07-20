@@ -9,16 +9,15 @@
  * You can WALK: the camera is a position + yaw (an FPS view matrix,
  * `translateZ(P) rotateX(pitch) rotateY(yaw) translate3d(-x,-y,-z)` on
  * #room-world — see viewPrefix() for why the leading translateZ matters),
- * driven in a rAF loop once the fly-out lands. THE MOUSE LOOKS: clicking
- * empty space grabs the pointer (Pointer Lock; drag-to-look is the fallback
- * when lock is unavailable or declined) and mouse movement steers yaw/pitch.
- * W/S or Up/Down walk, A/D strafe, Left/Right arrows turn (keyboard-only
- * users can still steer). Simple box collision keeps you inside the walls
- * and out of the desk, tower, dresser, and bed. Escape / Enter / clicking
- * the screen goes back in (under pointer lock the browser eats the first
- * Escape to release the pointer; the second one exits). All props are
- * decorative (tooltips only) except the lava lamp, which toggles the warm
- * `.room-lit` lighting.
+ * driven in a rAF loop once the fly-out lands. THE MOUSE LOOKS by dragging
+ * (no Pointer Lock — the cursor stays visible so tooltips and prop clicks
+ * always work; a drag that traveled more than a few px suppresses the click
+ * it would otherwise end in). W/S or Up/Down walk, A/D strafe, Left/Right
+ * arrows turn (keyboard-only users can still steer). Simple box collision
+ * keeps you inside the walls and out of the furniture. Escape / Enter /
+ * clicking the screen goes back in. Props are decorative (tooltips only)
+ * except the lava lamp (toggles the warm `.room-lit` lighting) and the HAL
+ * poster (the room's one easter egg).
  *
  * Lazily loaded by launchRoom() in app.js the first time `room` runs (same
  * pattern as desktop.js): classic script, one global — initRoom(api) →
@@ -59,6 +58,9 @@ function initRoom(api) {
   let moveHandler = null, clickHandler = null, downHandler = null, upHandler = null;
   let clockTimer = null, rafId = null;
   let bills = [], billYaw = null;
+  let eyeEl = null, posterEl = null, phoneEl = null, callEl = null;
+  let creepStage = 0, ringing = false, answered = false, callTyper = null;
+  let lastTrack = 0;
   const keys = new Set();
   const timers = [];
   const later = (fn, ms) => timers.push(setTimeout(fn, ms));
@@ -93,15 +95,12 @@ function initRoom(api) {
      pivot is the eye, so it never orbits the room). Fed by pointer-lock
      movement deltas, or by drag deltas when lock is off. */
   const LOOK_SENS = 0.16;
-  let dragging = false, dragX = 0, dragY = 0;
+  let dragging = false, dragX = 0, dragY = 0, dragDist = 0;
   // in this view matrix yaw+ looks RIGHT and pitch+ looks UP, so: mouse
   // right → yaw+, mouse down → pitch− (non-inverted FPS feel)
   function applyLook(dx, dy) {
     cam.yaw += dx * LOOK_SENS;
     cam.pitch = Math.max(-42, Math.min(34, cam.pitch - dy * LOOK_SENS * 0.8));
-  }
-  function pointerLocked() {
-    return document.pointerLockElement === viewport;
   }
 
   function blocked(x, z) {
@@ -145,6 +144,14 @@ function initRoom(api) {
     const t = camTransform();
     if (t !== lastT) { lastT = t; world.style.transform = t; }
     updateBills();
+    if (creepStage >= 2 && now - lastTrack > 120) {
+      lastTrack = now;
+      // the poster's pupil drifts toward wherever you stand
+      const px = Math.max(34, Math.min(58, 46 + (cam.x - 640) * 0.008));
+      const py = Math.max(34, Math.min(50, 42 + (1644 + cam.z) * 0.004 - 6));
+      eyeEl.style.setProperty('--ex', px.toFixed(1) + '%');
+      eyeEl.style.setProperty('--ey', py.toFixed(1) + '%');
+    }
   }
 
   /* Sprite billboards: roundish objects (mug, lava lamp, trophy) are single
@@ -154,9 +161,12 @@ function initRoom(api) {
     if (billYaw !== null && Math.abs(billYaw - cam.yaw) < 0.4) return;
     billYaw = cam.yaw;
     for (const b of bills) {
-      b.style.transform =
+      const t =
         'translate(-50%, -50%) translate3d(' + b.dataset.bx + 'px, ' + b.dataset.by + 'px, ' +
         b.dataset.bz + 'px) rotateY(' + (-cam.yaw).toFixed(1) + 'deg)';
+      b.style.transform = t;
+      // ringing shake keyframes compose with the billboard pose via this var
+      b.style.setProperty('--bill-t', t);
     }
   }
 
@@ -177,12 +187,13 @@ function initRoom(api) {
       '<div class="rp rm-warm rm-warm-floor"></div>' +
       // window + moonlight
       '<div class="rp rm-win" data-tip="3:07 AM. the city never logs off.">' +
-      '<div class="rm-moon" data-egg="moon-gazer" data-tip="still up there. good."></div><div class="rm-stars"></div><div class="rm-city"></div>' +
+      '<div class="rm-moon" data-tip="still up there. good."></div><div class="rm-stars"></div><div class="rm-city"></div>' +
       '<div class="rm-win-bars"></div></div>' +
       '<div class="rp rm-curtain rm-curtain-l"></div>' +
       '<div class="rp rm-curtain rm-curtain-r"></div>' +
       '<div class="rp rm-curtain-rod"></div>' +
       '<div class="rp rm-ceil-light"></div>' +
+      '<div class="rp rm-cctv" data-tip="that was not there yesterday." data-bx="1290" data-by="-905" data-bz="-1560"><i></i></div>' +
       '<div class="rp rm-beam"></div>' +
       '<div class="rp rm-motes"><i></i><i></i><i></i><i></i><i></i><i></i></div>' +
       // posters
@@ -260,12 +271,14 @@ function initRoom(api) {
       '<div class="rp rm-bed-side" data-tip="still made. suspicious."></div>' +
       '<div class="rp rm-bed-foot"></div>' +
       '<div class="rp rm-bed-top" data-tip="still made. suspicious.">' +
-      '<i class="rm-pillow-pad" data-egg="under-the-pillow" data-tip="lumpy."></i></div>' +
+      '<i class="rm-pillow-pad" data-tip="lumpy."></i></div>' +
       // front wall (behind the player at start): door, dresser, posters
       '<div class="rp rm-door" data-tip="leads outside. hard pass."><i></i></div>' +
       '<div class="rp rm-dresser-top"></div>' +
       '<div class="rp rm-dresser-side"></div>' +
+      '<div class="rp rm-dresser-side-r"></div>' +
       '<div class="rp rm-dresser" data-tip="socks, mostly"></div>' +
+      '<div class="rp rm-phone" data-act="phone" data-tip="it is not connected to anything." data-bx="-780" data-by="482" data-bz="1230"></div>' +
       '<div class="rp rm-poster-chart" data-tip="you memorized it too">' +
       '<b>E</b><span>F P</span><span>T O Z</span><small>L P E D</small><small>P E C F D</small></div>' +
       '<div class="rp rm-cork" data-tip="the master plan">' +
@@ -278,16 +291,109 @@ function initRoom(api) {
     screenEl = viewport.querySelector('#room-screen');
     glassEl = viewport.querySelector('.rm-glass');
     clockEl = viewport.querySelector('.rm-clock span');
+    eyeEl = viewport.querySelector('.rm-hal-eye');
+    posterEl = viewport.querySelector('.rm-poster-hal');
+    phoneEl = viewport.querySelector('.rm-phone');
+
+    callEl = document.createElement('div');
+    callEl.id = 'room-call';
 
     hint = document.createElement('div');
     hint.id = 'room-hint';
-    hint.textContent = 'click to grab the mouse and look · wasd / arrows to walk · esc to leave';
+    hint.textContent = 'drag to look around · wasd / arrows to walk · esc to leave';
 
     tip = document.createElement('div');
     tip.id = 'room-tip';
 
     blinkEl = document.createElement('div');
     blinkEl.className = 'rm-blink';
+  }
+
+  /* ── the longer you stay, the less alone you are ──
+     Stages (seconds after the fly-out lands; override via
+     window.ROOM_CREEP_SCHEDULE for testing): 1) the poster's pulse quickens ·
+     2) the room dims, LEDs go red, the clock stutters to 9000, and the eye
+     and ceiling camera start tracking you · 3) HAL whispers (real
+     hal_chase_2 clip when sound is on) and prints into the LIVE terminal
+     from outside · 4) the phone on the dresser rings — answering it plays
+     the pregenerated hal_watching clip ("I've been watching you. I hope you
+     don't mind.") via api.halSpeak, typed as a caption either way. Exit
+     resets everything; each visit starts calm. */
+  function creepSchedule() {
+    return window.ROOM_CREEP_SCHEDULE || [40000, 90000, 150000, 210000];
+  }
+  function armCreep() {
+    const t = creepSchedule();
+    later(() => setCreep(1), t[0]);
+    later(() => setCreep(2), t[1]);
+    later(() => setCreep(3), t[2]);
+    later(() => setCreep(4), t[3]);
+  }
+  function setCreep(n) {
+    if (!active || exiting || n <= creepStage) return;
+    creepStage = n;
+    viewport.classList.add('creep-' + n);
+    if (n === 2) {
+      clockEl.textContent = '9000';
+      later(() => { if (active) setClock(); }, 1600);
+      thump();
+    }
+    if (n === 3) {
+      api.halSpeak('I see you.');
+      posterEl.dataset.tip = 'he is not pretending anymore.';
+      api.line('<span class="err">HAL:</span> I can see you standing there.');
+      api.scroll();
+    }
+    if (n === 4 && !answered) startRinging();
+  }
+  function thump() {
+    if (!active || exiting || creepStage < 2) return;
+    api._chirp(42, 'sine', 0.5, 0.05);
+    later(thump, 9000);
+  }
+  function startRinging() {
+    ringing = true;
+    phoneEl.classList.add('rm-ringing');
+    phoneEl.dataset.tip = "it's for you.";
+    ringBurst();
+  }
+  function ringBurst() {
+    if (!ringing || !active || exiting) return;
+    for (let i = 0; i < 4; i++) {
+      later(() => { if (ringing) api._chirp(1180, 'square', 0.07, 0.045); }, i * 140);
+    }
+    later(ringBurst, 2600);
+  }
+  function answerPhone() {
+    ringing = false;
+    answered = true;
+    phoneEl.classList.remove('rm-ringing');
+    phoneEl.dataset.tip = api.halPhone
+      ? 'missed call \u00b7 ' + api.halPhone
+      : 'it will not ring again.';
+    const text = api.halD("I've been watching you, Dave. I hope you don't mind.");
+    api.halSpeak(text); // pregenerated hal_watching clip when sound is on
+    callEl.innerHTML = '<i></i><span></span>';
+    callEl.classList.add('show');
+    const out = callEl.querySelector('span');
+    let i = 0;
+    callTyper = setInterval(() => {
+      i++;
+      out.textContent = text.slice(0, i);
+      if (i >= text.length) {
+        clearInterval(callTyper);
+        callTyper = null;
+        later(() => { out.innerHTML += '<em>&nbsp;&nbsp;— click.</em>'; }, 1800);
+        // if HAL has a real number (Twilio → hal-worker /voice), leave a
+        // caller id — dial it and he actually picks up
+        if (api.halPhone) {
+          later(() => {
+            out.innerHTML += '<br><em>caller id: ' + api.halPhone + '</em>';
+          }, 2800);
+        }
+        later(() => { if (callEl) callEl.classList.remove('show'); }, api.halPhone ? 6800 : 4200);
+      }
+    }, 42);
   }
 
   function setClock() {
@@ -321,13 +427,9 @@ function initRoom(api) {
 
   function onMove(e) {
     if (exiting) return;
-    if (pointerLocked()) {
-      tip.classList.remove('show');
-      applyLook(e.movementX || 0, e.movementY || 0);
-      return;
-    }
     if (dragging) {
       tip.classList.remove('show');
+      dragDist += Math.abs(e.clientX - dragX) + Math.abs(e.clientY - dragY);
       applyLook(e.clientX - dragX, e.clientY - dragY);
       dragX = e.clientX;
       dragY = e.clientY;
@@ -348,19 +450,11 @@ function initRoom(api) {
   function onPointerDown(e) {
     if (!active || exiting || !walking) return;
     if (e.button !== 0) return;
-    if (e.target && e.target.closest && e.target.closest('[data-act]')) return; // prop clicks act, not look
     e.preventDefault(); // no text selection while dragging the view
     dragging = true;
     dragX = e.clientX;
     dragY = e.clientY;
-    // grab the pointer for true FPS look; drag already works if this is
-    // unavailable or declined (the promise rejection is expected then)
-    if (!pointerLocked() && viewport.requestPointerLock) {
-      try {
-        const r = viewport.requestPointerLock();
-        if (r && r.catch) r.catch(() => {});
-      } catch (err) { /* drag fallback */ }
-    }
+    dragDist = 0;
   }
 
   function onPointerUp() {
@@ -369,6 +463,7 @@ function initRoom(api) {
 
   function onClick(e) {
     if (!active || exiting) return;
+    if (dragDist > 8) return; // that was a look-drag, not a click
     const eggEl = e.target && e.target.closest ? e.target.closest('[data-egg]') : null;
     if (eggEl) {
       api._chirp(620, 'sine', 0.09, 0.05);
@@ -380,6 +475,10 @@ function initRoom(api) {
     const act = t.getAttribute('data-act');
     api._chirp(340, 'square', 0.05, 0.04);
     if (act === 'lamp') { viewport.classList.toggle('room-lit'); return; }
+    if (act === 'phone') {
+      if (ringing) answerPhone();
+      return;
+    }
     if (act === 'back') exit();
   }
 
@@ -396,6 +495,13 @@ function initRoom(api) {
     dragging = false;
     lastT = '';
     billYaw = null;
+    creepStage = 0;
+    ringing = false;
+    answered = false;
+    viewport.classList.remove('creep-1', 'creep-2', 'creep-3', 'creep-4');
+    phoneEl.classList.remove('rm-ringing');
+    phoneEl.dataset.tip = 'it is not connected to anything.';
+    posterEl.dataset.tip = "he's watching.";
     updateBills(); // face the start camera before first paint
 
     // black over everything BEFORE the swap; it fades out on the pull-back
@@ -410,6 +516,7 @@ function initRoom(api) {
     document.body.classList.add('room-view');
     document.body.appendChild(hint);
     document.body.appendChild(tip);
+    document.body.appendChild(callEl);
     api.cmd.blur();
 
     // start framed on the screen, fly out, then hand the camera to the player
@@ -421,6 +528,7 @@ function initRoom(api) {
       if (!active || exiting || walking) return;
       world.classList.add('no-anim'); // per-frame camera writes from here on
       walking = true;
+      armCreep();
     };
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -460,7 +568,6 @@ function initRoom(api) {
     walking = false;
     keys.clear();
     dragging = false;
-    if (pointerLocked() && document.exitPointerLock) document.exitPointerLock();
     hint.classList.remove('show');
     tip.classList.remove('show');
     api._chirp(58, 'sine', 0.35, 0.06);
@@ -479,6 +586,10 @@ function initRoom(api) {
         viewport.remove();
         hint.remove();
         tip.remove();
+        callEl.classList.remove('show');
+        callEl.remove();
+        if (callTyper) { clearInterval(callTyper); callTyper = null; }
+        ringing = false;
         document.removeEventListener('keydown', keyHandler, true);
         document.removeEventListener('keyup', keyUpHandler, true);
         window.removeEventListener('blur', blurHandler);

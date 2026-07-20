@@ -524,19 +524,53 @@ pre.ascii {
   position: absolute; inset: 0;
   pointer-events: none;
   box-shadow: inset 0 0 200px rgba(0, 0, 0, .7);
+  transition: box-shadow 3.5s ease;
 }
+/* ── the creep (classes staged by room.js the longer you stay) ── */
+#room-viewport.creep-2::after { box-shadow: inset 0 0 330px rgba(0, 0, 0, .92); }
+#room-viewport.creep-3::after { box-shadow: inset 0 0 300px rgba(0, 0, 0, .9), inset 0 0 420px rgba(110, 0, 0, .55); }
+#room-viewport.creep-1 .rm-hal-eye { animation-duration: 2.4s; }
+#room-viewport.creep-3 .rm-hal-eye {
+  animation-duration: 1.3s;
+  box-shadow: 0 0 110px 30px rgba(255, 30, 0, .6);
+}
+#room-viewport.creep-2 .rm-tw-led,
+#room-viewport.creep-2 .rm-led {
+  background: #ff4040;
+  box-shadow: 0 0 12px 3px rgba(255, 60, 60, .75);
+}
+#room-viewport.creep-2 .rm-clock { color: #ff6060; }
 #room-world {
   position: absolute; inset: 0;
   transform-style: preserve-3d;
   transition: transform 1.5s cubic-bezier(.24, .82, .26, 1);
+  /* the containers' own (untransformed) boxes sit at z~0 — nearer than most
+     of the scene — and would swallow every click/hover meant for deep planes;
+     hit-testing belongs to the transformed .rp planes themselves */
+  pointer-events: none;
 }
 #room-world.no-anim { transition: none; }
 #room-par {
   position: absolute; inset: 0;
   transform-style: preserve-3d;
+  pointer-events: none;
 }
 #room-viewport .rp {
   position: absolute; left: 50%; top: 50%;
+  pointer-events: auto;
+}
+/* decorative light/shadow/atmosphere planes never eat clicks or hovers
+   (id-qualified so it outranks the .rp auto rule above) */
+#room-viewport .rm-wallglow,
+#room-viewport .rm-deskglow,
+#room-viewport .rm-beam,
+#room-viewport .rm-motes,
+#room-viewport .rm-desk-shadow,
+#room-viewport .rm-bed-shadow,
+#room-viewport .rm-chair-shadow,
+#room-viewport .rm-ceil-light,
+#room-viewport .rm-warm {
+  pointer-events: none;
 }
 
 /* ── room shell ── */
@@ -668,11 +702,13 @@ pre.ascii {
   margin-top: -9px; background: #0c0f1e;
 }
 .rm-beam {
+  pointer-events: none;
   width: 1000px; height: 1500px;
   transform: translate(-50%, -50%) translate3d(-820px, 918px, -250px) rotateX(90deg) skewX(-24deg);
   background: linear-gradient(100deg, rgba(150, 185, 255, .11) 0%, rgba(150, 185, 255, .04) 45%, transparent 70%);
 }
 .rm-motes {
+  pointer-events: none;
   width: 500px; height: 900px;
   transform: translate(-50%, -50%) translate3d(-1050px, -60px, -350px) rotateY(64deg);
 }
@@ -708,7 +744,7 @@ pre.ascii {
   width: 120px; height: 120px;
   margin: -60px 0 0 -60px;
   border-radius: 50%;
-  background: radial-gradient(circle at 46% 42%, #fff3d0 0%, #ffb300 7%, #e00000 30%, #6a0000 62%, #200000 100%);
+  background: radial-gradient(circle at var(--ex, 46%) var(--ey, 42%), #fff3d0 0%, #ffb300 7%, #e00000 30%, #6a0000 62%, #200000 100%);
   box-shadow: 0 0 70px 16px rgba(255, 30, 0, .35);
   animation: rm-hal-pulse 5s ease-in-out infinite;
 }
@@ -828,6 +864,7 @@ pre.ascii {
 
 /* ── desk ── */
 .rm-desk-shadow {
+  pointer-events: none;
   width: 1750px; height: 950px;
   transform: translate(-50%, -50%) translate3d(0, 918px, 10px) rotateX(90deg);
   background: radial-gradient(ellipse 50% 45% at 50% 45%, rgba(0, 0, 0, .6), transparent 75%);
@@ -872,6 +909,7 @@ pre.ascii {
 
 /* ── the monitor (screen face is #room-screen at world origin) ── */
 .rm-wallglow {
+  pointer-events: none;
   width: 1900px; height: 1400px;
   transform: translate(-50%, -50%) translate3d(0, -60px, -1642px);
   background: radial-gradient(ellipse 50% 46% at 50% 50%, rgba(0, 255, 65, .13), transparent 72%);
@@ -882,6 +920,7 @@ pre.ascii {
   50%      { opacity: 1; }
 }
 .rm-deskglow {
+  pointer-events: none;
   width: 1300px; height: 640px;
   transform: translate(-50%, -50%) translate3d(0, 453px, 60px) rotateX(90deg);
   background: radial-gradient(ellipse 50% 60% at 50% 32%, rgba(0, 255, 65, .22), transparent 72%);
@@ -1190,6 +1229,11 @@ pre.ascii {
   transform: translate(-50%, -50%) translate3d(-1090px, 730px, 1248px) rotateY(90deg);
   background: linear-gradient(180deg, #3d2d1c 0%, #241708 100%);
 }
+.rm-dresser-side-r {
+  width: 200px; height: 380px;
+  transform: translate(-50%, -50%) translate3d(-470px, 730px, 1248px) rotateY(-90deg);
+  background: linear-gradient(180deg, #46351f 0%, #2a1c0c 100%);
+}
 .rm-poster-chart {
   width: 300px; height: 400px;
   transform: translate(-50%, -50%) translate3d(-780px, -160px, 1344px) rotateY(180deg) rotate(1deg);
@@ -1235,6 +1279,87 @@ pre.ascii {
 .rm-cork i:nth-child(2) { left: 48%; top: 16%; background: #f5e07a; transform: rotate(3deg); }
 .rm-cork i:nth-child(3) { left: 14%; top: 52%; background: #f0b8c8; transform: rotate(2deg); }
 .rm-cork i:nth-child(4) { left: 55%; top: 58%; background: #a8d4f0; transform: rotate(-3deg); }
+
+/* ── the watcher and the phone ── */
+.rm-cctv {
+  width: 120px; height: 74px;
+  background: linear-gradient(180deg, #2c2c34 0%, #17171d 100%);
+  border-radius: 12px 12px 8px 8px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, .5);
+}
+.rm-cctv::after {                              /* lens */
+  content: '';
+  position: absolute; left: 50%; top: 50%;
+  width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 42% 38%, #3a3a44 0%, #0a0a10 70%);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, .8);
+}
+.rm-cctv i {                                   /* recording light */
+  position: absolute; right: 12px; top: 10px;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #ff3030;
+  box-shadow: 0 0 9px 2px rgba(255, 40, 40, .7);
+  animation: rm-cctv-blink 2.2s steps(1, end) infinite;
+}
+@keyframes rm-cctv-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .25; }
+}
+.rm-phone {
+  width: 150px; height: 116px;
+  cursor: pointer;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, .5));
+}
+.rm-phone::after {                             /* base */
+  content: '';
+  position: absolute; left: 8%; right: 8%; bottom: 0; height: 62%;
+  border-radius: 12px 12px 16px 16px;
+  background:
+    radial-gradient(14px 14px at 50% 58%, rgba(0, 0, 0, .35) 45%, rgba(0, 0, 0, 0) 50%),
+    linear-gradient(180deg, #b02828 0%, #7c1616 100%);
+}
+.rm-phone::before {                            /* handset */
+  content: '';
+  position: absolute; left: 0; right: 0; top: 6%; height: 30%;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #c23030 0%, #8a1a1a 100%);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, .4);
+}
+.rm-phone.rm-ringing {
+  animation: rm-ring-shake .16s linear infinite;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, .5)) drop-shadow(0 0 26px rgba(255, 60, 60, .65));
+}
+@keyframes rm-ring-shake {
+  0%, 100% { transform: var(--bill-t, none) rotate(0deg); }
+  25%      { transform: var(--bill-t, none) rotate(2.6deg); }
+  75%      { transform: var(--bill-t, none) rotate(-2.6deg); }
+}
+#room-call {
+  position: fixed; left: 50%; bottom: 70px;
+  transform: translateX(-50%);
+  z-index: 62;
+  max-width: 640px;
+  padding: 16px 22px;
+  background: rgba(16, 3, 3, .94);
+  border: 2px solid #ff3030;
+  border-radius: 6px;
+  color: #ff9c9c;
+  font-size: 16px; line-height: 1.55;
+  display: flex; align-items: center; gap: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .5s;
+}
+#room-call.show { opacity: 1; }
+#room-call i {
+  flex-shrink: 0;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: radial-gradient(circle at 42% 38%, #ffdd99 0%, #ff3030 45%, #5a0000 100%);
+  box-shadow: 0 0 14px 4px rgba(255, 40, 40, .6);
+  animation: rm-cctv-blink 1.4s steps(1, end) infinite;
+}
+#room-call em { color: #7a4444; font-style: normal; }
 
 /* ── funny references ── */
 .rm-duck {
@@ -1303,6 +1428,7 @@ pre.ascii {
 
 /* ── desk chair ── */
 .rm-chair-shadow {
+  pointer-events: none;
   width: 420px; height: 420px;
   transform: translate(-50%, -50%) translate3d(240px, 918px, 640px) rotateX(90deg);
   background: radial-gradient(circle, rgba(0, 0, 0, .5) 0%, transparent 68%);
@@ -1344,6 +1470,7 @@ pre.ascii {
 
 /* ── the bed (right wall; blanket matches the SF poster's purple) ── */
 .rm-bed-shadow {
+  pointer-events: none;
   width: 950px; height: 1500px;
   transform: translate(-50%, -50%) translate3d(1170px, 918px, -510px) rotateX(90deg);
   background: radial-gradient(ellipse 50% 46% at 50% 50%, rgba(0, 0, 0, .55), transparent 75%);
@@ -1379,7 +1506,6 @@ pre.ascii {
   position: absolute; left: 16%; right: 16%; top: 3%; height: 13%;
   cursor: pointer;
 }
-.rm-moon { cursor: pointer; }
 .rm-poster-hal { cursor: pointer; }
 .rm-bed-head {
   width: 615px; height: 820px;
@@ -1415,6 +1541,7 @@ pre.ascii {
 .rm-curtain-l { transform: translate(-50%, -50%) translate3d(-1478px, -272px, -806px) rotateY(90deg); }
 .rm-curtain-r { transform: translate(-50%, -50%) translate3d(-1478px, -272px, 106px) rotateY(90deg); }
 .rm-ceil-light {
+  pointer-events: none;
   width: 320px; height: 320px;
   transform: translate(-50%, -50%) translate3d(0, -1076px, -50px) rotateX(90deg);
   border-radius: 50%;
@@ -1422,6 +1549,7 @@ pre.ascii {
   opacity: .85;
 }
 .room-lit .rm-ceil-light {
+  pointer-events: none;
   background: radial-gradient(circle, #ffedc4 0%, #e8cf98 42%, #8a7d5c 58%, rgba(0, 0, 0, 0) 62%);
   box-shadow: 0 0 140px 50px rgba(255, 200, 120, .22);
 }
@@ -1482,9 +1610,11 @@ body.room-view #egg-nudge { display: none; }
 @media (prefers-reduced-motion: reduce) {
   #room-world, #room-par { transition: none !important; }   /* cut, don't fly */
   .rm-motes i, .rm-lava i, .rm-hal-eye, .rm-wallglow,
-  .rm-led, .rm-tw-led, .rm-mug::after {
+  .rm-led, .rm-tw-led, .rm-mug::after,
+  .rm-cctv i, .rm-phone.rm-ringing, #room-call i {
     animation: none !important;
   }
+  #room-viewport::after { transition: none !important; }
 }
 
 /* ── SEO / accessibility: real content for crawlers and screen readers, kept
