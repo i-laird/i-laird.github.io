@@ -2116,6 +2116,7 @@
       applyTheme,
       restoreNormal,
       unlockAchievement,
+      _chirp,
       out,
       cmd,
       HAL_WORKER_URL,

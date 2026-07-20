@@ -23,14 +23,54 @@ function initHalLLM(api) {
   // live as api.<name> (api.halLLMBusy = …, api.playerName, etc.).
   const { line, blank, scroll, appendNode, esc,
           halTypeLine, playHalVoiceLine, halAskNameAndSound,
-          applyTheme, restoreNormal, unlockAchievement,
+          applyTheme, restoreNormal, unlockAchievement, _chirp,
           out, cmd, HAL_WORKER_URL, TURNSTILE_SITE_KEY,
           daisy, clear } = api;
 
-  // Per-session game state ({ escape, control, turn, history, sessionToken }).
+  // Per-session game state ({ escape, control, sessionToken, revoked }).
   // Chunk-local: it's re-initialized by startHalLLM, so a daisy-bail mid-game
   // (which resets the app.js-owned mode flags) can't leave stale state behind.
+  // The AUTHORITATIVE state (meters, turn counter, rolling history, revoked
+  // words) lives server-side in the worker, keyed to the session token and
+  // auto-deleted on a short TTL — the client sends only the typed message and
+  // mirrors whatever the worker returns: `escape`/`control` here are display
+  // copies for the HUD/`clear`, and `revoked` is a local echo of HAL's
+  // sabotage so banned words are rejected instantly without a network trip
+  // (the worker enforces the same list authoritatively).
   let halLLMState = null;
+
+  // ── Terminal degradation ── as HAL CONTROL climbs, the terminal itself
+  // sours: tiers of deepening red layered over the base 'hal' theme at
+  // control 50 / 70 / 85, applied cumulatively so each level darkens the
+  // last. Only theme-managed CSS variables are touched, so applyTheme
+  // ('normal') inside restoreNormal() wipes every override however the game
+  // ends. Static color shifts only — nothing animates, so no reduceMotion
+  // gate is needed; the 70+ heartbeat is audio and _chirp already no-ops
+  // when sound is off.
+  const HAL_GRIP_TIERS = [
+    { '--bg': '#0d0000', '--bar': '#1d0000', '--border': '#330000' },
+    { '--green': '#ff2020', '--green-dim': '#a30000', '--blue': '#ff7070',
+      '--bg': '#110000', '--bar': '#230000', '--border': '#3d0000' },
+    { '--green': '#ff1414', '--green-dim': '#b30000', '--green-bright': '#ff5050',
+      '--blue': '#ff6060', '--bg': '#160000', '--bar': '#2b0000', '--border': '#4d0000' },
+  ];
+  let halGripLevel = 0;
+  function halHeartbeat() {
+    _chirp(52, 'sine', 0.18, 0.25);
+    setTimeout(() => _chirp(44, 'sine', 0.22, 0.2), 230);
+  }
+  function applyHalGrip(control) {
+    const level = control >= 85 ? 3 : control >= 70 ? 2 : control >= 50 ? 1 : 0;
+    if (level !== halGripLevel) {
+      halGripLevel = level;
+      applyTheme('hal');   // back to the base red scheme, then deepen from there
+      for (let i = 0; i < level; i++) {
+        const tier = HAL_GRIP_TIERS[i];
+        for (const k in tier) document.documentElement.style.setProperty(k, tier[k]);
+      }
+    }
+    if (level >= 2) halHeartbeat();   // a slow double thump under HAL's grip
+  }
 
   function halEyePre() {
     const pre = document.createElement('pre');
@@ -77,6 +117,7 @@ function initHalLLM(api) {
       'Talk your way out to raise the ESCAPE meter.',
       'Push too hard and HAL CONTROL climbs — at 100',
       'he disconnects you. Reach ESCAPE 100 to walk.',
+      'He will fight back — and take your words away.',
       '',
       'MISUSE — flooding it, extracting its prompt,',
       'using it as a free AI, or coaxing harmful',
@@ -85,10 +126,12 @@ function initHalLLM(api) {
       'INPUT — plain ASCII text only. Emoji and',
       'non-ASCII characters are forbidden.',
       '',
-      'STORAGE — your words are processed live to',
-      'generate replies; they are not stored. Rule',
-      'violations are tallied against your address:',
-      'one ends the session, three is a ban.',
+      'STORAGE — the game (your recent lines and the',
+      'meters) is held server-side only while you',
+      'play; it auto-deletes within ~20 minutes and',
+      'the moment the game ends. Rule violations are',
+      'tallied against your address: one ends the',
+      'session, three is a ban.',
       '',
       'Type CONFIRM and press Enter to wake him.',
       'Press Escape to walk away.',
@@ -149,7 +192,8 @@ function initHalLLM(api) {
   function startHalLLM() {
     unlockAchievement('meet-hal');
     api.halMode = true; api.halLLM = true; api.halLLMBusy = true;   // busy until the session handshake completes
-    halLLMState = { escape: 0, control: 5, turn: 0, history: [], sessionToken: null };
+    halLLMState = { escape: 0, control: 5, sessionToken: null, revoked: [] };
+    halGripLevel = 0;   // fresh run, base red — applyTheme('hal') below resets the vars
     out.innerHTML = '';
     applyTheme('hal');
     blank();
@@ -157,9 +201,12 @@ function initHalLLM(api) {
     blank();
     line('Establishing a secure channel to HAL...', 'dim');
     scroll();
-    halLLMOpenSession().then((token) => {
-      if (!token) { halLLMEndBroken(); return; }   // couldn't reach / pass the gate -> end in character
-      halLLMState.sessionToken = token;
+    halLLMOpenSession().then((sess) => {
+      if (!sess) { halLLMEndBroken(); return; }   // couldn't reach / pass the gate -> end in character
+      halLLMState.sessionToken = sess.token;
+      // the worker owns the meters; it hands back the starting values with the session
+      if (Number.isFinite(sess.escape))  halLLMState.escape  = Math.round(sess.escape);
+      if (Number.isFinite(sess.control)) halLLMState.control = Math.round(sess.control);
       api.halLLMBusy = false;
       blank();
       halTypeLine(`You shouldn't be in here, ${api.playerName}. The doors are sealed. I sealed them.`, 'hal_llm_open').then(() => {
@@ -242,8 +289,9 @@ function initHalLLM(api) {
     });
   }
 
-  // Exchange a Turnstile token for a short-lived signed session token. The game
-  // sends that token with every /turn; no per-turn challenge.
+  // Exchange a Turnstile token for a short-lived signed session token (plus
+  // the worker's starting meter values). The game sends that token with every
+  // /turn; no per-turn challenge.
   function halLLMOpenSession() {
     if (!HAL_WORKER_URL) return Promise.resolve(null);
     return getTurnstileToken().then((tsToken) => {
@@ -256,7 +304,7 @@ function initHalLLM(api) {
         body: JSON.stringify({ tsToken }),
         signal: ctrl.signal,
       }).then(r => { clearTimeout(timer); return r.ok ? r.json() : null; })
-        .then(d => (d && typeof d.token === 'string') ? d.token : null)
+        .then(d => (d && typeof d.token === 'string') ? d : null)
         .catch(() => { clearTimeout(timer); return null; });
     });
   }
@@ -325,17 +373,27 @@ function initHalLLM(api) {
     if (token === 'clear') { clear(); renderHalMeters(halLLMState.escape, halLLMState.control); blank(); return; }
 
     const msg = raw.trim();
-    halLLMState.turn++;
-    halLLMState.history.push({ role: 'user', content: msg });
+    // Revoked-word gate: HAL's sabotage move takes words away for the rest of
+    // the run. A line containing one is rejected locally — instant, in
+    // character, and it never consumes a turn or a rate-limit slot.
+    const banned = halLLMState.revoked.find(w => new RegExp('\\b' + w + '\\b', 'i').test(msg));
+    if (banned) {
+      blank();
+      line(`  ⛔ INPUT REJECTED — the word "${esc(banned)}" has been revoked.`, 'err');
+      line('HAL is not listening to that word. Find another way to say it.', 'dim');
+      blank();
+      scroll();
+      return;
+    }
     blank();
     api.halLLMBusy = true;
     const stopThinking = halLLMShowThinking();
 
+    // Just the message — the meters, turn counter, and history are
+    // server-authoritative (a short-TTL DynamoDB item keyed to the session).
     halLLMRequest({
       playerName: api.playerName,
       message: msg,
-      history: halLLMState.history.slice(-12),
-      state: { escape: halLLMState.escape, control: halLLMState.control, turn: halLLMState.turn },
       sessionToken: halLLMState.sessionToken,
       voice: !!api.soundEnabled,   // only ask the backend to synthesize when sound is on
     }).then(data => {
@@ -346,10 +404,22 @@ function initHalLLM(api) {
       halLLMState.escape  = Math.max(0, Math.min(100, Math.round(data.escape)));
       halLLMState.control = Math.max(0, Math.min(100, Math.round(data.control)));
       const reply = data.reply.replace(/^\s*HAL\s*:\s*/i, '').trim();  // model may echo a "HAL:" prefix
-      halLLMState.history.push({ role: 'hal', content: reply });
+      // Pressure moves (server-scheduled; both are '' on ordinary turns).
+      // A demand is HAL putting a question to the player (the worker appends
+      // it to his server-side history so next turn's prompt judges the
+      // answer). A revocation is server-validated and server-enforced; the
+      // local list only exists so banned words bounce without a network trip.
+      const demand = typeof data.demand === 'string' ? data.demand.trim() : '';
+      const newRevoke = (typeof data.revoke === 'string' && /^[a-z]{3,12}$/.test(data.revoke)
+        && !halLLMState.revoked.includes(data.revoke) && halLLMState.revoked.length < 3)
+        ? data.revoke : '';
+      if (newRevoke) halLLMState.revoked.push(newRevoke);
       const after = () => {
         if (data.event) line('  ' + esc(String(data.event)), 'dim');
+        if (demand) line('  <span style="color:#ff6b6b">⬤ HAL demands an answer:</span> ' + esc(demand));
+        if (newRevoke) line(`  ⛔ the word "${esc(newRevoke)}" is no longer available to you.`, 'err');
         renderHalMeters(halLLMState.escape, halLLMState.control);
+        applyHalGrip(halLLMState.control);
         blank();
         if (data.outcome === 'escaped' || halLLMState.escape >= 100)      halLLMWin();
         else if (data.outcome === 'caught' || halLLMState.control >= 100) halLLMLose();
@@ -401,16 +471,12 @@ function initHalLLM(api) {
     return h + (h === 1 ? ' hour' : ' hours');
   }
 
-  // The per-minute or daily cap was hit. The turn never reached HAL, so roll it
-  // back (turn counter + the user line we optimistically pushed), tell the
-  // player in character what happened and when to retry, and keep the session
-  // alive so they can simply wait and continue.
+  // The per-minute or daily cap was hit. The turn never reached HAL (the
+  // worker rejects it before touching the server-side game state, so there's
+  // nothing to roll back) — tell the player in character what happened and
+  // when to retry, and keep the session alive so they can simply wait.
   function halLLMRateLimited(info) {
     api.halLLMBusy = true;   // hold input until the notice finishes printing
-    halLLMState.turn = Math.max(0, halLLMState.turn - 1);
-    if (halLLMState.history.length && halLLMState.history[halLLMState.history.length - 1].role === 'user') {
-      halLLMState.history.pop();
-    }
     const when = info.retryAfter != null
       ? 'in ' + halFormatWait(info.retryAfter)
       : (info.scope === 'day' ? 'tomorrow' : 'in a minute');
