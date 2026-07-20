@@ -193,10 +193,15 @@ function verifyGamePerf() {
 
 // ── 3. The other lazy chunks keep their entry globals + handler contracts ─────
 function verifyLazyChunks() {
-  const stubApi = new Proxy(
-    {},
-    { get: () => () => {}, set: () => true } // every bridge key: callable no-op / writable
-  );
+  // Recursive callable stub: any bridge key resolves to a value that is itself
+  // callable AND has any property (so init-time code like
+  // `api.cmd.addEventListener(...)` in halllm.js works, not just `api.fn()`).
+  const anyStub = new Proxy(function () {}, {
+    get: (t, p) => (p === Symbol.toPrimitive ? () => '' : anyStub),
+    apply: () => anyStub,
+    set: () => true,
+  });
+  const stubApi = anyStub;
   for (const [file, entry, keys] of [
     ['games.js', 'initGames', ['racecar', 'snake', 'pong', '2048']],
     ['sans.js', 'initSansMode', ['activate', 'command', 'battleCommand']],
@@ -204,6 +209,7 @@ function verifyLazyChunks() {
     ['halllm.js', 'initHalLLM', ['showInfoPage', 'handleInput']],
     ['desktop.js', 'initDesktop', ['open']],
     ['achui.js', 'initAchUI', ['toggle']],
+    ['room.js', 'initRoom', ['open']],
   ]) {
     const { dom, window } = makeDom('<!doctype html><html><body></body></html>');
     inject(window, read(path.join(DIST, file)));

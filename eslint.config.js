@@ -93,6 +93,7 @@ module.exports = [
       'halllm.js',
       'desktop.js',
       'achui.js',
+      'room.js',
     ],
     languageOptions: {
       ecmaVersion: 2022,

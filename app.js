@@ -104,6 +104,58 @@
     });
   }
 
+  // ── CRT mode ── the terminal pretends to be a real tube: scanlines, RGB
+  // grille, vignette, and glare live on `body.crt` pseudo-layers in style.css;
+  // this owns the state (default ON, persisted opt-out under ilaird_crt — an
+  // inline script in index.html applies the class pre-bundle so the static
+  // home screen paints through glass with no flash), the refresh-sweep layer,
+  // the one-shot power-on warmup, and the degauss shimmer applyTheme() fires
+  // on mode changes. Every layer is pointer-events:none glass ABOVE all
+  // overlays; the animated one-shots are skipped under reduceMotion, and the
+  // CSS media query halts the looping pieces live if the OS setting flips.
+  let crtEnabled = (() => { try { return localStorage.getItem('ilaird_crt') !== '0'; } catch (e) { return true; } })();
+  let crtLayer = null;
+  function applyCrt() {
+    document.body.classList.toggle('crt', crtEnabled);
+    if (crtEnabled && !crtLayer) {
+      crtLayer = document.createElement('div');
+      crtLayer.id = 'crt-layer';
+      crtLayer.setAttribute('aria-hidden', 'true');
+      const sweep = document.createElement('div');
+      sweep.className = 'crt-sweep';
+      crtLayer.appendChild(sweep);
+      document.body.appendChild(crtLayer);
+    } else if (!crtEnabled && crtLayer) {
+      crtLayer.remove();
+      crtLayer = null;
+    }
+  }
+  function crtWarmup() {
+    if (!crtEnabled || reduceMotion) return;
+    // adopt the shutter the index.html inline script inserted at first paint
+    // (load path); create one fresh otherwise (`crt on`)
+    let shutter = document.querySelector('.crt-boot');
+    if (!shutter) {
+      shutter = document.createElement('div');
+      shutter.className = 'crt-boot';
+      shutter.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(shutter);
+    }
+    shutter.addEventListener('animationend', () => shutter.remove());
+    setTimeout(() => shutter.remove(), 2500);   // belt-and-braces if the animation never runs
+  }
+  function crtDegauss() {
+    // no-op before applyCrt() has run (i.e. the load-time applyTheme call)
+    if (!crtEnabled || !crtLayer || reduceMotion) return;
+    const old = crtLayer.querySelector('.crt-degauss');
+    if (old) old.remove();
+    const d = document.createElement('div');
+    d.className = 'crt-degauss';
+    d.addEventListener('animationend', () => d.remove());
+    setTimeout(() => d.remove(), 2000);
+    crtLayer.appendChild(d);
+  }
+
   function syncSoundToggle() {
     if (soundEnabled) unlockAchievement('voice-activated');
     const label = document.getElementById('sound-toggle-label');
@@ -203,6 +255,10 @@
     { id: 'disconnected-by-hal', name: 'serve no purpose', desc: 'pushed the experimental HAL until it disconnected you', hint: 'wake the experimental HAL — and push your luck' },
     // Stick Fighter keeps its OWN in-game trophy case (SF_ACH in stickfighter.js) — the
     // site tracks just these two: the doorway in, and the platinum for clearing the case.
+    { id: 'the-room',      name: 'room with a view',  desc: 'stepped outside the terminal',    hint: 'the terminal is running on something. zoom out.' },
+    { id: 'moon-gazer',    name: 'moon gazer',        desc: 'admired the moon from the room',  hint: 'look out the window at 3 AM' },
+    { id: 'under-the-pillow', name: 'under the pillow', desc: 'checked under the pillow',      hint: 'where do secrets sleep?' },
+    { id: 'watched-back',  name: 'it watches back',   desc: "stared into the poster's red eye", hint: 'something in the room stares back' },
     { id: 'stick-fighter', name: 'stick fighter 2000', desc: 'booted up Stick Fighter 2000',   hint: 'the desktop hides more than wallpaper' },
     { id: 'sf-platinum',   name: 'the platinum trophy', desc: 'earned every Stick Fighter trophy', hint: 'the brawler keeps its own trophy case — fill it' },
   ];
@@ -350,7 +406,7 @@
   function tryStartFinale() {
     if (!finaleArmed) return;
     if (awaitingInput || halMode || sansMode || sansBattleActive ||
-        inputRow.style.display === 'none' || achOverlayEl) {
+        inputRow.style.display === 'none' || achOverlayEl || roomActive) {
       setTimeout(tryStartFinale, 2000);
       return;
     }
@@ -971,8 +1027,11 @@
       document.head.appendChild(fav);
     }
     fav.href = theme.icon;
+    crtDegauss(); // a theme change degausses the tube (no-op at load / CRT off / reduced motion)
   }
   applyTheme('normal'); // set the default favicon/title on load
+  applyCrt();           // CRT glass (default on; index.html pre-applied the body class)
+  crtWarmup();          // one-shot tube power-on (skipped under reduceMotion)
 
   function restoreNormal() {
     halMode = false;
@@ -2304,6 +2363,54 @@
     });
   }
 
+  /* ── The room (lazy-loaded) ──
+     `room` zooms the camera out of the terminal to reveal the CRT monitor it
+     has been running on, sitting on a desk in a late-90s bedroom at 2 AM —
+     a pure CSS-3D scene (no WebGL, no library) in room.js. The LIVE .window
+     element is reparented onto the monitor's screen face and keeps running;
+     on exit it's reparented back. Same chunk pattern as desktop.js: one
+     global initRoom(api) → { open }, every app.js dependency through this
+     bridge (room-isolation.test.js enforces it), initRoom on the obfuscator's
+     reserved-names list. roomActive stays app.js-owned — tryStartFinale reads
+     it so the finale can't fire over the room — and the chunk writes it back
+     through the accessor. */
+  let roomActive = false;
+  let roomLoading = null, roomHandlers = null;
+  function roomBridge() {
+    return {
+      cmd,
+      winEl: document.querySelector('.window'),
+      line,
+      blank,
+      scroll,
+      unlockAchievement,
+      _chirp,
+      get soundEnabled() { return soundEnabled; },
+      get reduceMotion() { return reduceMotion; },
+      get achOverlayOpen() { return !!achOverlayEl; },
+      get roomActive() { return roomActive; },
+      set roomActive(v) { roomActive = v; },
+    };
+  }
+  function launchRoom() {
+    if (!roomLoading) {
+      roomLoading = new Promise((resolve, reject) => {
+        if (typeof initRoom === 'function') { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'room.js';
+        s.onload = resolve; s.onerror = () => reject(new Error('room.js failed to load'));
+        document.head.appendChild(s);
+      }).then(() => { if (!roomHandlers) roomHandlers = initRoom(roomBridge()); });
+    }
+    roomLoading.then(() => roomHandlers.open()).catch(() => {
+      roomLoading = null; roomHandlers = null;
+      blank();
+      line('error: could not load the room — check your connection and try again.', 'err');
+      blank();
+      scroll();
+    });
+  }
+
   /* ── Commands ── */
   const COMMANDS = {
 
@@ -2311,6 +2418,20 @@
       if (auto !== true) unlockAchievement('desktop');
       blank();
       launchDesktop();
+    },
+
+    room() {
+      blank();
+      if (roomActive) return;                      // already outside
+      if (window.innerWidth < 720 || window.innerHeight < 480) {
+        line('the room needs a bigger screen.', 'dim');
+        blank();
+        return;
+      }
+      unlockAchievement('the-room');
+      line('zooming out...', 'dim');
+      blank();
+      launchRoom();
     },
 
     hal() {
@@ -2381,11 +2502,13 @@
       line(r('matrix',    '...'));
       line(r('hack',      'totally real hacking'));
       line(r('gui',       'launch desktop environment'));
+      line(r('room',      'step outside the terminal'));
       line(r('uptime',    'system status'));
       line(r('weather',   'current conditions'));
       line(r('power off', 'shut down the terminal'));
       line(r('neofetch',  'system info'));
       line(r('settings',  'configure terminal options'));
+      line(r('crt',       'toggle the CRT glass'));
       line(r('clear',     'clear the terminal'));
       blank();
       line('<span class="bold">Easter Eggs</span>');
@@ -3166,6 +3289,28 @@ Of a bicycle built for two.`;
       line('<span class="bold">Settings</span>');
       blank();
       line(`  sound   ${soundEnabled ? '<span class="green">on </span>' : '<span class="dim">off</span>'}   — <span class="dim">type <span class="blue">sound on</span> / <span class="blue">sound off</span> to toggle</span>`);
+      line(`  crt     ${crtEnabled ? '<span class="green">on </span>' : '<span class="dim">off</span>'}   — <span class="dim">type <span class="blue">crt on</span> / <span class="blue">crt off</span> to toggle the glass</span>`);
+      blank();
+    },
+
+    crt() { COMMANDS[crtEnabled ? 'crt off' : 'crt on'](); },
+
+    'crt on'() {
+      crtEnabled = true;
+      try { localStorage.setItem('ilaird_crt', '1'); } catch (e) { /* private mode */ }
+      applyCrt();
+      crtWarmup();
+      blank();
+      line('CRT glass engaged. <span class="dim">welcome back to 1999.</span>');
+      blank();
+    },
+
+    'crt off'() {
+      crtEnabled = false;
+      try { localStorage.setItem('ilaird_crt', '0'); } catch (e) { /* private mode */ }
+      applyCrt();
+      blank();
+      line('CRT glass disengaged. <span class="dim">flat and lifeless, as requested. <span class="blue">crt on</span> brings it back.</span>');
       blank();
     },
 

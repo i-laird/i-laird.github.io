@@ -72,6 +72,7 @@ const COMMON = {
     '^initHalLLM$',
     '^initDesktop$',
     '^initAchUI$',
+    '^initRoom$',
   ],
 };
 
@@ -173,6 +174,7 @@ function build() {
     'halllm.js',
     'desktop.js',
     'achui.js',
+    'room.js',
   ]) {
     fs.writeFileSync(
       path.join(DIST, chunk),

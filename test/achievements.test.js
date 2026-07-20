@@ -40,6 +40,7 @@ function referencedIds() {
     'halllm.js',
     'desktop.js',
     'achui.js',
+    'room.js',
     'index.html',
   ];
   const ids = [];

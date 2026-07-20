@@ -47,6 +47,17 @@
 </head>
 <body>
 
+<!-- CRT pre-paint: app.js is deferred, so without this the static home screen
+     would paint bare for a beat and then snap to CRT when the bundle lands.
+     Applies the body class AND inserts the tube power-on shutter (.crt-boot —
+     opaque black that parts to reveal the picture) so content is never visible
+     before the "tube" turns on. The shutter is pure CSS animation and parks
+     itself invisible (forwards → opacity 0), so it's harmless even if app.js
+     (which removes it after the animation) never loads. Skipped under
+     prefers-reduced-motion. Must mirror app.js's crtEnabled default: on unless
+     the visitor persisted `crt off` (ilaird_crt === '0'). -->
+<script>try { if (localStorage.getItem('ilaird_crt') !== '0') { document.body.classList.add('crt'); if (!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) document.body.insertAdjacentHTML('beforeend', '<div class="crt-boot" aria-hidden="true"></div>'); } } catch (e) { document.body.classList.add('crt'); }</script>
+
 <!-- Crawlable, non-visual content (the terminal UI is rendered by app.js). Hidden inline (clip, not display:none) so it stays indexable and screen-reader accessible regardless of stylesheet caching. -->
 <div class="sr-only" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">
   <!-- styles are inline (not just the .sr-only class) so a stale cached style.css can't reveal this block -->
