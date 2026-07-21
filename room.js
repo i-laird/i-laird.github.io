@@ -41,12 +41,12 @@ function initRoom(api) {
   const TURN_SPEED = 100; // deg per second (dt-scaled — rAF rate varies by display)
   const MOVE_SPEED = 520; // px per second
   // walkable area: inside the walls, outside the desk+monitor and the tower
-  const BOUNDS = { minX: -1350, maxX: 1350, minZ: -1380, maxZ: 1180 };
+  const BOUNDS = { minX: -1550, maxX: 1550, minZ: -230, maxZ: 2030 };
   const BLOCKS = [
     { minX: -950, maxX: 950, minZ: -520, maxZ: 470 },    // desk + monitor
     { minX: -1330, maxX: -880, minZ: -160, maxZ: 330 },  // tower
-    { minX: -1120, maxX: -440, minZ: 1090, maxZ: 1360 }, // dresser
-    { minX: 860, maxX: 1510, minZ: -1140, maxZ: 130 },   // bed
+    { minX: -1120, maxX: -440, minZ: 1940, maxZ: 2210 }, // dresser
+    { minX: 1060, maxX: 1710, minZ: -480, maxZ: 790 },   // bed
     { minX: 80, maxX: 400, minZ: 480, maxZ: 800 },       // chair
   ];
 
@@ -147,8 +147,8 @@ function initRoom(api) {
     if (creepStage >= 2 && now - lastTrack > 120) {
       lastTrack = now;
       // the poster's pupil drifts toward wherever you stand
-      const px = Math.max(34, Math.min(58, 46 + (cam.x - 640) * 0.008));
-      const py = Math.max(34, Math.min(50, 42 + (1644 + cam.z) * 0.004 - 6));
+      const px = Math.max(34, Math.min(58, 46 + (cam.x - 740) * 0.008));
+      const py = Math.max(34, Math.min(50, 42 + (474 + cam.z) * 0.004 - 4));
       eyeEl.style.setProperty('--ex', px.toFixed(1) + '%');
       eyeEl.style.setProperty('--ey', py.toFixed(1) + '%');
     }
@@ -193,7 +193,7 @@ function initRoom(api) {
       '<div class="rp rm-curtain rm-curtain-r"></div>' +
       '<div class="rp rm-curtain-rod"></div>' +
       '<div class="rp rm-ceil-light"></div>' +
-      '<div class="rp rm-cctv" data-tip="that was not there yesterday." data-bx="1290" data-by="-905" data-bz="-1560"><i></i></div>' +
+      '<div class="rp rm-cctv" data-tip="that was not there yesterday." data-bx="1490" data-by="-905" data-bz="-390"><i></i></div>' +
       '<div class="rp rm-beam"></div>' +
       '<div class="rp rm-motes"><i></i><i></i><i></i><i></i><i></i><i></i></div>' +
       // posters
@@ -206,7 +206,7 @@ function initRoom(api) {
       '<div class="rp rm-shelf"></div>' +
       '<div class="rp rm-books" data-tip="C++ in 21 days. currently on day 8,214.">' +
       '<i>C++</i><i></i><i>VIM</i><i></i><i>RTFM</i></div>' +
-      '<div class="rp rm-trophy" data-tip="the collection" data-bx="-1080" data-by="-228" data-bz="-1625">🏆</div>' +
+      '<div class="rp rm-trophy" data-tip="the collection" data-bx="-1080" data-by="-228" data-bz="-455">🏆</div>' +
       '<div class="rp rm-clock-top"></div>' +
       '<div class="rp rm-clock-side"></div>' +
       '<div class="rp rm-clock" data-tip="it is always late here"><span></span></div>' +
@@ -278,7 +278,7 @@ function initRoom(api) {
       '<div class="rp rm-dresser-side"></div>' +
       '<div class="rp rm-dresser-side-r"></div>' +
       '<div class="rp rm-dresser" data-tip="socks, mostly"></div>' +
-      '<div class="rp rm-phone" data-act="phone" data-tip="it is not connected to anything." data-bx="-780" data-by="482" data-bz="1230"></div>' +
+      '<div class="rp rm-phone" data-act="phone" data-tip="it is not connected to anything." data-bx="-780" data-by="482" data-bz="2080"></div>' +
       '<div class="rp rm-poster-chart" data-tip="you memorized it too">' +
       '<b>E</b><span>F P</span><span>T O Z</span><small>L P E D</small><small>P E C F D</small></div>' +
       '<div class="rp rm-cork" data-tip="the master plan">' +
