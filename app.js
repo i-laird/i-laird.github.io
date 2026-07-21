@@ -58,7 +58,7 @@
   // the hal-worker's POST {base}/voice (see ~/hal-worker README, "HAL on the
   // telephone"). Empty string hides every mention of it on the site. Display
   // format is used verbatim, e.g. '+1 (555) 900-9000'.
-  const HAL_PHONE = '';
+  const HAL_PHONE = '+1 (406) 660-5029';
   let halLLM = false, halLLMBusy = false;   // (the LLM session state lives in the halllm.js chunk)
   // sansBattleActive stays here (the dispatcher, finale idle-poll, and armFinale
   // read it); the battle internals (sansBattle handles, sansDeaths) live in the
