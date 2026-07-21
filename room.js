@@ -59,6 +59,7 @@ function initRoom(api) {
   let clockTimer = null, rafId = null;
   let bills = [], billYaw = null;
   let eyeEl = null, posterEl = null, phoneEl = null, callEl = null;
+  let doorEl = null, duckEl = null, stickyEl = null, bedEl = null, capEl = null;
   let creepStage = 0, ringing = false, answered = false, callTyper = null;
   let lastTrack = 0;
   const keys = new Set();
@@ -274,6 +275,7 @@ function initRoom(api) {
       '<i class="rm-pillow-pad" data-tip="lumpy."></i></div>' +
       // front wall (behind the player at start): door, dresser, posters
       '<div class="rp rm-door" data-tip="leads outside. hard pass."><i></i></div>' +
+      '<div class="rp rm-door-light"></div>' +
       '<div class="rp rm-dresser-top"></div>' +
       '<div class="rp rm-dresser-side"></div>' +
       '<div class="rp rm-dresser-side-r"></div>' +
@@ -294,6 +296,11 @@ function initRoom(api) {
     eyeEl = viewport.querySelector('.rm-hal-eye');
     posterEl = viewport.querySelector('.rm-poster-hal');
     phoneEl = viewport.querySelector('.rm-phone');
+    doorEl = viewport.querySelector('.rm-door');
+    duckEl = viewport.querySelector('.rm-duck');
+    stickyEl = viewport.querySelector('.rm-sticky');
+    bedEl = viewport.querySelector('.rm-bed-top');
+    capEl = viewport.querySelector('.rm-poster-cap');
 
     callEl = document.createElement('div');
     callEl.id = 'room-call';
@@ -311,16 +318,22 @@ function initRoom(api) {
 
   /* ── the longer you stay, the less alone you are ──
      Stages (seconds after the fly-out lands; override via
-     window.ROOM_CREEP_SCHEDULE for testing): 1) the poster's pulse quickens ·
-     2) the room dims, LEDs go red, the clock stutters to 9000, and the eye
-     and ceiling camera start tracking you · 3) HAL whispers (real
-     hal_chase_2 clip when sound is on) and prints into the LIVE terminal
-     from outside · 4) the phone on the dresser rings — answering it plays
+     window.ROOM_CREEP_SCHEDULE for testing): 1) the poster's pulse quickens
+     and the moon outside becomes a second eye · 2) the room dims, LEDs go
+     red (the duck's eye and gamepad buttons too), the clock stutters to
+     9000, and the eye and ceiling camera start tracking you · 3) HAL
+     whispers (real hal_chase_2 clip when sound is on) and prints into the
+     LIVE terminal from outside, light leaks under the door with someone
+     pacing past it, the sticky note now reads "behind you.", the poster's
+     caption becomes the CURRENT year (its eye also starts a 40s drift
+     closer), a lump crawls under the bed blanket, and several tooltips
+     turn hostile (caption + tips reset in open()) · 4) the phone on the
+     dresser rings — answering it plays
      the pregenerated hal_watching clip ("I've been watching you. I hope you
      don't mind.") via api.halSpeak, typed as a caption either way. Exit
      resets everything; each visit starts calm. */
   function creepSchedule() {
-    return window.ROOM_CREEP_SCHEDULE || [40000, 90000, 150000, 210000];
+    return window.ROOM_CREEP_SCHEDULE || [20000, 45000, 75000, 105000];
   }
   function armCreep() {
     const t = creepSchedule();
@@ -341,6 +354,11 @@ function initRoom(api) {
     if (n === 3) {
       api.halSpeak('I see you.');
       posterEl.dataset.tip = 'he is not pretending anymore.';
+      capEl.textContent = String(new Date().getFullYear()); // it is not a movie poster
+      doorEl.dataset.tip = 'it is not locked anymore.';
+      duckEl.dataset.tip = 'it saw everything. it says nothing.';
+      stickyEl.dataset.tip = 'that is not your handwriting.';
+      bedEl.dataset.tip = 'do not check under the blanket.';
       api.line('<span class="err">HAL:</span> I can see you standing there.');
       api.scroll();
     }
@@ -502,6 +520,11 @@ function initRoom(api) {
     phoneEl.classList.remove('rm-ringing');
     phoneEl.dataset.tip = 'it is not connected to anything.';
     posterEl.dataset.tip = "he's watching.";
+    capEl.textContent = '2001';
+    doorEl.dataset.tip = 'leads outside. hard pass.';
+    duckEl.dataset.tip = 'the finest debugger money can buy';
+    stickyEl.dataset.tip = 'TODO: touch grass';
+    bedEl.dataset.tip = 'still made. suspicious.';
     updateBills(); // face the start camera before first paint
 
     // black over everything BEFORE the swap; it fades out on the pull-back

@@ -533,6 +533,11 @@ pre.ascii {
 #room-viewport.creep-3 .rm-hal-eye {
   animation-duration: 1.3s;
   box-shadow: 0 0 110px 30px rgba(255, 30, 0, .6);
+  transform: scale(1.22);              /* closer than it was. */
+}
+#room-viewport.creep-3 .rm-poster-cap {
+  color: #d86a5a;
+  text-shadow: 0 0 12px rgba(255, 60, 30, .55);
 }
 #room-viewport.creep-2 .rm-tw-led,
 #room-viewport.creep-2 .rm-led {
@@ -540,6 +545,45 @@ pre.ascii {
   box-shadow: 0 0 12px 3px rgba(255, 60, 60, .75);
 }
 #room-viewport.creep-2 .rm-clock { color: #ff6060; }
+/* stage 1: the moon outside becomes a second eye, pulsing with the poster */
+#room-viewport.creep-1 .rm-moon {
+  background: radial-gradient(circle at 42% 38%, #fff3d0 0%, #ffb300 8%, #e00000 34%, #6a0000 68%, #200000 100%);
+  box-shadow: 0 0 70px 22px rgba(255, 30, 0, .45);
+  animation: rm-hal-pulse 2.4s ease-in-out infinite;
+}
+#room-viewport.creep-3 .rm-moon { animation-duration: 1.3s; }
+/* stage 2: the duck is watching too */
+#room-viewport.creep-2 .rm-duck::after { opacity: 1; }
+/* stage 2: the gamepad's buttons join the red LEDs */
+#room-viewport.creep-2 .rm-gamepad::after {
+  background: #ff3030;
+  box-shadow: 22px 10px 0 #ff3030, 0 0 10px 2px rgba(255, 40, 40, .75), 22px 10px 10px 2px rgba(255, 40, 40, .75);
+}
+/* stage 3: light under the door — and someone pacing past it */
+#room-viewport.creep-3 .rm-door-light {
+  opacity: 1;
+  animation: rm-doorwalk 9s linear infinite;
+}
+@keyframes rm-doorwalk {
+  0%, 54%, 70%, 100% { opacity: 1; }
+  58%, 61% { opacity: .12; }
+  64%, 67% { opacity: .35; }
+}
+/* stage 3: the sticky note has been rewritten */
+#room-viewport.creep-3 .rm-sticky::before { opacity: 1; }
+#room-viewport.creep-3 .rm-sticky::after { opacity: .15; }
+/* stage 3: something moves under the blanket */
+#room-viewport.creep-3 .rm-bed-top::after {
+  animation: rm-lump 13s ease-in-out infinite;
+}
+@keyframes rm-lump {
+  0%, 12% { transform: translateY(0); opacity: 0; }
+  22% { opacity: .75; }
+  46% { transform: translateY(-190px); }
+  55% { transform: translateY(-180px); }
+  78% { transform: translateY(-370px); opacity: .75; }
+  88%, 100% { transform: translateY(-380px); opacity: 0; }
+}
 #room-world {
   position: absolute; inset: 0;
   transform-style: preserve-3d;
@@ -563,6 +607,7 @@ pre.ascii {
    (id-qualified so it outranks the .rp auto rule above) */
 #room-viewport .rm-wallglow,
 #room-viewport .rm-deskglow,
+#room-viewport .rm-door-light,
 #room-viewport .rm-beam,
 #room-viewport .rm-motes,
 #room-viewport .rm-desk-shadow,
@@ -747,6 +792,7 @@ pre.ascii {
   background: radial-gradient(circle at var(--ex, 46%) var(--ey, 42%), #fff3d0 0%, #ffb300 7%, #e00000 30%, #6a0000 62%, #200000 100%);
   box-shadow: 0 0 70px 16px rgba(255, 30, 0, .35);
   animation: rm-hal-pulse 5s ease-in-out infinite;
+  transition: transform 40s linear;    /* the creep-3 grow is too slow to catch */
 }
 @keyframes rm-hal-pulse {
   0%, 100% { box-shadow: 0 0 70px 16px rgba(255, 30, 0, .30); }
@@ -757,6 +803,7 @@ pre.ascii {
   text-align: center;
   color: #b8b8c8; letter-spacing: 1.1em; text-indent: 1.1em;
   font-size: 30px;
+  transition: color 2.5s, text-shadow 2.5s;
 }
 .rm-poster-sf {
   width: 290px; height: 400px;
@@ -997,6 +1044,18 @@ pre.ascii {
   content: '';
   position: absolute; left: 12px; right: 12px; top: 20px; height: 44px;
   background: repeating-linear-gradient(180deg, transparent 0 8px, rgba(60, 50, 10, .55) 8px 10px);
+  transition: opacity 2s;
+}
+.rm-sticky::before {                          /* revealed by creep-3 */
+  content: 'behind\A you.';
+  white-space: pre;
+  position: absolute; left: 12px; top: 18px;
+  color: #b02020;
+  font-size: 17px; font-weight: bold; line-height: 1.4;
+  transform: rotate(-4deg);
+  opacity: 0;
+  transition: opacity 2s;
+  z-index: 1;
 }
 #room-screen {
   width: 900px; height: 640px;
@@ -1190,6 +1249,13 @@ pre.ascii {
   border: 12px solid #241708;
   box-shadow: 0 0 0 6px #0e0a05, 0 30px 60px rgba(0, 0, 0, .5);
 }
+.rm-door-light {                              /* under-door light leak, lit by creep-3 */
+  width: 536px; height: 12px;
+  transform: translate(-50%, -50%) translate3d(560px, 912px, 2192px) rotateY(180deg);
+  background: radial-gradient(ellipse 60% 100% at 50% 100%, rgba(255, 190, 90, .55), rgba(255, 190, 90, .12) 70%, transparent);
+  opacity: 0;
+  transition: opacity 2.5s;
+}
 .rm-door::before, .rm-door::after {
   content: '';
   position: absolute; left: 12%; right: 12%;
@@ -1367,6 +1433,15 @@ pre.ascii {
   font-size: 78px; line-height: 90px; text-align: center;
   filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .55)) drop-shadow(0 0 18px rgba(255, 220, 120, .18));
 }
+.rm-duck::after {                             /* red eye, lit by creep-2 */
+  content: '';
+  position: absolute; left: 25%; top: 10%;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #ffdd99 0%, #ff2020 55%, #7a0000 100%);
+  box-shadow: 0 0 10px 3px rgba(255, 40, 40, .8);
+  opacity: 0;
+  transition: opacity 1.5s;
+}
 .rm-stitch {
   width: 360px; height: 210px;
   transform: translate(-50%, -50%) translate3d(1694px, -430px, -200px) rotateY(-90deg);
@@ -1474,6 +1549,14 @@ pre.ascii {
   width: 950px; height: 1500px;
   transform: translate(-50%, -50%) translate3d(1370px, 918px, 150px) rotateX(90deg);
   background: radial-gradient(ellipse 50% 46% at 50% 50%, rgba(0, 0, 0, .55), transparent 75%);
+}
+.rm-bed-top::after {                          /* the lump (crawls at creep-3) */
+  content: '';
+  position: absolute; left: 50%; top: 70%;
+  width: 150px; height: 90px; margin-left: -75px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, .5), transparent 70%);
+  opacity: 0;
 }
 .rm-bed-top {
   width: 615px; height: 1180px;
@@ -1609,8 +1692,8 @@ body.room-view #egg-nudge { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   #room-world, #room-par { transition: none !important; }   /* cut, don't fly */
-  .rm-motes i, .rm-lava i, .rm-hal-eye, .rm-wallglow,
-  .rm-led, .rm-tw-led, .rm-mug::after,
+  .rm-motes i, .rm-lava i, .rm-hal-eye, .rm-moon, .rm-wallglow,
+  .rm-led, .rm-tw-led, .rm-mug::after, .rm-door-light, .rm-bed-top::after,
   .rm-cctv i, .rm-phone.rm-ringing, #room-call i {
     animation: none !important;
   }
