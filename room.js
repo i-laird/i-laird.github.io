@@ -58,8 +58,10 @@ function initRoom(api) {
   let moveHandler = null, clickHandler = null, downHandler = null, upHandler = null;
   let clockTimer = null, rafId = null;
   let bills = [], billYaw = null;
-  let eyeEl = null, posterEl = null, phoneEl = null, callEl = null;
+  let eyeEl = null, posterEl = null, callEl = null;
   let doorEl = null, duckEl = null, stickyEl = null, bedEl = null, capEl = null;
+  let doorSignEl = null, corkNotes = [], signState = 0;
+  let hallPhoneEl = null, hallOpen = false, hallWhispered = false;
   let creepStage = 0, ringing = false, answered = false, callTyper = null;
   let lastTrack = 0;
   const keys = new Set();
@@ -104,8 +106,16 @@ function initRoom(api) {
     cam.pitch = Math.max(-42, Math.min(34, cam.pitch - dy * LOOK_SENS * 0.8));
   }
 
+  // the hallway past the front-wall door (walkable once creep-4 opens it):
+  // door-width corridor from the doorway to just short of the phone stand
+  const HALL = { minX: 330, maxX: 790, maxZ: 5340 };
+
   function blocked(x, z) {
-    if (x < BOUNDS.minX || x > BOUNDS.maxX || z < BOUNDS.minZ || z > BOUNDS.maxZ) return true;
+    if (z > BOUNDS.maxZ) {
+      if (!hallOpen) return true;
+      return x < HALL.minX || x > HALL.maxX || z > HALL.maxZ;
+    }
+    if (x < BOUNDS.minX || x > BOUNDS.maxX || z < BOUNDS.minZ) return true;
     for (const b of BLOCKS) {
       if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return true;
     }
@@ -145,6 +155,19 @@ function initRoom(api) {
     const t = camTransform();
     if (t !== lastT) { lastT = t; world.style.transform = t; }
     updateBills();
+    if (signState) {
+      // fz = how much the camera faces the front wall (+z, where the sign is)
+      const fz = -Math.cos((cam.yaw * Math.PI) / 180);
+      if (signState === 1 && fz > 0.5) signState = 2;          // they read it
+      else if (signState === 2 && fz < -0.3) {                 // they obeyed —
+        signState = 0;                                         // swap unseen
+        doorSignEl.innerHTML = 'HE IS<br>WAITING';
+      }
+    }
+    if (hallOpen && !hallWhispered && cam.z > 4600) {
+      hallWhispered = true; // once per visit, deep in the corridor
+      api.halSpeak('I see you.');
+    }
     if (creepStage >= 2 && now - lastTrack > 120) {
       lastTrack = now;
       // the poster's pupil drifts toward wherever you stand
@@ -280,11 +303,31 @@ function initRoom(api) {
       '<div class="rp rm-dresser-side"></div>' +
       '<div class="rp rm-dresser-side-r"></div>' +
       '<div class="rp rm-dresser" data-tip="socks, mostly"></div>' +
-      '<div class="rp rm-phone" data-act="phone" data-tip="it is not connected to anything." data-bx="-780" data-by="482" data-bz="2080"></div>' +
       '<div class="rp rm-poster-chart" data-tip="you memorized it too">' +
       '<b>E</b><span>F P</span><span>T O Z</span><small>L P E D</small><small>P E C F D</small></div>' +
       '<div class="rp rm-cork" data-tip="the master plan">' +
       '<i>ship it</i><i>buy more RAM</i><i>call mom</i><i>P=NP?</i></div>' +
+      // the hallway past the door (hidden behind it until creep-4 swings it open)
+      '<div class="rp rm-hall-floor"></div>' +
+      '<div class="rp rm-hall-ceil"></div>' +
+      '<div class="rp rm-hall-left"></div>' +
+      '<div class="rp rm-hall-right"></div>' +
+      '<div class="rp rm-hall-left2"></div>' +
+      '<div class="rp rm-hall-right2"></div>' +
+      '<div class="rp rm-hall-end"></div>' +
+      '<div class="rp rm-hall-eye rm-hall-eye1"></div>' +
+      '<div class="rp rm-hall-eye rm-hall-eye2"></div>' +
+      '<div class="rp rm-hall-eye rm-hall-eye3"></div>' +
+      '<div class="rp rm-hall-eye rm-hall-eye4"></div>' +
+      '<div class="rp rm-hall-poem rm-hall-poem1">there&#39;s no earthly way of knowing</div>' +
+      '<div class="rp rm-hall-poem rm-hall-poem2">which direction we are going</div>' +
+      '<div class="rp rm-hall-poem rm-hall-poem3">not a speck of light is showing</div>' +
+      '<div class="rp rm-hall-poem rm-hall-poem4">so the danger must be growing</div>' +
+      '<div class="rp rm-hall-glow"></div>' +
+      '<div class="rp rm-hall-halo"></div>' +
+      '<div class="rp rm-hall-stand" data-tip="it was always here."></div>' +
+      '<div class="rp rm-hall-stand-top"></div>' +
+      '<div class="rp rm-phone rm-hall-phone" data-act="phone" data-tip="it is ringing." data-bx="560" data-by="-160" data-bz="5585"></div>' +
       '</div></div>';
 
     world = viewport.querySelector('#room-world');
@@ -295,12 +338,14 @@ function initRoom(api) {
     clockEl = viewport.querySelector('.rm-clock span');
     eyeEl = viewport.querySelector('.rm-hal-eye');
     posterEl = viewport.querySelector('.rm-poster-hal');
-    phoneEl = viewport.querySelector('.rm-phone');
+    doorSignEl = viewport.querySelector('.rm-door-sign');
+    corkNotes = Array.from(viewport.querySelectorAll('.rm-cork i'));
     doorEl = viewport.querySelector('.rm-door');
     duckEl = viewport.querySelector('.rm-duck');
     stickyEl = viewport.querySelector('.rm-sticky');
     bedEl = viewport.querySelector('.rm-bed-top');
     capEl = viewport.querySelector('.rm-poster-cap');
+    hallPhoneEl = viewport.querySelector('.rm-hall-phone');
 
     callEl = document.createElement('div');
     callEl.id = 'room-call';
@@ -326,12 +371,21 @@ function initRoom(api) {
      LIVE terminal from outside, light leaks under the door with someone
      pacing past it, the sticky note now reads "behind you.", the poster's
      caption becomes the CURRENT year (its eye also starts a 40s drift
-     closer), a lump crawls under the bed blanket, and several tooltips
-     turn hostile (caption + tips reset in open()) · 4) the phone on the
-     dresser rings — answering it plays
+     closer), a lump crawls under the bed blanket, several tooltips turn
+     hostile, the door sign demands TURN AROUND (and swaps to HE IS WAITING
+     the moment you comply — yaw-watched in step()), and the four corkboard
+     notes revise themselves one by one (all reset in open()) · 4) the
+     front-wall door swings open (creep-4 hinges it; the doorway is a
+     clip-path notch in .rm-front) onto a Wonka-tunnel hallway — 3600 units
+     in two wall segments, the far half darker and faster-cycling, four
+     apparition eyes, both boat-ride couplets, a once-per-visit whisper
+     past z 4600 — with a phone ringing on an eye-level stand at the far
+     end (hallOpen extends blocked() down the corridor; the ring grows
+     louder with cam.z). Answering it plays the answering-machine message:
      the pregenerated hal_watching clip ("I've been watching you. I hope you
-     don't mind.") via api.halSpeak, typed as a caption either way. Exit
-     resets everything; each visit starts calm. */
+     don't mind.") via api.halSpeak, typed as a caption either way, ending
+     with a call-back number when api.halPhone is set. Exit resets
+     everything; each visit starts calm. */
   function creepSchedule() {
     return window.ROOM_CREEP_SCHEDULE || [20000, 45000, 75000, 105000];
   }
@@ -361,8 +415,27 @@ function initRoom(api) {
       bedEl.dataset.tip = 'do not check under the blanket.';
       api.line('<span class="err">HAL:</span> I can see you standing there.');
       api.scroll();
+      // the door sign wants something from you; step() watches for compliance
+      doorSignEl.innerHTML = 'TURN<br>AROUND';
+      signState = 1;
+      // the corkboard revises the master plan, one note at a time
+      const turned = ['let me out', 'buy more time', 'call no one', '2001=' + new Date().getFullYear()];
+      turned.forEach((txt, idx) => {
+        later(() => {
+          if (!active || exiting) return;
+          corkNotes[idx].textContent = txt;
+          corkNotes[idx].classList.add('rm-note-turned');
+        }, 5000 + idx * 7000);
+      });
     }
-    if (n === 4 && !answered) startRinging();
+    if (n === 4) {
+      hallOpen = true; // creep-4 class swings the door; blocked() lets you through
+      doorEl.dataset.tip = 'it opened for you.';
+      api._chirp(64, 'sine', 0.9, 0.06); // the hinge groans
+      api.line('<span class="dim">somewhere past the door, a phone begins to ring.</span>');
+      api.scroll();
+      if (!answered) startRinging();
+    }
   }
   function thump() {
     if (!active || exiting || creepStage < 2) return;
@@ -371,24 +444,26 @@ function initRoom(api) {
   }
   function startRinging() {
     ringing = true;
-    phoneEl.classList.add('rm-ringing');
-    phoneEl.dataset.tip = "it's for you.";
+    hallPhoneEl.classList.add('rm-ringing');
+    hallPhoneEl.dataset.tip = "it's for you.";
     ringBurst();
   }
   function ringBurst() {
     if (!ringing || !active || exiting) return;
+    // louder the deeper you are into the hallway (cam.z 1100 → 5340)
+    const t = Math.max(0, Math.min(1, (cam.z - 1100) / 4240));
+    const vol = 0.025 + t * 0.055;
     for (let i = 0; i < 4; i++) {
-      later(() => { if (ringing) api._chirp(1180, 'square', 0.07, 0.045); }, i * 140);
+      later(() => { if (ringing) api._chirp(1180, 'square', 0.07, vol); }, i * 140);
     }
     later(ringBurst, 2600);
   }
   function answerPhone() {
     ringing = false;
     answered = true;
-    phoneEl.classList.remove('rm-ringing');
-    phoneEl.dataset.tip = api.halPhone
-      ? 'missed call \u00b7 ' + api.halPhone
-      : 'it will not ring again.';
+    hallPhoneEl.classList.remove('rm-ringing');
+    hallPhoneEl.dataset.tip = 'no new messages.';
+    api._chirp(880, 'sine', 0.14, 0.05); // answering-machine beep
     const text = api.halD("I've been watching you, Dave. I hope you don't mind.");
     api.halSpeak(text); // pregenerated hal_watching clip when sound is on
     callEl.innerHTML = '<i></i><span></span>';
@@ -401,15 +476,15 @@ function initRoom(api) {
       if (i >= text.length) {
         clearInterval(callTyper);
         callTyper = null;
-        later(() => { out.innerHTML += '<em>&nbsp;&nbsp;— click.</em>'; }, 1800);
-        // if HAL has a real number (Twilio → hal-worker /voice), leave a
-        // caller id — dial it and he actually picks up
+        later(() => { out.innerHTML += '<em>&nbsp;&nbsp;— end of messages.</em>'; }, 1800);
+        // if HAL has a real number (Twilio → hal-worker /voice), the machine
+        // leaves a call-back number — dial it and he actually picks up
         if (api.halPhone) {
           later(() => {
-            out.innerHTML += '<br><em>caller id: ' + api.halPhone + '</em>';
+            out.innerHTML += '<br><em>call HAL back: ' + api.halPhone + '</em>';
           }, 2800);
         }
-        later(() => { if (callEl) callEl.classList.remove('show'); }, api.halPhone ? 6800 : 4200);
+        later(() => { if (callEl) callEl.classList.remove('show'); }, api.halPhone ? 7800 : 4200);
       }
     }, 42);
   }
@@ -516,9 +591,18 @@ function initRoom(api) {
     creepStage = 0;
     ringing = false;
     answered = false;
+    hallOpen = false;
+    hallWhispered = false;
+    signState = 0;
     viewport.classList.remove('creep-1', 'creep-2', 'creep-3', 'creep-4');
-    phoneEl.classList.remove('rm-ringing');
-    phoneEl.dataset.tip = 'it is not connected to anything.';
+    hallPhoneEl.classList.remove('rm-ringing');
+    hallPhoneEl.dataset.tip = 'it is ringing.';
+    doorSignEl.innerHTML = 'GONE<br>COMPILING';
+    const plans = ['ship it', 'buy more RAM', 'call mom', 'P=NP?'];
+    corkNotes.forEach((el, idx) => {
+      el.textContent = plans[idx];
+      el.classList.remove('rm-note-turned');
+    });
     posterEl.dataset.tip = "he's watching.";
     capEl.textContent = '2001';
     doorEl.dataset.tip = 'leads outside. hard pass.';

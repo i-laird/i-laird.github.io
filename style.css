@@ -576,6 +576,44 @@ pre.ascii {
 #room-viewport.creep-3 .rm-bed-top::after {
   animation: rm-lump 13s ease-in-out infinite;
 }
+/* stage 4: the door opens onto the hallway; the tunnel wakes up */
+#room-viewport.creep-4 .rm-door {
+  transform: translate(-50%, -50%) translate3d(560px, 300px, 2194px) rotateY(180deg) translateX(-292px) rotateY(108deg) translateX(292px);
+}
+#room-viewport.creep-4 .rm-door-light { opacity: 0; animation: none; }
+#room-viewport.creep-4::after {
+  box-shadow: inset 0 0 320px rgba(0, 0, 0, .82), inset 0 0 460px rgba(140, 0, 0, .45);
+}
+#room-viewport.creep-4 .rm-hall-left,
+#room-viewport.creep-4 .rm-hall-right,
+#room-viewport.creep-4 .rm-hall-ceil,
+#room-viewport.creep-4 .rm-hall-end {
+  animation: rm-hall-hue 9s linear infinite;
+}
+#room-viewport.creep-4 .rm-hall-left2,
+#room-viewport.creep-4 .rm-hall-right2 {
+  animation: rm-hall-hue 5s linear infinite;  /* the far half cycles faster */
+}
+@keyframes rm-hall-hue {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(360deg); }
+}
+#room-viewport.creep-4 .rm-hall-eye { animation: rm-hall-eyes 6.5s ease-in-out infinite; }
+#room-viewport.creep-4 .rm-hall-eye2 { animation-delay: -3.2s; }
+#room-viewport.creep-4 .rm-hall-eye3 { animation-delay: -1.4s; animation-duration: 5.5s; }
+#room-viewport.creep-4 .rm-hall-eye4 { animation-delay: -4.6s; animation-duration: 4.8s; }
+@keyframes rm-hall-eyes {
+  0%, 100% { opacity: 0; }
+  42%, 58% { opacity: .6; }
+}
+#room-viewport.creep-4 .rm-hall-poem { animation: rm-hall-verse 11s ease-in-out infinite; }
+#room-viewport.creep-4 .rm-hall-poem2 { animation-delay: -5.5s; }
+#room-viewport.creep-4 .rm-hall-poem3 { animation-delay: -2.5s; }
+#room-viewport.creep-4 .rm-hall-poem4 { animation-delay: -8s; }
+@keyframes rm-hall-verse {
+  0%, 100% { opacity: .12; }
+  50%      { opacity: .5; }
+}
 @keyframes rm-lump {
   0%, 12% { transform: translateY(0); opacity: 0; }
   22% { opacity: .75; }
@@ -608,6 +646,8 @@ pre.ascii {
 #room-viewport .rm-wallglow,
 #room-viewport .rm-deskglow,
 #room-viewport .rm-door-light,
+#room-viewport .rm-hall-halo,
+#room-viewport .rm-hall-glow,
 #room-viewport .rm-beam,
 #room-viewport .rm-motes,
 #room-viewport .rm-desk-shadow,
@@ -648,6 +688,9 @@ pre.ascii {
 .rm-front {
   width: 3400px; height: 2000px;
   transform: translate(-50%, -50%) translate3d(0, -80px, 2200px) rotateY(180deg);
+  /* doorway notch (world x 290..830, floor to y -320) — the closed door
+     covers it; creep-4 swings the door open onto the hallway */
+  clip-path: polygon(0 0, 3400px 0, 3400px 2000px, 1410px 2000px, 1410px 760px, 870px 760px, 870px 2000px, 0 2000px);
   background:
     linear-gradient(0deg, rgba(205, 215, 240, .12) 0 58px, rgba(140, 150, 190, .10) 58px 66px, transparent 66px),
     radial-gradient(ellipse 60% 55% at 70% 90%, rgba(0, 0, 0, .45), transparent 70%),
@@ -1244,7 +1287,10 @@ pre.ascii {
 /* ── front wall: door, dresser, eye chart · right wall: corkboard ── */
 .rm-door {
   width: 560px; height: 1240px;
-  transform: translate(-50%, -50%) translate3d(560px, 300px, 2194px) rotateY(180deg);
+  /* trailing translateX/rotateY/translateX = hinge at the door's edge; the
+     creep-4 rule only changes the middle rotateY so the transition swings */
+  transform: translate(-50%, -50%) translate3d(560px, 300px, 2194px) rotateY(180deg) translateX(-292px) rotateY(0deg) translateX(292px);
+  transition: transform 3.4s cubic-bezier(.32, .8, .25, 1);
   background: linear-gradient(90deg, #3a2c1c 0%, #4a3826 45%, #2c2013 100%);
   border: 12px solid #241708;
   box-shadow: 0 0 0 6px #0e0a05, 0 30px 60px rgba(0, 0, 0, .5);
@@ -1255,6 +1301,98 @@ pre.ascii {
   background: radial-gradient(ellipse 60% 100% at 50% 100%, rgba(255, 190, 90, .55), rgba(255, 190, 90, .12) 70%, transparent);
   opacity: 0;
   transition: opacity 2.5s;
+}
+/* ── the hallway (behind the front-wall doorway; walkable at creep-4) —
+   a wrong-colored corridor, equal parts hotel and tunnel scene. The color
+   cycling is a compositor-cheap hue-rotate (same trick as the godmode
+   rainbow), animated only while creep-4 is set. ── */
+.rm-hall-floor {
+  width: 540px; height: 3600px;
+  transform: translate(-50%, -50%) translate3d(560px, 919.5px, 4000px) rotateX(90deg);
+  background:
+    linear-gradient(0deg, rgba(120, 0, 25, .4) 0 26%, transparent 55%),
+    repeating-linear-gradient(180deg, rgba(0, 0, 0, .2) 0 6px, transparent 6px 210px),
+    linear-gradient(90deg, #14041e 0 55px, #471030 55px 485px, #14041e 485px 540px);
+}
+.rm-hall-ceil {
+  width: 540px; height: 3600px;
+  transform: translate(-50%, -50%) translate3d(560px, -320.5px, 4000px) rotateX(90deg);
+  background: linear-gradient(90deg, #0c0214 0%, #241040 50%, #0c0214 100%);
+}
+.rm-hall-left, .rm-hall-right {
+  width: 1800px; height: 1240px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 0, 130, .2) 0 70px, rgba(0, 160, 255, .17) 70px 140px, rgba(255, 170, 0, .17) 140px 210px, rgba(120, 0, 255, .2) 210px 280px),
+    linear-gradient(180deg, #2b0a3e 0%, #471255 45%, #1a0526 100%);
+}
+.rm-hall-left  { transform: translate(-50%, -50%) translate3d(290px, 300px, 3100px) rotateY(90deg); }
+.rm-hall-right { transform: translate(-50%, -50%) translate3d(830px, 300px, 3100px) rotateY(-90deg); }
+.rm-hall-left2, .rm-hall-right2 {                 /* the far half — worse */
+  width: 1800px; height: 1240px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 0, 90, .26) 0 54px, rgba(0, 120, 255, .2) 54px 108px, rgba(255, 120, 0, .22) 108px 162px, rgba(160, 0, 255, .26) 162px 216px),
+    linear-gradient(180deg, #1c0530 0%, #360a44 45%, #0d0118 100%);
+}
+.rm-hall-left2  { transform: translate(-50%, -50%) translate3d(290px, 300px, 4900px) rotateY(90deg); }
+.rm-hall-right2 { transform: translate(-50%, -50%) translate3d(830px, 300px, 4900px) rotateY(-90deg); }
+.rm-hall-end {
+  width: 540px; height: 1240px;
+  transform: translate(-50%, -50%) translate3d(560px, 300px, 5794px) rotateY(180deg);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255, 179, 0, .14) 0%, rgba(224, 0, 0, .2) 11%, rgba(106, 0, 0, .22) 28%, transparent 52%),
+    radial-gradient(ellipse 70% 50% at 50% 48%, rgba(255, 60, 30, .4), transparent 72%),
+    linear-gradient(180deg, #1c0430 0%, #3a0a4c 55%, #10021c 100%);
+}
+.rm-hall-eye {
+  width: 110px; height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 46% 42%, #fff3d0 0%, #ffb300 7%, #e00000 30%, #6a0000 62%, transparent 74%);
+  opacity: 0;
+}
+.rm-hall-eye1 { transform: translate(-50%, -50%) translate3d(293px, 60px, 3000px) rotateY(90deg); }
+.rm-hall-eye2 { transform: translate(-50%, -50%) translate3d(827px, -60px, 3640px) rotateY(-90deg); }
+.rm-hall-eye3 { width: 150px; height: 150px; transform: translate(-50%, -50%) translate3d(293px, -20px, 4380px) rotateY(90deg); }
+.rm-hall-eye4 { width: 180px; height: 180px; transform: translate(-50%, -50%) translate3d(827px, 30px, 5120px) rotateY(-90deg); }
+.rm-hall-poem {
+  width: 980px; height: 130px;
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255, 214, 240, .3);
+  font-size: 36px; letter-spacing: .22em;
+  text-shadow: 0 0 18px rgba(255, 60, 160, .5);
+  white-space: nowrap;
+}
+.rm-hall-poem1 { transform: translate(-50%, -50%) translate3d(826px, -160px, 2960px) rotateY(-90deg); }
+.rm-hall-poem2 { transform: translate(-50%, -50%) translate3d(294px, -160px, 3560px) rotateY(90deg); }
+.rm-hall-poem3, .rm-hall-poem4 {
+  color: rgba(255, 150, 150, .38);
+  text-shadow: 0 0 20px rgba(255, 40, 40, .6);
+}
+.rm-hall-poem3 { transform: translate(-50%, -50%) translate3d(826px, -160px, 4260px) rotateY(-90deg); }
+.rm-hall-poem4 { transform: translate(-50%, -50%) translate3d(294px, -160px, 4960px) rotateY(90deg); }
+.rm-hall-glow {
+  pointer-events: none;
+  width: 420px; height: 340px;
+  transform: translate(-50%, -50%) translate3d(560px, 918.8px, 5540px) rotateX(90deg);
+  background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(255, 60, 60, .5), transparent 70%);
+}
+.rm-hall-stand {
+  width: 180px; height: 1020px;
+  transform: translate(-50%, -50%) translate3d(560px, 410px, 5516px);
+  background: linear-gradient(180deg, #3a2415 0%, #1a0e06 100%);
+  border-radius: 4px 4px 0 0;
+}
+.rm-hall-stand-top {
+  width: 200px; height: 150px;
+  transform: translate(-50%, -50%) translate3d(560px, -102px, 5590px) rotateX(90deg);
+  background: linear-gradient(180deg, #4a3018 0%, #2a180a 100%);
+  border-radius: 4px;
+}
+.rm-hall-halo {                               /* the beacon behind the phone —
+                                                 deliberately NOT hue-animated */
+  width: 460px; height: 460px;
+  transform: translate(-50%, -50%) translate3d(560px, -140px, 5792px) rotateY(180deg);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 190, 130, .55) 0%, rgba(255, 90, 50, .3) 42%, transparent 70%);
 }
 .rm-door::before, .rm-door::after {
   content: '';
@@ -1341,6 +1479,7 @@ pre.ascii {
   border-radius: 50%;
   background: radial-gradient(circle at 40% 35%, #ff8080 0%, #b02020 70%);
 }
+.rm-cork i.rm-note-turned { color: #8a1212; }
 .rm-cork i:nth-child(1) { left: 8%;  top: 10%; background: #b8e6b0; transform: rotate(-4deg); }
 .rm-cork i:nth-child(2) { left: 48%; top: 16%; background: #f5e07a; transform: rotate(3deg); }
 .rm-cork i:nth-child(3) { left: 14%; top: 52%; background: #f0b8c8; transform: rotate(2deg); }
@@ -1457,7 +1596,7 @@ pre.ascii {
 }
 .rm-door-sign {
   width: 210px; height: 130px;
-  transform: translate(-50%, -50%) translate3d(560px, -60px, 2190px) rotateY(180deg) rotate(-3deg);
+  transform: translate(-50%, -50%) translate3d(560px, -250px, 2190px) rotateY(180deg) rotate(-3deg);
   background: linear-gradient(180deg, #e8dfc8 0%, #cfc4a4 100%);
   border: 4px solid #8a765a;
   border-radius: 8px;
@@ -1694,9 +1833,12 @@ body.room-view #egg-nudge { display: none; }
   #room-world, #room-par { transition: none !important; }   /* cut, don't fly */
   .rm-motes i, .rm-lava i, .rm-hal-eye, .rm-moon, .rm-wallglow,
   .rm-led, .rm-tw-led, .rm-mug::after, .rm-door-light, .rm-bed-top::after,
+  .rm-hall-left, .rm-hall-right, .rm-hall-left2, .rm-hall-right2,
+  .rm-hall-ceil, .rm-hall-end, .rm-hall-eye, .rm-hall-poem,
   .rm-cctv i, .rm-phone.rm-ringing, #room-call i {
     animation: none !important;
   }
+  .rm-door { transition: none !important; }                 /* door cuts open */
   #room-viewport::after { transition: none !important; }
 }
 
