@@ -2391,6 +2391,11 @@
       halSpeak,
       halD,
       halPhone: HAL_PHONE,
+      // the hallway phone's live line (see room.js): the worker base for
+      // /room-call//room-turn//room-dial and the Turnstile site key for the
+      // bot gate. Empty worker URL = the phone falls back to the answering machine.
+      halWorkerUrl: HAL_WORKER_URL,
+      turnstileKey: TURNSTILE_SITE_KEY,
       get soundEnabled() { return soundEnabled; },
       get reduceMotion() { return reduceMotion; },
       get achOverlayOpen() { return !!achOverlayEl; },
@@ -2515,6 +2520,7 @@
       line(r('neofetch',  'system info'));
       line(r('settings',  'configure terminal options'));
       line(r('crt',       'toggle the CRT glass'));
+      line(r('privacy',   'what this site does with your data'));
       line(r('clear',     'clear the terminal'));
       blank();
       line('<span class="bold">Easter Eggs</span>');
@@ -2885,6 +2891,46 @@
       steps.forEach(([delay, fn]) => setTimeout(fn, delay));
     },
 
+
+    /* Plain-English privacy notice (GDPR Art. 13-style transparency for the
+       HAL LLM + hallway-phone features; linked from the LLM CONFIRM gate and
+       the room call UI). Keep in sync with what the hal-worker actually
+       stores — see ~/hal-worker README. */
+    privacy() {
+      blank();
+      line('<span class="bold">Privacy — the short, honest version</span>');
+      blank();
+      line('This site has no cookies, no analytics, and no trackers.', 'white');
+      line('Your achievements and settings live only in your own browser', 'white');
+      line('(localStorage). There are no accounts and no profiles.', 'white');
+      blank();
+      line('<span class="bold">Talking to HAL</span> (the LLM mode, or the room’s hallway phone)');
+      line('  · your typed lines go to a small backend (AWS) that forwards them to', 'dim');
+      line('    Anthropic’s Claude to write HAL’s replies; optional voice is', 'dim');
+      line('    synthesized by ElevenLabs; Cloudflare Turnstile is the bot check.', 'dim');
+      line('  · the conversation is held server-side for at most ~30 minutes and', 'dim');
+      line('    is deleted when the session ends. nothing you type is kept.', 'dim');
+      line('  · abuse/rate counters key a salted one-way hash of your IP address', 'dim');
+      line('    (never the address itself) and expire within hours to days.', 'dim');
+      blank();
+      line('<span class="bold">The phone call</span>');
+      line('  · HAL only calls telephones that have been verified as yours: he', 'dim');
+      line('    texts a code via Twilio, and typing it back proves you hold the', 'dim');
+      line('    phone. verified status and call limits are stored only as salted', 'dim');
+      line('    hashes for at most 48h; the number itself is never stored. US', 'dim');
+      line('    numbers only, strict daily caps, and the call starts with a', 'dim');
+      line('    neutral prompt: nothing plays unless you press 1. Twilio', 'dim');
+      line('    processes call and SMS metadata under its own policy.', 'dim');
+      line('  · if you call HAL’s number, Twilio transcribes your speech so Claude', 'dim');
+      line('    can answer; the call’s memory lives ~30 minutes, then it’s gone.', 'dim');
+      line('  · reply STOP to any text from HAL and he will never text or call', 'dim');
+      line('    that number again (START lifts it). the block is permanent and', 'dim');
+      line('    stored only as a salted hash.', 'dim');
+      blank();
+      line('Questions or removal requests: <a href="mailto:career@ilaird.com">career@ilaird.com</a>', 'white');
+      blank();
+      scroll();
+    },
 
     uptime() {
       blank();

@@ -1565,6 +1565,72 @@ pre.ascii {
   animation: rm-cctv-blink 1.4s steps(1, end) infinite;
 }
 #room-call em { color: #7a4444; font-style: normal; }
+/* the live call (hal-worker line up): column layout + a typed input row.
+   pointer-events back ON — the rare interactive Turnstile challenge renders
+   inside this box and must be clickable. */
+#room-call.rm-live {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: min(560px, 88vw);
+  pointer-events: auto;
+}
+#room-call.rm-live .rm-call-row { display: flex; align-items: center; gap: 14px; }
+#room-call.rm-live .rm-call-cap { min-height: 25px; }
+#room-call .rm-call-in {
+  display: flex; align-items: center; gap: 8px;
+  color: #ffb0b0;
+  border-top: 1px solid rgba(255, 48, 48, .25);
+  padding-top: 10px;
+  min-height: 22px;
+}
+#room-call .rm-call-in b { color: #7a4444; font-weight: normal; flex-shrink: 0; }
+#room-call .rm-call-in span { word-break: break-all; }
+#room-call .rm-call-in u {
+  flex-shrink: 0;
+  width: 9px; height: 16px;
+  text-decoration: none;
+  background: #ff5050;
+  animation: rm-caret 1.1s steps(1, end) infinite;
+}
+@keyframes rm-caret { 50% { opacity: 0; } }
+#room-call .rm-call-note { color: #7a4444; font-size: 12.5px; min-height: 15px; }
+#room-call .rm-call-ts { align-self: center; }
+/* the number popup: HAL only calls allowlisted telephones — number entry,
+   the not-on-his-list options, and the six-digit code stage (room.js
+   renderPop). Centered above the call bar. */
+#room-pop {
+  position: fixed; left: 50%; top: 40%;
+  transform: translate(-50%, -50%);
+  z-index: 63;
+  width: min(480px, 88vw);
+  padding: 18px 22px;
+  background: rgba(16, 3, 3, .96);
+  border: 2px solid #ff3030;
+  border-radius: 6px;
+  color: #ff9c9c;
+  font-size: 15px; line-height: 1.55;
+  display: none;
+}
+#room-pop.show { display: block; }
+#room-pop .rm-pop-title { color: #ff5050; letter-spacing: .06em; margin-bottom: 10px; }
+#room-pop .rm-pop-in {
+  display: flex; align-items: center; gap: 2px;
+  border: 1px solid rgba(255, 48, 48, .4);
+  padding: 8px 10px; margin: 10px 0;
+  color: #ffd0d0;
+  font-size: 17px; letter-spacing: .08em;
+  min-height: 24px;
+}
+#room-pop .rm-pop-in u {
+  flex-shrink: 0;
+  width: 9px; height: 16px;
+  text-decoration: none;
+  background: #ff5050;
+  animation: rm-caret 1.1s steps(1, end) infinite;
+}
+#room-pop .rm-pop-opt { margin: 6px 0; color: #ffb0b0; }
+#room-pop .rm-pop-note { color: #7a4444; font-size: 12.5px; margin-top: 8px; }
 
 /* ── funny references ── */
 .rm-duck {
@@ -1835,7 +1901,8 @@ body.room-view #egg-nudge { display: none; }
   .rm-led, .rm-tw-led, .rm-mug::after, .rm-door-light, .rm-bed-top::after,
   .rm-hall-left, .rm-hall-right, .rm-hall-left2, .rm-hall-right2,
   .rm-hall-ceil, .rm-hall-end, .rm-hall-eye, .rm-hall-poem,
-  .rm-cctv i, .rm-phone.rm-ringing, #room-call i {
+  .rm-cctv i, .rm-phone.rm-ringing, #room-call i,
+  #room-call .rm-call-in u, #room-pop .rm-pop-in u {
     animation: none !important;
   }
   .rm-door { transition: none !important; }                 /* door cuts open */

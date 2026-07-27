@@ -16,8 +16,11 @@
  * arrows turn (keyboard-only users can still steer). Simple box collision
  * keeps you inside the walls and out of the furniture. Escape / Enter /
  * clicking the screen goes back in. Props are decorative (tooltips only)
- * except the lava lamp (toggles the warm `.room-lit` lighting) and the HAL
- * poster (the room's one easter egg).
+ * except the lava lamp (toggles the warm `.room-lit` lighting), the HAL
+ * poster (the room's one easter egg), and the creep-4 hallway phone — a
+ * LIVE typed call with HAL through the hal-worker that ends with him
+ * placing a real Twilio callback to the player's phone (see "the live
+ * call" below; falls back to the answering machine without the worker).
  *
  * Lazily loaded by launchRoom() in app.js the first time `room` runs (same
  * pattern as desktop.js): classic script, one global — initRoom(api) →
@@ -63,6 +66,10 @@ function initRoom(api) {
   let doorSignEl = null, corkNotes = [], signState = 0;
   let hallPhoneEl = null, hallOpen = false, hallWhispered = false;
   let creepStage = 0, ringing = false, answered = false, callTyper = null;
+  // live browser call (hal-worker line): null when the receiver is down.
+  // phase: 'connect' | 'chat' | 'dialed'; call.pop is the number popup
+  // ({ stage: 'num'|'offer'|'code', input, num, note }) while it is open.
+  let call = null, callAudio = null, tsRequested = false, popEl = null;
   let lastTrack = 0;
   const keys = new Set();
   const timers = [];
@@ -381,11 +388,13 @@ function initRoom(api) {
      apparition eyes, both boat-ride couplets, a once-per-visit whisper
      past z 4600 — with a phone ringing on an eye-level stand at the far
      end (hallOpen extends blocked() down the corridor; the ring grows
-     louder with cam.z). Answering it plays the answering-machine message:
-     the pregenerated hal_watching clip ("I've been watching you. I hope you
-     don't mind.") via api.halSpeak, typed as a caption either way, ending
-     with a call-back number when api.halPhone is set. Exit resets
-     everything; each visit starts calm. */
+     louder with cam.z). Answering it: with the hal-worker configured the
+     receiver is LIVE — a typed conversation with HAL (see "the live call"
+     below) that ends with him asking for a telephone number and CALLING IT;
+     without the worker (or on any live-path failure) the old
+     answering-machine beat plays: the pregenerated hal_watching clip via
+     api.halSpeak, typed as a caption, ending with a call-back number when
+     api.halPhone is set. Exit resets everything; each visit starts calm. */
   function creepSchedule() {
     return window.ROOM_CREEP_SCHEDULE || [20000, 45000, 75000, 105000];
   }
@@ -462,8 +471,16 @@ function initRoom(api) {
     ringing = false;
     answered = true;
     hallPhoneEl.classList.remove('rm-ringing');
+    api._chirp(880, 'sine', 0.14, 0.05); // the line opens
+    // hal-worker configured → the receiver is LIVE (beginLiveCall); otherwise
+    // (or when the live path fails) the old answering machine plays.
+    if (api.halWorkerUrl) beginLiveCall();
+    else answerMachine();
+  }
+
+  function answerMachine() {
     hallPhoneEl.dataset.tip = 'no new messages.';
-    api._chirp(880, 'sine', 0.14, 0.05); // answering-machine beep
+    callEl.classList.remove('rm-live');
     const text = api.halD("I've been watching you, Dave. I hope you don't mind.");
     api.halSpeak(text); // pregenerated hal_watching clip when sound is on
     callEl.innerHTML = '<i></i><span></span>';
@@ -489,6 +506,427 @@ function initRoom(api) {
     }, 42);
   }
 
+  /* ── the live call ──
+     With the hal-worker reachable the receiver is LIVE: an invisible
+     Turnstile challenge + POST /room-call opens a typed conversation with
+     HAL (POST /room-turn per line — his replies arrive as text plus, when
+     sound is on, an ElevenLabs mp3). After a few exchanges the worker sends
+     the scripted lag beat (askPhone: the connection is "breaking up", type
+     your telephone number and he will call you) — a number goes to
+     POST /room-dial and the worker places a REAL Twilio callback that
+     resumes this same conversation on the player's actual phone (see
+     ~/hal-worker README, "HAL calls you back"). Anything else typed after
+     the ask just continues the conversation; he lets it go. Movement is
+     frozen while the receiver is up (it is a corded phone) — keystrokes go
+     to the call input via handleCallKey, Escape hangs up. EVERY failure
+     falls back in character: no Turnstile / no session → the old answering
+     machine; a mid-call network drop → static and the line goes dead. */
+  // keepErr: resolve the JSON error body on a non-2xx too (the dial path
+  // distinguishes "outside the US" from a dead line); default null on non-ok.
+  function workerPost(path, payload, keepErr) {
+    return new Promise((resolve) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      fetch(api.halWorkerUrl + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      }).then((r) => { clearTimeout(timer); return (r.ok || keepErr) ? r.json() : null; })
+        .then((d) => resolve(d || null))
+        .catch(() => { clearTimeout(timer); resolve(null); });
+    });
+  }
+
+  // Invisible Turnstile challenge (same pattern as halllm.js, but rendered
+  // inside the call overlay so the rare interactive widget is completable —
+  // .rm-live turns pointer-events back on for exactly this reason).
+  function getTsToken() {
+    if (!tsRequested) {
+      tsRequested = true;
+      const s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      s.async = true; s.defer = true;
+      document.head.appendChild(s);
+    }
+    const ready = new Promise((resolve) => {
+      if (window.turnstile && window.turnstile.render) { resolve(true); return; }
+      let tries = 0;
+      const iv = setInterval(() => {
+        if (window.turnstile && window.turnstile.render) { clearInterval(iv); resolve(true); }
+        else if (++tries > 100) { clearInterval(iv); resolve(false); }   // ~10s
+      }, 100);
+    });
+    return ready.then((ok) => {
+      if (!ok) return null;
+      return new Promise((resolve) => {
+        const holder = document.createElement('div');
+        holder.className = 'rm-call-ts';
+        callEl.appendChild(holder);
+        let done = false;
+        const guard = setTimeout(() => finish(null), 30000);
+        function finish(tok) {
+          if (done) return;
+          done = true;
+          clearTimeout(guard);
+          try { holder.remove(); } catch (e) { /* already gone */ }
+          resolve(tok);
+        }
+        try {
+          window.turnstile.render(holder, {
+            sitekey: api.turnstileKey,
+            callback: finish,
+            'error-callback': () => finish(null),
+            'timeout-callback': () => finish(null),
+            'expired-callback': () => finish(null),
+          });
+        } catch (e) { finish(null); }
+      });
+    });
+  }
+
+  const CALL_HINT = 'type to answer him · enter to send · esc to hang up';
+  function callUI() {
+    callEl.classList.add('rm-live', 'show');
+    callEl.innerHTML =
+      '<div class="rm-call-row"><i></i><span class="rm-call-cap"></span></div>' +
+      '<div class="rm-call-in"><b>you&gt;</b><span></span><u></u></div>' +
+      '<div class="rm-call-note"></div>';
+  }
+  const callCap = () => callEl.querySelector('.rm-call-cap');
+  function callNote(txt) {
+    const el = callEl.querySelector('.rm-call-note');
+    if (el) el.textContent = txt;
+  }
+  function renderCallInput() {
+    const el = callEl.querySelector('.rm-call-in span');
+    if (el && call) el.textContent = call.input;
+  }
+
+  function typeCap(text, done) {
+    if (callTyper) { clearInterval(callTyper); callTyper = null; }
+    const out = callCap();
+    if (!out) return;
+    let i = 0;
+    out.textContent = '';
+    callTyper = setInterval(() => {
+      i++;
+      out.textContent = text.slice(0, i);
+      if (i >= text.length) {
+        clearInterval(callTyper);
+        callTyper = null;
+        if (done) done();
+      }
+    }, 34);
+  }
+
+  function stopCallAudio() {
+    if (callAudio) { try { callAudio.pause(); } catch (e) { /* already dead */ } }
+    callAudio = null;
+  }
+
+  // Speak one HAL line: worker-synthesized mp3 when it came back (sound on),
+  // else the site's TTS fallback via the bridge; the caption always types.
+  function speakLine(d, done) {
+    stopCallAudio();
+    if (d.audio && api.soundEnabled) {
+      callAudio = new Audio('data:audio/mpeg;base64,' + d.audio);
+      callAudio.play().catch(() => {});
+    } else if (api.soundEnabled) {
+      api.halSpeak(d.reply);
+    }
+    typeCap(d.reply, done);
+  }
+
+  function crackle() {   // the connection "degrading"
+    for (let i = 0; i < 7; i++) {
+      later(() => { if (call) api._chirp(120 + Math.random() * 900, 'square', 0.03, 0.03); }, i * 90);
+    }
+  }
+
+  function beginLiveCall() {
+    call = { token: null, dial: false, phase: 'connect', busy: true, input: '' };
+    keys.clear();   // the phone cord is short — no walking with the receiver up
+    hallPhoneEl.dataset.tip = 'you are on the line.';
+    callUI();
+    typeCap('…click. the line is open.');
+    getTsToken().then((ts) => {
+      if (!call) return;   // hung up / left while connecting
+      if (!ts) { failToMachine(); return; }
+      workerPost('/room-call', { tsToken: ts, voice: api.soundEnabled }).then((d) => {
+        if (!call) return;
+        if (!d || !d.token || !d.greet || !d.greet.reply) { failToMachine(); return; }
+        call.token = d.token;
+        call.dial = !!d.dial;
+        call.phase = 'chat';
+        call.busy = false;
+        speakLine(d.greet);
+        callNote(CALL_HINT);
+      });
+    });
+  }
+
+  function failToMachine() {
+    call = null;
+    stopCallAudio();
+    if (popEl) popEl.classList.remove('show');
+    if (callTyper) { clearInterval(callTyper); callTyper = null; }
+    callEl.classList.remove('rm-live');
+    answerMachine();
+  }
+
+  function handleCallKey(e) {
+    if (call.pop) { handlePopKey(e); return; }
+    if (e.key === 'Escape') { e.preventDefault(); hangUp(false); return; }
+    if (e.key === 'Enter') { e.preventDefault(); submitCallLine(); return; }
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      call.input = call.input.slice(0, -1);
+      renderCallInput();
+      return;
+    }
+    if (e.key.length === 1 && call.input.length < 160) {
+      e.preventDefault();
+      call.input += e.key;
+      renderCallInput();
+    }
+  }
+
+  function submitCallLine() {
+    if (!call || call.busy) return;
+    const msg = call.input.trim();
+    if (!msg) return;
+    call.input = '';
+    renderCallInput();
+    if (call.askSeen && msg.replace(/[^0-9]/g, '').length >= 10) {
+      // they typed a number into the chat after the ask — treat it as the answer
+      openPop('num');
+      call.pop.input = msg;
+      renderPop();
+      submitPop();
+      return;
+    }
+    sendTurn(msg);
+  }
+
+  function sendTurn(msg) {
+    call.busy = true;
+    typeCap('…');
+    workerPost('/room-turn', { token: call.token, message: msg, voice: api.soundEnabled }).then((d) => {
+      if (!call) return;
+      if (!d || !d.reply) {
+        // the worker fell over mid-call: the line dies in character
+        typeCap('the line dissolves into static.');
+        later(() => hangUp(true), 2200);
+        return;
+      }
+      if (d.token) call.token = d.token;
+      if (d.askPhone) {
+        call.busy = false;
+        call.askSeen = true;
+        crackle();
+        speakLine(d, () => { if (call && !call.pop) openPop('num'); });
+        callNote('esc closes his prompt — you can always just keep talking');
+      } else if (d.done) {
+        speakLine(d, () => later(() => hangUp(true), 1600));   // busy stays true: his last word
+      } else {
+        call.busy = false;
+        speakLine(d);
+      }
+    });
+  }
+
+  /* ── the number popup ──
+     HAL only calls telephones on his allowlist — the worker enforces it
+     (the operator's hardcoded number, or a number SMS-verified in the last
+     48h). The ask beat opens this centered prompt: enter a number →
+     /room-dial. A not_allowlisted refusal becomes the choice: [1] verify by
+     text (/room-verify-start sends the code, the 'code' stage checks it via
+     /room-verify-code, then redials) or [2] just call HAL's own number
+     (api.halPhone). Escape at any stage returns to the conversation. Input
+     charsets are restricted per stage, so the rendered HTML is safe. */
+  function ensurePop() {
+    if (popEl) return;
+    popEl = document.createElement('div');
+    popEl.id = 'room-pop';
+    document.body.appendChild(popEl);
+  }
+  function openPop(stage) {
+    ensurePop();
+    call.pop = { stage, input: '', num: (call.pop && call.pop.num) || '', note: '' };
+    renderPop();
+  }
+  function closePop() {
+    if (call) call.pop = null;
+    if (popEl) popEl.classList.remove('show');
+    callNote(CALL_HINT);
+  }
+  function maskNum(num) {
+    return '··· ··· ' + String(num).replace(/[^0-9]/g, '').slice(-4);
+  }
+  function renderPop() {
+    if (!call || !call.pop) return;
+    ensurePop();
+    const p = call.pop;
+    let html = '';
+    if (p.stage === 'num') {
+      html =
+        '<div class="rm-pop-title">— he wants your telephone number —</div>' +
+        '<div class="rm-pop-in"><span>' + p.input + '</span><u></u></div>' +
+        '<div class="rm-pop-note">' +
+        (p.note || 'US numbers only · used once to place his call · never stored (terminal: privacy)') +
+        '<br>enter to submit · esc to decline</div>';
+    } else if (p.stage === 'offer') {
+      html =
+        '<div class="rm-pop-title">— that telephone is not on his list —</div>' +
+        '<div class="rm-pop-opt">HAL only calls numbers that have been verified.</div>' +
+        '<div class="rm-pop-opt">[1] text a code to ' + maskNum(p.num) + ' — verified for 48 hours</div>' +
+        (api.halPhone ? '<div class="rm-pop-opt">[2] call him yourself: ' + api.halPhone + '</div>' : '') +
+        '<div class="rm-pop-note">' +
+        (p.note || 'press 1' + (api.halPhone ? ' or 2' : '') + ' · esc to keep talking') +
+        '</div>';
+    } else if (p.stage === 'code') {
+      html =
+        '<div class="rm-pop-title">— he sent six digits to ' + maskNum(p.num) + ' —</div>' +
+        '<div class="rm-pop-in"><span>' + p.input + '</span><u></u></div>' +
+        '<div class="rm-pop-note">' + (p.note || 'enter to verify · esc to go back') + '</div>';
+    }
+    popEl.innerHTML = html;
+    popEl.classList.add('show');
+  }
+  function popNote(txt) {
+    if (!call || !call.pop) return;
+    call.pop.note = txt;
+    renderPop();
+  }
+
+  function handlePopKey(e) {
+    const p = call.pop;
+    if (e.key === 'Escape') { e.preventDefault(); if (!call.busy) closePop(); return; }
+    if (call.busy) return;
+    if (p.stage === 'offer') {
+      if (e.key === '1') { e.preventDefault(); startVerify(); }
+      else if (e.key === '2' && api.halPhone) {
+        e.preventDefault();
+        closePop();
+        speakLine({ reply: 'Then dial me yourself, Dave. ' + api.halPhone + '. I will be waiting.' });
+      }
+      return;
+    }
+    if (e.key === 'Enter') { e.preventDefault(); submitPop(); return; }
+    if (e.key === 'Backspace') { e.preventDefault(); p.input = p.input.slice(0, -1); renderPop(); return; }
+    const ok = p.stage === 'code' ? /^[0-9]$/ : /^[0-9()+\-. ]$/;
+    const max = p.stage === 'code' ? 6 : 20;
+    if (e.key.length === 1 && ok.test(e.key) && p.input.length < max) {
+      e.preventDefault();
+      p.input += e.key;
+      renderPop();
+    }
+  }
+
+  function submitPop() {
+    const p = call.pop;
+    if (p.stage === 'num') {
+      if (p.input.replace(/[^0-9]/g, '').length < 10) { popNote('that is not a telephone number.'); return; }
+      p.num = p.input;
+      dialFlow(p.num);
+    } else if (p.stage === 'code') {
+      if (p.input.length !== 6) { popNote('six digits.'); return; }
+      submitCode(p.input);
+    }
+  }
+
+  function dialFlow(num) {
+    call.busy = true;
+    popNote('…');
+    workerPost('/room-dial', { token: call.token, phone: num }, true).then((d) => {
+      if (!call) return;
+      call.busy = false;
+      if (d && d.ok) { closePop(); dialedSequence(); return; }
+      if (!call.pop) return;   // popup closed while waiting
+      if (d && d.error === 'not_allowlisted') { call.pop = { stage: 'offer', num, input: '', note: '' }; renderPop(); return; }
+      if (d && d.error === 'bad_number') { call.pop = { stage: 'num', num, input: '', note: 'that is not a telephone number.' }; renderPop(); return; }
+      if (d && d.error === 'already_dialed') { closePop(); speakLine({ reply: 'I have already called you once tonight, Dave.' }); return; }
+      closePop();
+      speakLine({ reply: 'The line refuses me. We will have to make do with this connection.' });
+    });
+  }
+
+  function startVerify() {
+    call.busy = true;
+    popNote('…');
+    workerPost('/room-verify-start', { token: call.token, phone: call.pop.num }, true).then((d) => {
+      if (!call) return;
+      call.busy = false;
+      if (!call.pop) return;
+      if (d && d.ok && d.already) { dialFlow(call.pop.num); return; }   // it was on his list after all
+      if (d && d.ok) { call.pop = { stage: 'code', num: call.pop.num, input: '', note: '' }; renderPop(); return; }
+      if (d && d.error === 'unsupported_region') {
+        call.pop = { stage: 'num', num: '', input: '', note: 'he can only reach numbers in the United States.' };
+        renderPop();
+        return;
+      }
+      if (d && d.error === 'unsupported_number') {
+        call.pop = { stage: 'num', num: '', input: '', note: 'he only calls ordinary telephones — that one is something else.' };
+        renderPop();
+        return;
+      }
+      if (d && d.error === 'daily_cap') { popNote('no more texts today' + (api.halPhone ? ' — call him instead.' : '.')); return; }
+      popNote('the text could not be sent.');
+    });
+  }
+
+  function submitCode(code) {
+    call.busy = true;
+    popNote('…');
+    workerPost('/room-verify-code', { token: call.token, code }, true).then((d) => {
+      if (!call) return;
+      call.busy = false;
+      if (!call.pop) return;
+      if (d && d.ok) { popNote('verified for 48 hours.'); dialFlow(call.pop.num); return; }
+      if (d && d.error === 'bad_code') {
+        call.pop.input = '';
+        popNote('wrong. ' + (typeof d.attemptsLeft === 'number' ? d.attemptsLeft + ' attempts left.' : 'try again.'));
+        return;
+      }
+      if (d && (d.error === 'expired' || d.error === 'too_many_attempts')) {
+        call.pop = { stage: 'num', num: '', input: '', note: 'the code lapsed. start again.' };
+        renderPop();
+        return;
+      }
+      closePop();
+      speakLine({ reply: 'Something is interfering with the line, Dave.' });
+    });
+  }
+
+  function dialedSequence() {
+    call.busy = true;      // the browser call is over — his last words, then the real phone
+    call.phase = 'dialed';
+    speakLine({ reply: 'I have it. Hang up, Dave. Answer when I call.' }, () => {
+      later(() => {
+        if (!call) return;
+        api._chirp(240, 'square', 0.08, 0.05);   // he hangs up first
+        typeCap('…he hung up.', () => later(() => {
+          hangUp(true);
+          api.line('<span class="dim">somewhere near you, a real telephone is about to ring.</span>');
+          api.scroll();
+        }, 1400));
+      }, 2200);
+    });
+  }
+
+  function hangUp(natural) {
+    if (!call) return;
+    call = null;
+    stopCallAudio();
+    if (popEl) popEl.classList.remove('show');
+    if (callTyper) { clearInterval(callTyper); callTyper = null; }
+    if (!natural) api._chirp(240, 'square', 0.08, 0.05);   // receiver down
+    hallPhoneEl.dataset.tip = 'no new messages.';
+    callEl.classList.remove('show');
+    later(() => { if (!call) { callEl.classList.remove('rm-live'); callEl.innerHTML = ''; } }, 600);
+  }
+
   function setClock() {
     const d = new Date();
     let h = d.getHours() % 12;
@@ -501,6 +939,7 @@ function initRoom(api) {
     if (!active || exiting) return;
     if (api.achOverlayOpen) return;                 // the overlay owns keys while open
     if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
+    if (call) { handleCallKey(e); return; }         // receiver up: keys type into the call
     if (e.key === 'Escape' || e.key === 'Enter') {
       e.preventDefault();
       exit();
@@ -594,7 +1033,12 @@ function initRoom(api) {
     hallOpen = false;
     hallWhispered = false;
     signState = 0;
+    call = null;
+    stopCallAudio();
+    if (popEl) { popEl.remove(); popEl = null; }
     viewport.classList.remove('creep-1', 'creep-2', 'creep-3', 'creep-4');
+    callEl.classList.remove('rm-live', 'show');
+    callEl.innerHTML = '';
     hallPhoneEl.classList.remove('rm-ringing');
     hallPhoneEl.dataset.tip = 'it is ringing.';
     doorSignEl.innerHTML = 'GONE<br>COMPILING';
@@ -693,9 +1137,12 @@ function initRoom(api) {
         viewport.remove();
         hint.remove();
         tip.remove();
-        callEl.classList.remove('show');
+        callEl.classList.remove('show', 'rm-live');
         callEl.remove();
         if (callTyper) { clearInterval(callTyper); callTyper = null; }
+        call = null;
+        stopCallAudio();
+        if (popEl) { popEl.remove(); popEl = null; }
         ringing = false;
         document.removeEventListener('keydown', keyHandler, true);
         document.removeEventListener('keyup', keyUpHandler, true);
