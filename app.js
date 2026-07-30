@@ -2929,6 +2929,8 @@
       blank();
       line('Questions or removal requests: <a href="mailto:career@ilaird.com">career@ilaird.com</a>', 'white');
       blank();
+      line('Full versions: <a href="privacy.html" target="_blank" rel="noopener">privacy policy</a> · <a href="terms.html" target="_blank" rel="noopener">terms of service</a>', 'dim');
+      blank();
       scroll();
     },
 

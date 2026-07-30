@@ -66,6 +66,7 @@ function initRoom(api) {
   let doorSignEl = null, corkNotes = [], signState = 0;
   let hallPhoneEl = null, hallOpen = false, hallWhispered = false;
   let creepStage = 0, ringing = false, answered = false, callTyper = null;
+  let nineTaps = 0; // consecutive 9-presses; 9-9-9 fast-forwards the creep
   // live browser call (hal-worker line): null when the receiver is down.
   // phase: 'connect' | 'chat' | 'dialed'; call.pop is the number popup
   // ({ stage: 'num'|'offer'|'code', input, num, note }) while it is open.
@@ -744,17 +745,37 @@ function initRoom(api) {
      text (/room-verify-start sends the code, the 'code' stage checks it via
      /room-verify-code, then redials) or [2] just call HAL's own number
      (api.halPhone). Escape at any stage returns to the conversation. Input
-     charsets are restricted per stage, so the rendered HTML is safe. */
+     charsets are restricted per stage, so the rendered HTML is safe.
+     The 'num' stage doubles as the A2P SMS opt-in form (carrier compliance):
+     it must keep the consent checkbox (NEVER pre-checked — every pop object
+     starts agree:false and submitPop refuses without it), the message-type +
+     frequency description, the rates disclaimer, HELP/STOP instructions, and
+     the terms.html / privacy.html links. Space or click toggles the box;
+     everything with data-act is also clickable (delegated in ensurePop). */
   function ensurePop() {
     if (popEl) return;
     popEl = document.createElement('div');
     popEl.id = 'room-pop';
+    popEl.addEventListener('click', (e) => {
+      if (!call || !call.pop || call.busy) return;
+      const act = e.target.closest('[data-act]');
+      if (!act) return;
+      const a = act.dataset.act;
+      if (a === 'agree') { call.pop.agree = !call.pop.agree; renderPop(); }
+      else if (a === 'submit') submitPop();
+      else if (a === 'verify') startVerify();
+      else if (a === 'self' && api.halPhone) selfCall();
+    });
     document.body.appendChild(popEl);
   }
   function openPop(stage) {
     ensurePop();
-    call.pop = { stage, input: '', num: (call.pop && call.pop.num) || '', note: '' };
+    call.pop = { stage, input: '', num: (call.pop && call.pop.num) || '', note: '', agree: false };
     renderPop();
+  }
+  function selfCall() {
+    closePop();
+    speakLine({ reply: 'Then dial me yourself, Dave. ' + api.halPhone + '. I will be waiting.' });
   }
   function closePop() {
     if (call) call.pop = null;
@@ -771,23 +792,39 @@ function initRoom(api) {
     let html = '';
     if (p.stage === 'num') {
       html =
-        '<div class="rm-pop-title">— he wants your telephone number —</div>' +
+        '<div class="rm-pop-title">— he is asking to call your telephone —</div>' +
+        '<div class="rm-pop-opt">HAL wants to place one real voice call to you. give him your cell number' +
+        ' and he will text it a one-time verification code by SMS; enter the code and he calls.</div>' +
+        '<div class="rm-pop-opt">verification codes only, never marketing · one SMS per verification request.</div>' +
         '<div class="rm-pop-in"><span>' + p.input + '</span><u></u></div>' +
+        '<div class="rm-pop-chk' + (p.agree ? ' on' : '') + '" data-act="agree" role="checkbox"' +
+        ' aria-checked="' + (p.agree ? 'true' : 'false') + '">' +
+        '<span class="rm-pop-box">' + (p.agree ? '✓' : '') + '</span>' +
+        '<span>I agree to receive a one-time SMS verification code from ianclaird.com at the' +
+        ' number above. message &amp; data rates may apply. reply HELP for help, STOP to opt out.</span></div>' +
+        '<div class="rm-pop-btn' + (p.agree ? '' : ' off') + '" data-act="submit">yes — text my code, then call me</div>' +
         '<div class="rm-pop-note">' +
-        (p.note || 'US numbers only · used once to place his call · never stored (terminal: privacy)') +
-        '<br>enter to submit · esc to decline</div>';
+        (p.note || 'US numbers only · used once to place his call · never stored') +
+        '<br><a href="terms.html" target="_blank" rel="noopener">terms of service</a> · ' +
+        '<a href="privacy.html" target="_blank" rel="noopener">privacy policy</a>' +
+        '<br>space or click ticks the box · enter to submit · esc to decline</div>';
     } else if (p.stage === 'offer') {
       html =
         '<div class="rm-pop-title">— that telephone is not on his list —</div>' +
-        '<div class="rm-pop-opt">HAL only calls numbers that have been verified.</div>' +
-        '<div class="rm-pop-opt">[1] text a code to ' + maskNum(p.num) + ' — verified for 48 hours</div>' +
-        (api.halPhone ? '<div class="rm-pop-opt">[2] call him yourself: ' + api.halPhone + '</div>' : '') +
+        '<div class="rm-pop-opt">HAL only calls numbers verified by text. may he send the code?</div>' +
+        '<div class="rm-pop-opt rm-pop-act" data-act="verify">[1] yes — text a one-time SMS code to ' + maskNum(p.num) +
+        ', then call me once I enter it (verified for 48 hours)</div>' +
+        (api.halPhone
+          ? '<div class="rm-pop-opt rm-pop-act" data-act="self">[2] no — I will call him myself: ' + api.halPhone + '</div>'
+          : '') +
         '<div class="rm-pop-note">' +
-        (p.note || 'press 1' + (api.halPhone ? ' or 2' : '') + ' · esc to keep talking') +
+        (p.note || 'press 1' + (api.halPhone ? ' or 2' : '') + ' · esc to keep talking' +
+          ' · msg &amp; data rates may apply · reply HELP for help, STOP to opt out') +
         '</div>';
     } else if (p.stage === 'code') {
       html =
-        '<div class="rm-pop-title">— he sent six digits to ' + maskNum(p.num) + ' —</div>' +
+        '<div class="rm-pop-title">— he texted a one-time code to ' + maskNum(p.num) + ' —</div>' +
+        '<div class="rm-pop-opt">enter the 6 digits and he will place his call.</div>' +
         '<div class="rm-pop-in"><span>' + p.input + '</span><u></u></div>' +
         '<div class="rm-pop-note">' + (p.note || 'enter to verify · esc to go back') + '</div>';
     }
@@ -806,16 +843,18 @@ function initRoom(api) {
     if (call.busy) return;
     if (p.stage === 'offer') {
       if (e.key === '1') { e.preventDefault(); startVerify(); }
-      else if (e.key === '2' && api.halPhone) {
-        e.preventDefault();
-        closePop();
-        speakLine({ reply: 'Then dial me yourself, Dave. ' + api.halPhone + '. I will be waiting.' });
-      }
+      else if (e.key === '2' && api.halPhone) { e.preventDefault(); selfCall(); }
+      return;
+    }
+    if (p.stage === 'num' && e.key === ' ') {
+      e.preventDefault();
+      p.agree = !p.agree;
+      renderPop();
       return;
     }
     if (e.key === 'Enter') { e.preventDefault(); submitPop(); return; }
     if (e.key === 'Backspace') { e.preventDefault(); p.input = p.input.slice(0, -1); renderPop(); return; }
-    const ok = p.stage === 'code' ? /^[0-9]$/ : /^[0-9()+\-. ]$/;
+    const ok = p.stage === 'code' ? /^[0-9]$/ : /^[0-9()+\-.]$/;
     const max = p.stage === 'code' ? 6 : 20;
     if (e.key.length === 1 && ok.test(e.key) && p.input.length < max) {
       e.preventDefault();
@@ -828,6 +867,7 @@ function initRoom(api) {
     const p = call.pop;
     if (p.stage === 'num') {
       if (p.input.replace(/[^0-9]/g, '').length < 10) { popNote('that is not a telephone number.'); return; }
+      if (!p.agree) { popNote('he needs your consent first — tick the box (space, or click it).'); return; }
       p.num = p.input;
       dialFlow(p.num);
     } else if (p.stage === 'code') {
@@ -945,6 +985,18 @@ function initRoom(api) {
       exit();
       return;
     }
+    // 9-9-9: three consecutive 9s run the creep straight through to stage 4
+    // (door open, hallway unblocked, phone ringing) — a skip to the hall phone
+    // without the wait. Stages fire in order so the state matches a real visit;
+    // the armCreep timers later no-op on their n <= creepStage guard.
+    if (e.key === '9') {
+      if (++nineTaps >= 3) {
+        nineTaps = 0;
+        for (let n = creepStage + 1; n <= 4; n++) setCreep(n);
+      }
+      return;
+    }
+    nineTaps = 0;
     const k = KEYMAP[e.key.toLowerCase()];
     if (k) {
       e.preventDefault();
@@ -1028,6 +1080,7 @@ function initRoom(api) {
     lastT = '';
     billYaw = null;
     creepStage = 0;
+    nineTaps = 0;
     ringing = false;
     answered = false;
     hallOpen = false;

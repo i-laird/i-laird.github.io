@@ -208,6 +208,25 @@ body.crt #cmd {
 }
 #linkedin-btn:hover { color: #0a66c2; }
 
+/* privacy/terms — carrier compliance requires the privacy policy be reachable
+   from the landing page (see CLAUDE.md); lives here, left of the LinkedIn btn */
+#legal-links {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+#legal-links a {
+  color: #7a7a7a;
+  text-decoration: none;
+  padding: 2px 3px;
+  transition: color .15s;
+}
+#legal-links a:hover { color: #ccc; text-decoration: underline; }
+#legal-links span { color: #555; }
+
 #ach-badge {
   cursor: pointer;
   display: flex;
@@ -1631,6 +1650,33 @@ pre.ascii {
 }
 #room-pop .rm-pop-opt { margin: 6px 0; color: #ffb0b0; }
 #room-pop .rm-pop-note { color: #7a4444; font-size: 12.5px; margin-top: 8px; }
+#room-pop .rm-pop-note a { color: #c07070; }
+/* the A2P consent form pieces (num stage): checkbox — never pre-checked —
+   plus the explicit submit button; both clickable (data-act) or keyboard. */
+#room-pop .rm-pop-chk {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 10px 0; padding: 8px 10px;
+  border: 1px solid rgba(255, 48, 48, 0.35);
+  color: #ffb0b0; font-size: 13px; line-height: 1.5;
+  cursor: pointer; user-select: none;
+}
+#room-pop .rm-pop-box {
+  flex-shrink: 0; width: 16px; height: 16px; margin-top: 2px;
+  border: 1px solid #ff5050;
+  display: flex; align-items: center; justify-content: center;
+  color: #ffd0d0; font-size: 12px;
+}
+#room-pop .rm-pop-chk.on .rm-pop-box { background: rgba(255, 48, 48, 0.35); }
+#room-pop .rm-pop-btn {
+  margin: 10px 0 2px; padding: 8px 12px;
+  border: 1px solid #ff5050; text-align: center;
+  color: #ffd0d0; letter-spacing: 0.05em;
+  cursor: pointer; user-select: none;
+}
+#room-pop .rm-pop-btn.off { opacity: 0.45; cursor: default; }
+#room-pop .rm-pop-btn:not(.off):hover { background: rgba(255, 48, 48, 0.18); }
+#room-pop .rm-pop-act { cursor: pointer; }
+#room-pop .rm-pop-act:hover { color: #ffd0d0; }
 
 /* ── funny references ── */
 .rm-duck {

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>Privacy Policy — ianclaird.com</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 40px 20px;
+        background: #0a0a0a;
+        color: #d0d0d0;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+      h1,
+      h2 {
+        color: #33ff66;
+        font-size: 1.2em;
+        letter-spacing: 0.04em;
+      }
+      h1 {
+        font-size: 1.5em;
+      }
+      a {
+        color: #66aaff;
+      }
+      ul {
+        padding-left: 22px;
+      }
+      li {
+        margin: 8px 0;
+      }
+      .dim {
+        color: #888;
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid #333;
+        margin: 28px 0;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 8px 20px;
+        margin: 20px 0;
+        padding: 16px 18px;
+        border: 1px solid #333;
+      }
+      dt {
+        color: #33ff66;
+        white-space: nowrap;
+      }
+      dd {
+        margin: 0;
+      }
+      @media (max-width: 600px) {
+        dl {
+          grid-template-columns: 1fr;
+          gap: 2px 0;
+        }
+        dd {
+          margin-bottom: 10px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Privacy Policy</h1>
+      <p class="dim">ianclaird.com — last updated July 30, 2026</p>
+
+      <p>The short, honest version, at a glance:</p>
+
+      <dl>
+        <dt>Cookies &amp; trackers</dt>
+        <dd>none — no cookies, no analytics, no trackers, no ads</dd>
+        <dt>Accounts</dt>
+        <dd>none — achievements and settings live only in your own browser (localStorage)</dd>
+        <dt>AI conversations</dt>
+        <dd>held server-side for at most ~30 minutes, then deleted; nothing you type is kept</dd>
+        <dt>Phone numbers</dt>
+        <dd>never stored in readable form · never shared · verified status expires in 48h</dd>
+        <dt>Opt out</dt>
+        <dd>reply <strong>STOP</strong> to any text and that number is never contacted again</dd>
+      </dl>
+
+      <hr>
+
+      <h2>Talking to HAL (the LLM mode, or the room's hallway phone)</h2>
+      <ul>
+        <li>
+          <strong>Where your words go:</strong> a small backend (AWS) forwards your typed lines
+          to Anthropic's Claude to write HAL's replies. Optional voice is synthesized by
+          ElevenLabs; Cloudflare Turnstile is the bot check.
+        </li>
+        <li>
+          <strong>How long they live:</strong> at most ~30 minutes server-side, deleted when
+          the session ends.
+        </li>
+        <li>
+          <strong>Rate limits:</strong> abuse counters key a salted one-way hash of your IP
+          address — never the address itself — and expire within hours to days.
+        </li>
+      </ul>
+
+      <hr>
+
+      <h2>The phone number, the SMS code, and the call</h2>
+      <ul>
+        <li>
+          <strong>Consent first:</strong> HAL only calls a number you typed in yourself, after
+          you actively tick the consent box. He texts a one-time verification code via Twilio;
+          typing it back proves you hold the phone. Full program details in the
+          <a href="terms.html">SMS program terms</a>.
+        </li>
+        <li>
+          <strong>Never shared:</strong> <strong>no mobile information will be shared with
+          third parties or affiliates for marketing or promotional purposes.</strong> Phone
+          numbers and SMS opt-in consent are never sold, rented, or shared with anyone —
+          they're used solely for the one-time verification code and the single call you
+          requested.
+        </li>
+        <li>
+          <strong>Never stored in readable form:</strong> verified status, call limits, and
+          opt-out records exist only as salted one-way hashes. Verified status expires after
+          48 hours; the number itself is used once and discarded.
+        </li>
+        <li>
+          <strong>Message frequency:</strong> one SMS verification code per request you
+          initiate, with strict daily caps. No recurring messages.
+        </li>
+        <li><strong>Message and data rates may apply.</strong></li>
+        <li>
+          <strong>The call itself:</strong> US numbers only, strict daily caps, and it starts
+          with a neutral automated prompt — nothing plays unless you press 1. Twilio processes
+          call and SMS metadata under its own privacy policy.
+        </li>
+        <li>
+          <strong>If you call HAL:</strong> Twilio transcribes your speech so Claude can
+          answer; the call's memory lives ~30 minutes, then it's gone.
+        </li>
+        <li>
+          <strong>Opting out:</strong> reply <strong>STOP</strong> to any text from HAL and
+          that number is never texted or called again (<strong>START</strong> lifts it). The
+          block is permanent and stored only as a salted hash.
+        </li>
+      </ul>
+
+      <hr>
+
+      <h2>Questions or removal requests</h2>
+      <p>
+        Email <a href="mailto:career@ilaird.com">career@ilaird.com</a> and I'll take care of
+        it.
+      </p>
+
+      <p><a href="/">&larr; back to the terminal</a></p>
+    </main>
+  </body>
+</html>

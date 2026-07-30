@@ -128,6 +128,8 @@ const BUNDLE = [
 // file that can wedge returning visitors).
 const STATIC = [
   '404.html',
+  'privacy.html',
+  'terms.html',
   'style.css',
   'robots.txt',
   'sitemap.xml',
