@@ -135,13 +135,10 @@ const FIRE_R     = 215;   // fireball powerup: the flame front engulfs everythin
 const CHAMP_T    = 600;   // frames a summoned champion fights for (~10s)
 const TEXT_HOLD  = 1.9;   // banners & floating combat text linger this much longer
 const FADE_LEN   = 54;    // frames for the cut to the Star Wars corridor
-// run 10% faster when deployed; full speed when developing on localhost
-const SF_SPEED = (() => {
-  const h = location.hostname;
-  const local = h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '' ||
-                h.endsWith('.local') || location.protocol === 'file:';
-  return local ? 1 : 1.1;
-})();
+// One speed everywhere. This used to be 1.0 on localhost / 1.1 deployed, which
+// meant dev playtesting always ran a 10% slower game than players got and the
+// tick-based `swift` trophy demanded 10% less wall-time in production.
+const SF_SPEED = 1.1;
 let simAcc = 0;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -223,7 +220,7 @@ function recPush(ev) {
 // hal-worker (/mp-host, /mp-offer, /mp-join, /mp-answer); gameplay traffic is pure
 // P2P — no server ever sees it. Nothing persists out of an online run (noPersist).
 const NET_VER = 2;      // wire-protocol version (handshake-checked); 2 = resume/reconnect protocol
-const NET_SIM_V = 4;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 4 = the mana-regen nerf
+const NET_SIM_V = 5;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 5 = great-boss knockback immunity + deterministic equal-tick event order
 const NET_DELAY = 5;    // ticks of input delay (~83ms) — local input applies at tick+NET_DELAY on both sims
 const NET_MAX_SEATS = 4; // the WAR BAND: up to four fighters — host = seat 0 (P1), joiners 1..3.
                          // Topology is a host-relayed STAR: every client links only to the host,
@@ -863,7 +860,7 @@ function init() {
     // change (damage, speeds, AI, economy), or old replays re-simulate under new
     // rules and silently diverge from their recorded scores.
     recEv = []; recLastM = -1; recOverflow = false;
-    recHdr = { v: 4, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
+    recHdr = { v: 5, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
                up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
   }
   player.dashCharges = up.dashMax; player.rechargeT = 0;
@@ -4188,8 +4185,14 @@ function drawDownedHero(h) {
 }
 
 // ── combat — hit resolution: knockback, killEnemy, strike/downHero/reviveHero, endRun ──
+// The great bosses (and the Nine) shrug off every area blast — no chip damage,
+// no shove, no freeze, no chain. One predicate so no exclusion site can drift.
+function isGreatBoss(e) {
+  return e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith';
+}
 function knockback(cx, cy, killR, push, stun) {
   for (const e of enemies) {
+    if (isGreatBoss(e)) continue;   // matches the frost/chain exclusions — bosses only fall to real strikes
     const dx = e.x - cx, dy = e.y - cy, d = Math.hypot(dx, dy) || 1;
     if (killR > 0 && d < killR) {
       if (!e.hp || (e.hp -= 2) <= 0) { killEnemy(e); continue; }
@@ -4198,7 +4201,13 @@ function knockback(cx, cy, killR, push, stun) {
     e.x = clamp(e.x + dx / d * p, -60, GW + 60);
     e.y = clamp(e.y + dy / d * p, -60, GH + 60);
     e.stun = stun; e.vx = 0; e.vy = 0;
-    if (e.mode) { e.mode = e.type === 'archer' ? 'approach' : 'stalk'; e.st = 70; }
+    // only reset brains that actually have the target state — 'stalk' is a
+    // wolf/ogre mode and 'approach' an archer mode; stomping it onto troopers
+    // (mid-march), guards, or a boss left them wedged in a state their AI
+    // chain has no branch for (DIO froze for the rest of the fight)
+    if (e.mode === undefined) continue;
+    if (e.type === 'archer')                        { e.mode = 'approach'; e.st = 70; }
+    else if (e.type === 'wolf' || e.type === 'ogre') { e.mode = 'stalk';    e.st = 70; }
   }
   enemies = enemies.filter(e => !e.dead);
 }
@@ -4245,7 +4254,7 @@ function killEnemy(e) {
     let n = 0;
     for (const o of enemies) {
       if (o === e || untouchable(o) || o.frozen > 0) continue;
-      if (o.type === 'witchking' || o.type === 'vader' || o.type === 'sidious' || o.type === 'dio' || o.type === 'wraith') continue;
+      if (isGreatBoss(o)) continue;
       if (Math.hypot(o.x - e.x, o.y - e.y) < 70) { o.frozen = 180; o.vx = 0; o.vy = 0; n++; }
     }
     if (n) sparks.push({ x: e.x, y: e.y - 30, t: 18, color: '#8fd8ff', txt: 'SHATTER' });
@@ -4502,7 +4511,7 @@ function startWatch(item) {
       const rd = d && d.replay;
       // v must match the CURRENT sim-balance version — an older recording would
       // re-simulate under new rules and play back a different run than it claims
-      if (!rd || rd.v !== 4 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+      if (!rd || rd.v !== 5 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
       startReplay(rd, item.entry);
     })
     .catch(() => { watchSel = null; watchErr = 'replay unavailable — recorded on an older build, or expired'; });
@@ -4985,7 +4994,7 @@ function netHandle(m, conn) {
       // dedupe: reconnect resumes re-send logs, so an event may arrive twice
       if (ek <= tick || netEvents.some(x => x[0] === ek && x[1] === eop && x[2] === m.a)) return;
       netEvents.push([ek, eop, m.a]);
-      netEvents.sort((x, y) => x[0] - y[0]);
+      netEvents.sort(netEvCmp);
       if (netIsHost) {
         netEventLog.push([ek, eop, m.a]);   // the relay hub's log covers the whole band
         netRelay(m, conn);
@@ -5052,10 +5061,15 @@ function netLobbyMaybeStart() {
 // frame, and the ordered channel delivers this before any frame that would let
 // it pass the stamp — so no sim can have passed it. (A client's event reaches
 // the far clients one host-relay later, still inside the same bound + delay.)
+// Full (tick, op, arg) order — a tick-only sort left EQUAL-tick events in
+// arrival order, which differs per peer (each inserts its own first): two
+// same-tick shop buys with tokens for only one completed DIFFERENT purchases
+// on host and client — a guaranteed desync (caught by the tripwire, but real).
+function netEvCmp(x, y) { return x[0] - y[0] || x[1] - y[1] || (x[2] | 0) - (y[2] | 0); }
 function netQueueEvent(op, a) {
   const k = tick + NET_DELAY + 1;
   netEvents.push([k, op, a]);
-  netEvents.sort((x, y) => x[0] - y[0]);
+  netEvents.sort(netEvCmp);
   netEventLog.push([k, op, a]);   // kept all run (tiny) — a resume re-sends any lost in flight
   netSend({ t: 'ev', r: netRunId, k, op, a });
 }
@@ -7678,7 +7692,7 @@ function loop() {
         let n = 0;
         for (const e of enemies) {
           // the great bosses shrug off the cold; everything else freezes solid
-          if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+          if (isGreatBoss(e)) continue;
           if (Math.hypot(e.x - ph.x, e.y - ph.y) < FROST_R) { e.frozen = FROST_DUR; e.vx = 0; e.vy = 0; n++; }
         }
         sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#8fd8ff', txt: n ? 'FROZEN x' + n : 'frost nova' });
@@ -7700,7 +7714,7 @@ function loop() {
           for (const e of enemies) {
             if (e.dead || hit.has(e)) continue;
             // the great bosses are too mighty to be chained — grunts only
-            if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+            if (isGreatBoss(e)) continue;
             const dd = Math.hypot(e.x - from.x, e.y - from.y);
             if (dd < bestD) { bestD = dd; best = e; }
           }
@@ -9294,7 +9308,7 @@ function castNova(h) {
   let n = 0;
   for (const e of enemies) {
     // same immunities as the frost powerup — the great bosses shrug off the cold
-    if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+    if (isGreatBoss(e)) continue;
     if (untouchable(e)) continue;
     if (Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R) { e.frozen = 240; e.vx = 0; e.vy = 0; n++; }  // briefer than the powerup's FROST_DUR
   }

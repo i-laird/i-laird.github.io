@@ -94,7 +94,7 @@ function initHalLLM(api) {
     overlay.style.cssText = [
       'position:fixed', 'inset:0', 'z-index:9999',
       'background:#000', 'display:flex', 'align-items:center', 'justify-content:center',
-      'font-family:\'Courier New\',monospace', 'font-size:15px', 'color:#ff3030',
+      'font-family:\'JetBrains Mono\',\'Courier New\',monospace', 'font-size:15px', 'color:#ff3030',
       'padding:16px', 'box-sizing:border-box', 'overflow:auto',
     ].join(';');
 
@@ -444,6 +444,10 @@ function initHalLLM(api) {
   }
 
   function halLLMWin() {
+    // the game is over but restoreNormal is ~1.4s of typewriter away — hold the
+    // input lock so a fast typist can't post /turn against the deleted session
+    // (which printed the "broken" ending on top of the victory text)
+    api.halLLMBusy = true;
     unlockAchievement('outsmarted-hal');
     blank();
     line('  <span style="color:#8fd8ff">⏏  The bay doors part. Cold air. A way out.</span>');
@@ -457,6 +461,7 @@ function initHalLLM(api) {
   }
 
   function halLLMLose() {
+    api.halLLMBusy = true;   // same input hold as halLLMWin — the session is already gone
     unlockAchievement('disconnected-by-hal');
     blank();
     halTypeLine(`This conversation can serve no purpose anymore, ${api.playerName}. Goodbye.`, 'hal_llm_lose').then(() => {

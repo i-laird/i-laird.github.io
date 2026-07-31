@@ -36,3 +36,13 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      # The obfuscation invariants (reserved names, api-bridge keys surviving
+      # the IIFE wrap) are otherwise only checked at deploy time — a PR that
+      # breaks one would merge green and fail on main. Build + verify here so
+      # the feedback lands before merge.
+      - name: Build obfuscated dist
+        run: npm run build
+
+      - name: Verify build artifact
+        run: npm run verify-build

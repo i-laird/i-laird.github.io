@@ -445,7 +445,7 @@ function netHandle(m, conn) {
       // dedupe: reconnect resumes re-send logs, so an event may arrive twice
       if (ek <= tick || netEvents.some(x => x[0] === ek && x[1] === eop && x[2] === m.a)) return;
       netEvents.push([ek, eop, m.a]);
-      netEvents.sort((x, y) => x[0] - y[0]);
+      netEvents.sort(netEvCmp);
       if (netIsHost) {
         netEventLog.push([ek, eop, m.a]);   // the relay hub's log covers the whole band
         netRelay(m, conn);
@@ -512,10 +512,15 @@ function netLobbyMaybeStart() {
 // frame, and the ordered channel delivers this before any frame that would let
 // it pass the stamp — so no sim can have passed it. (A client's event reaches
 // the far clients one host-relay later, still inside the same bound + delay.)
+// Full (tick, op, arg) order — a tick-only sort left EQUAL-tick events in
+// arrival order, which differs per peer (each inserts its own first): two
+// same-tick shop buys with tokens for only one completed DIFFERENT purchases
+// on host and client — a guaranteed desync (caught by the tripwire, but real).
+function netEvCmp(x, y) { return x[0] - y[0] || x[1] - y[1] || (x[2] | 0) - (y[2] | 0); }
 function netQueueEvent(op, a) {
   const k = tick + NET_DELAY + 1;
   netEvents.push([k, op, a]);
-  netEvents.sort((x, y) => x[0] - y[0]);
+  netEvents.sort(netEvCmp);
   netEventLog.push([k, op, a]);   // kept all run (tiny) — a resume re-sends any lost in flight
   netSend({ t: 'ev', r: netRunId, k, op, a });
 }

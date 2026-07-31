@@ -635,16 +635,18 @@ function initGames(api) {
             if (y < innerTop || y > innerBottom || x < innerLeft || x > innerRight) grid[y][x] = '\u2588';
           }
         }
-        grid[food.y][food.x] = '*';
+        // live frame renders via innerHTML so the head/food glow (generated
+        // chars only \u2014 the fixed halMsg strings are HAL's, never the player's)
+        grid[food.y][food.x] = '<span class="gfood">*</span>';
         const obsChar = api.godmodeUnlocked && halSnakeMode === 2 ? (bladeAngle === 0 ? '+' : 'x') : '\u2593';
         halObs.forEach(o => { if (o.x >= 0 && o.x < COLS && o.y >= 0 && o.y < ROWS) grid[o.y][o.x] = obsChar; });
         snake.forEach((s, i) => {
           if (s.x >= 0 && s.x < COLS && s.y >= 0 && s.y < ROWS)
-            grid[s.y][s.x] = i === 0 ? '@' : 'o';
+            grid[s.y][s.x] = i === 0 ? '<span class="ghead">@</span>' : 'o';
         });
 
         const top = '+' + '-'.repeat(COLS) + '+';
-        screen.textContent =
+        screen.innerHTML =
           ' SCORE: ' + String(score).padStart(3, '0') + '\n' +
           ' ' + top + '\n' +
           grid.map(row => ' |' + row.join('') + '|').join('\n') + '\n' +
@@ -897,7 +899,8 @@ function initGames(api) {
         const grid = Array.from({length: H}, () => Array(W).fill(' '));
         for (let y = 0; y < H; y++) if (y % 2 === 0) grid[y][Math.floor(W/2)] = ':';
         const bx = Math.round(ballX), by = Math.round(ballY);
-        if (bx >= 0 && bx < W && by >= 0 && by < H) grid[by][bx] = 'o';
+        // ball glows (innerHTML frame — generated chars only, see snake/2048)
+        if (bx >= 0 && bx < W && by >= 0 && by < H) grid[by][bx] = '<span class="gball">o</span>';
         for (let i = 0; i < PAD_H; i++) {
           if (leftY+i  >= 0 && leftY+i  < H) grid[leftY+i][0]   = '█';
           if (rightY+i >= 0 && rightY+i < H) grid[rightY+i][W-1] = '█';
@@ -906,7 +909,7 @@ function initGames(api) {
         const scoreLine = api.godmodeUnlocked
           ? (() => { const l=sidesSwitched?`HAL: ${lScore}`:`ian: ${lScore}`, r=sidesSwitched?`ian: ${rScore}`:`HAL: ${rScore}`, sp=W+2-l.length-r.length-2, h=Math.floor(sp/2); return ` ${l}${' '.repeat(h)}vs${' '.repeat(sp-h)}${r}`; })()
           : ` ${lScore}${' '.repeat(Math.floor(W/2)-1)}vs${' '.repeat(Math.floor(W/2)-1)}${rScore}`;
-        screen.textContent =
+        screen.innerHTML =
           scoreLine + '\n' +
           '+' + '-'.repeat(W) + '+\n' +
           grid.map(r => '|' + r.join('') + '|').join('\n') + '\n' +
@@ -1292,15 +1295,20 @@ function initGames(api) {
           scroll();
           return;
         }
+        // live board renders via innerHTML so tiles can carry the classic
+        // amber→gold color ramp (.t2048-* in style.css). Safe: every character
+        // is generated (numbers + box drawing), never user input.
         const cell = (v, r, c) => {
           const s = !v ? '' : (lockedMovesLeft > 0 && r === lockedR && c === lockedC) ? `*${v}*` : String(v);
           const p = Math.floor((6 - s.length) / 2);
-          return ' '.repeat(p) + s + ' '.repeat(6 - p - s.length);
+          const pad1 = ' '.repeat(p), pad2 = ' '.repeat(6 - p - s.length);
+          if (!v) return pad1 + s + pad2;
+          return pad1 + `<span class="t2048-${Math.min(v, 2048)}">${s}</span>` + pad2;
         };
         const div = '├──────┼──────┼──────┼──────┤';
         const rows = grid.map((row, r) => '│' + row.map((v, c) => cell(v, r, c)).join('│') + '│');
         const worst = api.godmodeUnlocked ? worstDir() : null;
-        screen.textContent =
+        screen.innerHTML =
           ` [←↑↓→] move   [q] quit\n` +
           ` SCORE: ${score}   BEST: ${best}\n` +
           (worst ? ` HAL: I recommend ${worst}\n` : '\n') + '\n' +

@@ -2,99 +2,22 @@
 
 // Boot smoke test.
 //
-// The lib/ helpers have unit tests, but app.js (~4,600 lines) and the lazy chunks
-// have none — and because app.js is a single classic script with no IIFE (its
-// top-level declarations share one global lexical scope), a typo or a stray reference
-// anywhere in the file is a load-time ReferenceError that linting cannot catch. This
-// test loads the real index.html + the real script chain in a jsdom DOM, runs boot(),
-// and asserts the terminal actually comes up and dispatches a command — the class of
-// breakage that "it parses" and "it lints" both miss.
+// The lib/ helpers have unit tests, but app.js (~4,600 lines) is a single
+// classic script with no IIFE (its top-level declarations share one global
+// lexical scope), so a typo or a stray reference anywhere in the file is a
+// load-time ReferenceError that linting cannot catch (no-undef is deliberately
+// off for app.js). This loads the real index.html + the real script chain in a
+// jsdom DOM (test/helpers/boot-page.js), runs boot(), and asserts the terminal
+// actually comes up and dispatches a command — the class of breakage that
+// "it parses" and "it lints" both miss. Deeper command behavior is covered by
+// app-commands.test.js on the same harness.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { JSDOM, VirtualConsole } = require('jsdom');
-
-const ROOT = path.join(__dirname, '..');
-const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
-
-// Scripts in the exact order index.html loads them: the lib helpers define globals
-// app.js reads, then app.js itself.
-const SCRIPTS = [
-  'lib/codec.js',
-  'lib/timing.js',
-  'lib/text.js',
-  'lib/rng.js',
-  'lib/shell.js',
-  'app.js',
-];
-
-// Browser APIs jsdom doesn't implement that app.js touches at load time. app.js already
-// feature-guards matchMedia / AudioContext / speechSynthesis (so leaving those undefined
-// exercises the real graceful-degradation paths); these are the few it uses unguarded.
-function installShims(window) {
-  // `new Audio(...)` runs at module scope (e.g. the sans voice clip); needs to construct
-  // without a real audio backend. Arbitrary property assignment (volume/loop/onended/…)
-  // works because it's a plain class instance.
-  window.Audio = class {
-    play() {
-      return Promise.resolve();
-    }
-    pause() {}
-    load() {}
-    addEventListener() {}
-    removeEventListener() {}
-  };
-  // Network is unavailable in the test; app.js fetches (e.g. hal_timing.json) are all
-  // `.catch()`-guarded, so a rejecting fetch exercises the same path as an offline visitor.
-  window.fetch = () => Promise.reject(new Error('offline (smoke test)'));
-  // Canvas is only used by games / the share card (never at boot), but stub getContext so
-  // any incidental canvas creation doesn't emit jsdom "Not implemented" errors.
-  if (window.HTMLCanvasElement) {
-    window.HTMLCanvasElement.prototype.getContext = () => null;
-  }
-}
-
-// Build a jsdom DOM, run the real scripts in load order, and wait for boot() to finish.
-async function boot() {
-  const html = read('index.html');
-
-  // Surface genuine in-page script errors as test failures; ignore the resource-load
-  // chatter for the external <script src> tags (we run the local files ourselves below).
-  const errors = [];
-  const virtualConsole = new VirtualConsole();
-  virtualConsole.on('jsdomError', (e) => errors.push(e));
-
-  const dom = new JSDOM(html, {
-    url: 'https://ianclaird.com/', // gives localStorage a real origin
-    runScripts: 'dangerously', // execute inline scripts we inject
-    pretendToBeVisual: true, // provides requestAnimationFrame (scroll() needs it)
-    resources: undefined, // do NOT fetch the external <script src> tags
-    virtualConsole,
-  });
-
-  const { window } = dom;
-  installShims(window);
-
-  // Inject each file as an inline classic script so it runs in the shared global scope,
-  // exactly like the browser: function declarations land on window, const/let stay lexical.
-  for (const src of SCRIPTS) {
-    const el = window.document.createElement('script');
-    el.textContent = read(src);
-    window.document.body.appendChild(el);
-  }
-
-  // app.js auto-calls boot() at the end, but it isn't awaited there; call it again and
-  // await this promise so the assertions run after the terminal is fully up.
-  assert.equal(typeof window.boot, 'function', 'boot() should be a global function');
-  await window.boot();
-
-  return { dom, window, errors };
-}
+const { bootPage } = require('./helpers/boot-page');
 
 test('the page loads and boots without throwing', async (t) => {
-  const { dom, window, errors } = await boot();
+  const { dom, window, errors } = await bootPage();
   t.after(() => dom.window.close()); // stop jsdom timers (e.g. the 60s egg-nudge auto-hide)
 
   assert.deepEqual(
@@ -124,7 +47,7 @@ test('the page loads and boots without throwing', async (t) => {
 });
 
 test('the help command dispatches and prints the command list', async (t) => {
-  const { dom, window } = await boot();
+  const { dom, window } = await bootPage();
   t.after(() => dom.window.close());
 
   window.submitCommand('help');
@@ -138,7 +61,7 @@ test('the help command dispatches and prints the command list', async (t) => {
 test('terminal output is mirrored to the screen-reader live region', async (t) => {
   // Guards the accessibility wiring: completed lines must reach #a11y-live so assistive
   // tech announces them.
-  const { dom, window } = await boot();
+  const { dom, window } = await bootPage();
   t.after(() => dom.window.close());
 
   const live = window.document.getElementById('a11y-live');
@@ -150,7 +73,7 @@ test('terminal output is mirrored to the screen-reader live region', async (t) =
 });
 
 test('the global error boundary recovers a wedged terminal', async (t) => {
-  const { dom, window } = await boot();
+  const { dom, window } = await bootPage();
   t.after(() => dom.window.close());
 
   // Simulate the failure mode the boundary exists for: a game has hidden the input row,

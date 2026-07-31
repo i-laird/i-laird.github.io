@@ -67,6 +67,13 @@ function initDesktop(api) {
           icon.innerHTML = `<span style="font-size:30px;line-height:1.2">${data.emoji}</span>`+
             `<span style="font-size:11px;text-shadow:1px 1px 3px #000,0 0 6px #000;word-break:break-word">${data.label}</span>`;
 
+          // hover highlight (lighter than the click-select state)
+          icon.addEventListener('mouseover', () => {
+            if (!icon.dataset.sel) { icon.style.background = 'rgba(49,106,197,0.25)'; icon.style.borderColor = 'rgba(200,220,255,0.35)'; }
+          });
+          icon.addEventListener('mouseout', () => {
+            if (!icon.dataset.sel) { icon.style.background = ''; icon.style.borderColor = 'transparent'; }
+          });
           let lastClick = 0;
           icon.addEventListener('click', e => {
             e.stopPropagation();
@@ -187,8 +194,21 @@ function initDesktop(api) {
         let menuOpen = false;
         function toggleMenu(open) {
           menuOpen = open !== undefined ? open : !menuOpen;
-          menu.style.display = menuOpen ? 'block' : 'none';
+          if (!menuOpen) { menu.style.display = 'none'; return; }
+          menu.style.display = 'block';
+          if (!api.reduceMotion) {   // the quick XP slide-up
+            menu.style.transition = 'none';
+            menu.style.transform = 'translateY(10px)';
+            menu.style.opacity = '0';
+            requestAnimationFrame(() => {
+              menu.style.transition = 'transform 0.14s ease-out, opacity 0.14s ease-out';
+              menu.style.transform = 'translateY(0)';
+              menu.style.opacity = '1';
+            });
+          }
         }
+        startBtn.addEventListener('mouseover', () => { startBtn.style.filter = 'brightness(1.12)'; });
+        startBtn.addEventListener('mouseout',  () => { startBtn.style.filter = ''; });
         startBtn.addEventListener('click', e => { e.stopPropagation(); toggleMenu(); });
         xp.addEventListener('click', () => toggleMenu(false));
 

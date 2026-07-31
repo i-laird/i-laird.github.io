@@ -118,13 +118,10 @@ const FIRE_R     = 215;   // fireball powerup: the flame front engulfs everythin
 const CHAMP_T    = 600;   // frames a summoned champion fights for (~10s)
 const TEXT_HOLD  = 1.9;   // banners & floating combat text linger this much longer
 const FADE_LEN   = 54;    // frames for the cut to the Star Wars corridor
-// run 10% faster when deployed; full speed when developing on localhost
-const SF_SPEED = (() => {
-  const h = location.hostname;
-  const local = h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '' ||
-                h.endsWith('.local') || location.protocol === 'file:';
-  return local ? 1 : 1.1;
-})();
+// One speed everywhere. This used to be 1.0 on localhost / 1.1 deployed, which
+// meant dev playtesting always ran a 10% slower game than players got and the
+// tick-based `swift` trophy demanded 10% less wall-time in production.
+const SF_SPEED = 1.1;
 let simAcc = 0;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 

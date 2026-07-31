@@ -103,7 +103,7 @@ function startWatch(item) {
       const rd = d && d.replay;
       // v must match the CURRENT sim-balance version — an older recording would
       // re-simulate under new rules and play back a different run than it claims
-      if (!rd || rd.v !== 4 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+      if (!rd || rd.v !== 5 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
       startReplay(rd, item.entry);
     })
     .catch(() => { watchSel = null; watchErr = 'replay unavailable — recorded on an older build, or expired'; });

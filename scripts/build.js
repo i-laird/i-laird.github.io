@@ -194,7 +194,14 @@ function build() {
     'lib/rng.js',
     'lib/shell.js',
   ]) {
+    const before = html;
     html = html.replace(new RegExp(`\\s*<script defer src="${lib}"></script>`), '');
+    // a formatting change to the tag would make the replace silently no-op,
+    // shipping a dist/index.html that 404s on lib/ — fail the build instead
+    if (html === before)
+      throw new Error(
+        `build: expected to remove the <script> tag for ${lib} from index.html but found no match — did the tag format change?`
+      );
   }
   fs.writeFileSync(path.join(DIST, 'index.html'), html);
 

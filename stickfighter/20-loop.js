@@ -494,7 +494,7 @@ function loop() {
         let n = 0;
         for (const e of enemies) {
           // the great bosses shrug off the cold; everything else freezes solid
-          if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+          if (isGreatBoss(e)) continue;
           if (Math.hypot(e.x - ph.x, e.y - ph.y) < FROST_R) { e.frozen = FROST_DUR; e.vx = 0; e.vy = 0; n++; }
         }
         sparks.push({ x: pu.x, y: pu.y - 36, t: 28, color: '#8fd8ff', txt: n ? 'FROZEN x' + n : 'frost nova' });
@@ -516,7 +516,7 @@ function loop() {
           for (const e of enemies) {
             if (e.dead || hit.has(e)) continue;
             // the great bosses are too mighty to be chained — grunts only
-            if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+            if (isGreatBoss(e)) continue;
             const dd = Math.hypot(e.x - from.x, e.y - from.y);
             if (dd < bestD) { bestD = dd; best = e; }
           }

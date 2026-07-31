@@ -1,8 +1,28 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Self-hosted terminal font (assets/fonts/, OFL — see OFL.txt there). The FULL
+   charset build, not a latin subset: the ASCII banners, the CONFIRM box, and the
+   sans battle draw box-drawing/block glyphs (U+2500–259F), and a subset font
+   would push those to a fallback with different advance widths — misaligning
+   every piece of character art. font-display: swap so first paint never blocks. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('assets/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('assets/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+}
+
 :root {
   --green:       #00ff41;
-  --green-dim:   #00802b;
+  --green-dim:   #00993a; /* was #00802b — below AA contrast for 15px text on --bg */
   --green-bright:#7fff8f;
   --blue:        #4fc3f7;
   --red:         #ff5555;
@@ -16,7 +36,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--green);
-  font-family: 'Courier New', Courier, monospace;
+  font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
   font-size: 15px;
   line-height: 1.55;
 }
@@ -233,12 +253,22 @@ body.crt #cmd {
   align-items: center;
   gap: 6px;
   user-select: none;
+  font-family: inherit; /* it's a native <button> now — undo UA button chrome */
   font-size: 13px;
   color: #555;
+  background: none;
+  border: 0;
   padding: 2px 6px;
   border-radius: 4px;
 }
 #ach-badge .egg-icon { font-size: 13px; }
+
+/* keyboard focus for the titlebar chrome (native <button>s styled flat) */
+#ach-badge:focus-visible,
+#sound-toggle:focus-visible {
+  outline: 2px solid var(--green, #00ff41);
+  outline-offset: 2px;
+}
 
 #sound-toggle {
   cursor: pointer;
@@ -246,8 +276,11 @@ body.crt #cmd {
   align-items: center;
   gap: 7px;
   user-select: none;
+  font-family: inherit; /* it's a native <button> now — undo UA button chrome */
   font-size: 13px;
   color: #555;
+  background: none;
+  border: 0;
   padding: 2px 4px;
   border-radius: 4px;
 }
@@ -294,9 +327,59 @@ body.crt #cmd {
   scroll-behavior: smooth;
 }
 
-.terminal::-webkit-scrollbar { width: 6px; }
-.terminal::-webkit-scrollbar-track { background: transparent; }
-.terminal::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 3px; }
+/* Themed scrollbars everywhere (terminal, overlays, popups) — ride the theme
+   variables, so they go red in HAL mode and bone-white in sans mode for free. */
+* { scrollbar-width: thin; scrollbar-color: var(--green-dim) transparent; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 3px; }
+
+/* Themed text selection — same deal, follows the active mode's palette. */
+::selection { background: var(--green); color: var(--bg); }
+
+/* Chunk-load feedback (moduleLoadLine in app.js): three staggered dots. */
+.mod-dots i { font-style: normal; opacity: 0; animation: mod-dot 1.2s infinite; }
+.mod-dots i:nth-child(2) { animation-delay: 0.2s; }
+.mod-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes mod-dot {
+  0%, 60%, 100% { opacity: 0; }
+  20%, 50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mod-dots i { animation: none; opacity: 1; }
+}
+
+/* ── Shell-game accents (live frames render via innerHTML; generated chars only) ── */
+.ascii .ghead { color: var(--green-bright); text-shadow: 0 0 6px var(--green); }
+.ascii .gball { color: var(--green-bright); text-shadow: 0 0 7px var(--green); }
+.ascii .gfood { color: #ffd24d; text-shadow: 0 0 6px rgba(255, 210, 77, 0.7); }
+
+/* 2048 — the classic amber→gold ramp, tuned for the dark terminal. Higher
+   tiles pick up a phosphor glow; the ramp reads even under the CRT bloom. */
+.t2048-2    { color: #c9c9b6; }
+.t2048-4    { color: #e0d2a4; }
+.t2048-8    { color: #ffce63; }
+.t2048-16   { color: #ffb648; }
+.t2048-32   { color: #ff9a3d; }
+.t2048-64   { color: #ff7733; }
+.t2048-128  { color: #ffd24d; text-shadow: 0 0 5px rgba(255, 210, 77, 0.55); }
+.t2048-256  { color: #ffc31e; text-shadow: 0 0 6px rgba(255, 195, 30, 0.6); }
+.t2048-512  { color: #ffab00; text-shadow: 0 0 7px rgba(255, 171, 0, 0.65); }
+.t2048-1024 { color: #ff8f00; text-shadow: 0 0 8px rgba(255, 143, 0, 0.7); }
+.t2048-2048 { color: #fff176; text-shadow: 0 0 10px rgba(255, 241, 118, 0.85); }
+
+/* Idle screensaver (ssStart in app.js). Sits under the CRT glass layers
+   (z 99000 < 99997) so the scanline/vignette fiction plays over the stars. */
+#screensaver {
+  position: fixed;
+  inset: 0;
+  z-index: 99000;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  cursor: none;
+}
+#screensaver.on { opacity: 1; }
 
 /* ── Output lines ── */
 .line { display: block; white-space: pre-wrap; word-break: break-word; margin: 0; }
@@ -417,7 +500,7 @@ pre.ascii {
 .p-user { color: var(--green-bright); }
 .p-sep  { color: #444; }
 .p-host { color: var(--blue); }
-.p-path { color: #555; }
+.p-path { color: #8a8a8a; } /* was #555 — below AA on --bg */
 .p-sym  { color: var(--green); }
 
 #cmd {
@@ -428,6 +511,7 @@ pre.ascii {
   color: var(--green);
   font: inherit;
   caret-color: var(--green);
+  caret-shape: block; /* real-terminal block cursor where supported; themed caret elsewhere */
   min-width: 0;
 }
 
@@ -450,7 +534,7 @@ pre.ascii {
   border-radius: 4px;
   font: inherit;
   font-size: 16px;
-  transition: background .12s, color .12s, border-color .12s;
+  transition: background .12s, color .12s, border-color .12s, transform .12s ease, box-shadow .12s ease;
   background: transparent;
   cursor: pointer;
 }
@@ -459,6 +543,8 @@ pre.ascii {
   background: var(--green);
   color: var(--bg);
   border-color: var(--green);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
 }
 
 .card svg { flex-shrink: 0; width: 17px; height: 17px; }
@@ -536,7 +622,7 @@ pre.ascii {
   background: radial-gradient(ellipse at 50% 42%, #10152b 0%, #090c1a 55%, #04050c 100%);
   perspective: 1050px;
   perspective-origin: 50% 50%;
-  font-family: 'Courier New', Courier, monospace;
+  font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
 }
 #room-viewport::after {                    /* camera-lens vignette over the whole shot */
   content: '';
@@ -1033,7 +1119,15 @@ pre.ascii {
   width: 1300px; height: 640px;
   transform: translate(-50%, -50%) translate3d(0, 453px, 60px) rotateX(90deg);
   background: radial-gradient(ellipse 50% 60% at 50% 32%, rgba(0, 255, 65, .22), transparent 72%);
+  animation: rm-crtbreathe 4.6s ease-in-out infinite;   /* a real tube's light isn't steady */
 }
+@keyframes rm-crtbreathe {
+  0%, 100% { opacity: 0.92; }
+  38%      { opacity: 1; }
+  62%      { opacity: 0.85; }
+}
+/* lamp on: warm light washes the desk, so the tube glow recedes */
+.room-lit .rm-deskglow { animation: none; opacity: 0.55; }
 .rm-mon-back {
   width: 1004px; height: 810px;
   transform: translate(-50%, -50%) translate3d(0, 0, -438px);
@@ -1943,6 +2037,7 @@ body.room-view #egg-nudge { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   #room-world, #room-par { transition: none !important; }   /* cut, don't fly */
+  .rm-deskglow,
   .rm-motes i, .rm-lava i, .rm-hal-eye, .rm-moon, .rm-wallglow,
   .rm-led, .rm-tw-led, .rm-mug::after, .rm-door-light, .rm-bed-top::after,
   .rm-hall-left, .rm-hall-right, .rm-hall-left2, .rm-hall-right2,
@@ -1984,6 +2079,17 @@ body.room-view #egg-nudge { display: none; }
   margin: 14px 0;
   background: rgba(255, 255, 255, 0.015);
   transition: border-color .15s;
+}
+
+/* real screenshot of the shipped project, atop its index card */
+.proj-shot {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 2px 0 14px;
 }
 .proj-card:hover { border-left-color: var(--green); }
 .proj-title { font-size: 17px; color: var(--green-bright); letter-spacing: .02em; }

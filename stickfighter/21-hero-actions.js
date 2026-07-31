@@ -450,7 +450,7 @@ function castNova(h) {
   let n = 0;
   for (const e of enemies) {
     // same immunities as the frost powerup — the great bosses shrug off the cold
-    if (e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith') continue;
+    if (isGreatBoss(e)) continue;
     if (untouchable(e)) continue;
     if (Math.hypot(e.x - h.x, e.y - h.y) < NOVA_R) { e.frozen = 240; e.vx = 0; e.vy = 0; n++; }  // briefer than the powerup's FROST_DUR
   }

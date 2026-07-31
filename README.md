@@ -27,22 +27,27 @@ python3 -m http.server 8000   # then open http://localhost:8000
 
 | Path              | What it is                                                                                                         |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `index.html`      | Bare markup (~100 lines); all behavior is loaded scripts.                                                          |
+| `index.html`      | Bare markup (~140 lines); all behavior is loaded scripts.                                                          |
 | `style.css`       | The whole stylesheet. Theme colors are CSS variables on `:root`.                                                   |
-| `app.js`          | The terminal: commands, HAL mode, dispatch.                                                                        |
-| `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~430 KB); generated from `stickfighter/` by `npm run assemble`. |
+| `app.js`          | The terminal: commands, HAL mode, dispatch, the projects overlay.                                                  |
+| `stickfighter.js` | "Stick Fighter 2000," lazy-loaded on first launch (~550 KB); generated from `stickfighter/` by `npm run assemble`. |
 | `stickfighter/`   | The game's source-of-truth part files (state, rendering, netplay, bosses, …).                                      |
 | `games.js`        | The four shell games (racecar/snake/pong/2048), lazy-loaded.                                                       |
 | `sans.js`         | The sans easter egg (command set + battle), lazy-loaded.                                                           |
 | `chess.js`        | Chess (Stockfish-backed), lazy-loaded.                                                                             |
+| `halllm.js`       | The experimental LLM HAL ("escape the terminal"), lazy-loaded.                                                     |
+| `desktop.js`      | The `gui` XP desktop (also hosts the Stick Fighter loader), lazy-loaded.                                           |
+| `achui.js`        | The achievements overlay + share card, lazy-loaded.                                                                |
+| `room.js`         | The `room` CSS-3D bedroom (walkable, with a live HAL phone line), lazy-loaded.                                     |
 | `sw.js`           | Service worker: repeat-visit caching (GH Pages caps max-age).                                                      |
-| `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text).                                                         |
-| `test/`           | Node test-runner suites for `lib/`.                                                                                |
-| `assets/`         | Audio, images, and the Open Graph card.                                                                            |
+| `lib/`            | Pure, unit-tested helpers (codec, timing alignment, text, RNG, shell parsers).                                     |
+| `test/`           | Node test-runner suites: `lib/` units, boot smoke, chunk isolation, Stick Fighter determinism/netplay, compliance. |
+| `assets/`         | Audio, fonts, images, and the Open Graph card.                                                                     |
 
 ### A note on architecture
 
-`app.js` and the lazy chunks (`stickfighter.js` / `games.js` / `sans.js` / `chess.js`) are
+`app.js` and the eight lazy chunks (`stickfighter.js` / `games.js` / `sans.js` /
+`chess.js` / `halllm.js` / `desktop.js` / `achui.js` / `room.js`) are
 **classic scripts** — not ES modules, not wrapped in an IIFE. This is
 deliberate: inline `onclick` handlers in `index.html` call top-level functions
 as globals, and each lazily-loaded chunk hands app.js a single global entry

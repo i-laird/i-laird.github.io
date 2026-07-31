@@ -142,7 +142,9 @@ function initChess(api) {
         api.awaitingInput = inp => {
           if (inp.toLowerCase() === 'r') { api.awaitingInput = null; blank(); startChess(); }
           else if (inp.toLowerCase() === 'q') { endGame(); }
-          else { api.awaitingInput = arguments.callee; }
+          // anything else: keep waiting — submitCommand leaves awaitingInput set,
+          // so no reassignment is needed (arguments.callee in an arrow resolved to
+          // the enclosing checkOver and re-ran the whole endgame block)
         };
         return true;
       }

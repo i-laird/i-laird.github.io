@@ -28,7 +28,7 @@
 // browsers re-check the SW script on navigation, so an updated worker takes
 // over within minutes of a deploy.
 
-const VERSION = 'v1';
+const VERSION = 'v2'; // v2: sim version 4→5 (a stale cached stickfighter.js would fail the netplay handshake)
 const STATIC_CACHE = `ilaird-static-${VERSION}`;
 const AUDIO_CACHE = `ilaird-audio-${VERSION}`;
 

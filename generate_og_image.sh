@@ -2,25 +2,36 @@
 # Regenerates assets/og_image.png — the 1200×630 Open Graph card shown when the
 # site is linked on social platforms. Self-contained (does not load the site);
 # update the canvas drawing below if the design or easter-egg count changes.
-# Requires Google Chrome.
+# Requires Google Chrome. Uses the site's own JetBrains Mono (assets/fonts/)
+# so the card matches the terminal exactly.
 set -e
 cd "$(dirname "$0")"
 
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 TMP_HTML="$(mktemp -t og_image).html"
 
-cat > "$TMP_HTML" << 'EOF'
+# head: unquoted heredoc so $PWD resolves the font paths (no JS in this part)
+cat > "$TMP_HTML" << EOF
 <!DOCTYPE html>
 <html>
+<head><style>
+@font-face { font-family: 'JetBrains Mono'; src: url('file://$PWD/assets/fonts/JetBrainsMono-Regular.woff2') format('woff2'); font-weight: 400; }
+@font-face { font-family: 'JetBrains Mono'; src: url('file://$PWD/assets/fonts/JetBrainsMono-Bold.woff2') format('woff2'); font-weight: 700; }
+</style></head>
 <body style="margin:0">
+EOF
+
+# body: quoted heredoc — the JS template literals must not be shell-expanded
+cat >> "$TMP_HTML" << 'EOF'
 <canvas id="c" width="1200" height="630"></canvas>
 <script>
   const ctx = document.getElementById('c').getContext('2d');
-  const MONO = "'Courier New', Courier, monospace";
-  const GREEN = '#00ff41', DIM = '#00802b', BRIGHT = '#7fff8f', RED = '#ff5555',
+  const MONO = "'JetBrains Mono', 'Courier New', Courier, monospace";
+  const GREEN = '#00ff41', DIM = '#00993a', BRIGHT = '#7fff8f', RED = '#ff5555',
         WHITE = '#d0d0d0', BG = '#0a0e0a', TBAR = '#141814', BORDER = '#1e261e';
   const CW = 1200, CH = 630;
 
+  function draw() {
   // backdrop + window
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, CW, CH);
@@ -41,7 +52,7 @@ cat > "$TMP_HTML" << 'EOF'
     ctx.beginPath(); ctx.arc(64 + dx, wy + 32, 10, 0, Math.PI * 2);
     ctx.fillStyle = c; ctx.fill();
   });
-  ctx.fillStyle = '#555';
+  ctx.fillStyle = '#666';
   ctx.font = `22px ${MONO}`;
   ctx.textAlign = 'center';
   ctx.fillText('ian@portfolio — bash — 80×24', CW / 2, wy + 40);
@@ -92,19 +103,27 @@ cat > "$TMP_HTML" << 'EOF'
   // footer
   ctx.fillStyle = DIM;
   ctx.font = `26px ${MONO}`;
-  ctx.fillText('5 games · 46 easter eggs · 1 paranoid AI   →   ianclaird.com', 72, 572);
+  ctx.fillText('6 games · 46 easter eggs · 1 paranoid AI   →   ianclaird.com', 72, 572);
 
   // scanlines
   ctx.fillStyle = 'rgba(0,0,0,0.13)';
   for (let y = wy; y < wy + wh; y += 4) ctx.fillRect(wx, y, ww, 2);
   ctx.restore();
+  }
+
+  // draw only after the webfont is usable so the canvas doesn't rasterize a fallback
+  Promise.all([
+    document.fonts.load(`26px ${MONO}`),
+    document.fonts.load(`bold 60px ${MONO}`),
+  ]).then(draw, draw);
 </script>
 </body>
 </html>
 EOF
 
 "$CHROME" --headless --disable-gpu --hide-scrollbars \
-  --window-size=1200,630 --virtual-time-budget=2000 \
+  --allow-file-access-from-files \
+  --window-size=1200,630 --virtual-time-budget=4000 \
   --screenshot="assets/og_image.png" "file://$TMP_HTML" 2>/dev/null
 
 rm "$TMP_HTML"

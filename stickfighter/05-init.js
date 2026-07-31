@@ -145,7 +145,7 @@ function init() {
     // change (damage, speeds, AI, economy), or old replays re-simulate under new
     // rules and silently diverge from their recorded scores.
     recEv = []; recLastM = -1; recOverflow = false;
-    recHdr = { v: 4, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
+    recHdr = { v: 5, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
                up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
   }
   player.dashCharges = up.dashMax; player.rechargeT = 0;

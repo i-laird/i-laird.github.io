@@ -1,6 +1,12 @@
 // ── combat — hit resolution: knockback, killEnemy, strike/downHero/reviveHero, endRun ──
+// The great bosses (and the Nine) shrug off every area blast — no chip damage,
+// no shove, no freeze, no chain. One predicate so no exclusion site can drift.
+function isGreatBoss(e) {
+  return e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' || e.type === 'dio' || e.type === 'wraith';
+}
 function knockback(cx, cy, killR, push, stun) {
   for (const e of enemies) {
+    if (isGreatBoss(e)) continue;   // matches the frost/chain exclusions — bosses only fall to real strikes
     const dx = e.x - cx, dy = e.y - cy, d = Math.hypot(dx, dy) || 1;
     if (killR > 0 && d < killR) {
       if (!e.hp || (e.hp -= 2) <= 0) { killEnemy(e); continue; }
@@ -9,7 +15,13 @@ function knockback(cx, cy, killR, push, stun) {
     e.x = clamp(e.x + dx / d * p, -60, GW + 60);
     e.y = clamp(e.y + dy / d * p, -60, GH + 60);
     e.stun = stun; e.vx = 0; e.vy = 0;
-    if (e.mode) { e.mode = e.type === 'archer' ? 'approach' : 'stalk'; e.st = 70; }
+    // only reset brains that actually have the target state — 'stalk' is a
+    // wolf/ogre mode and 'approach' an archer mode; stomping it onto troopers
+    // (mid-march), guards, or a boss left them wedged in a state their AI
+    // chain has no branch for (DIO froze for the rest of the fight)
+    if (e.mode === undefined) continue;
+    if (e.type === 'archer')                        { e.mode = 'approach'; e.st = 70; }
+    else if (e.type === 'wolf' || e.type === 'ogre') { e.mode = 'stalk';    e.st = 70; }
   }
   enemies = enemies.filter(e => !e.dead);
 }
@@ -56,7 +68,7 @@ function killEnemy(e) {
     let n = 0;
     for (const o of enemies) {
       if (o === e || untouchable(o) || o.frozen > 0) continue;
-      if (o.type === 'witchking' || o.type === 'vader' || o.type === 'sidious' || o.type === 'dio' || o.type === 'wraith') continue;
+      if (isGreatBoss(o)) continue;
       if (Math.hypot(o.x - e.x, o.y - e.y) < 70) { o.frozen = 180; o.vx = 0; o.vy = 0; n++; }
     }
     if (n) sparks.push({ x: e.x, y: e.y - 30, t: 18, color: '#8fd8ff', txt: 'SHATTER' });

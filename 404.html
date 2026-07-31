@@ -1,25 +1,40 @@
----
-permalink: /404.html
-layout: default
----
-
-<style type="text/css" media="screen">
-  .container {
-    margin: 10px auto;
-    max-width: 600px;
-    text-align: center;
-  }
-  h1 {
-    margin: 30px 0;
-    font-size: 4em;
-    line-height: 1;
-    letter-spacing: -1px;
-  }
-</style>
-
-<div class="container">
-  <h1>404</h1>
-
-  <p><strong>Page not found :(</strong></p>
-  <p>The requested page could not be found.</p>
-</div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 — Ian Laird</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2016%2016'%3E%3Crect%20width%3D'16'%20height%3D'16'%20rx%3D'3'%20fill%3D'%230a0e0a'%2F%3E%3Crect%20x%3D'4'%20y%3D'4'%20width%3D'8'%20height%3D'9'%20fill%3D'%2300ff41'%2F%3E%3C%2Fsvg%3E">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0a0e0a;
+      color: #00ff41;
+      font-family: 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 4em;
+      line-height: 1;
+      letter-spacing: -1px;
+    }
+    p { margin: 6px 0; }
+    .dim { color: #00802b; }
+    a { color: #6db3f2; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>404</h1>
+    <p>bash: page: No such file or directory</p>
+    <p class="dim">The requested page could not be found.</p>
+    <p><a href="/">return to the terminal</a></p>
+  </main>
+</body>
+</html>

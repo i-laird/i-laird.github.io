@@ -32,6 +32,21 @@
     if (_faultActive) return;
     _faultActive = true;
     setTimeout(() => { _faultActive = false; }, 1500); // re-arm after the dust settles
+    // Unwedge the STATE MACHINE, not just the prompt. A throw inside an
+    // awaitingInput callback would otherwise re-run the same broken callback on
+    // every subsequent Enter, and a crash mid-mode would leave the dispatcher
+    // routing typed input into a broken chunk — with the finale idle-poll
+    // silently blocked forever. Separate try so a failure here (e.g. this
+    // firing before the script finished loading) can't stop the prompt rescue
+    // below.
+    try {
+      awaitingInput = null;
+      silentInput = false;
+      if (halMode || sansMode || sansBattleActive) {
+        sansBattleActive = false;
+        restoreNormal();   // clears halMode/halLLM/halLLMBusy/sansMode + theme
+      }
+    } catch (e) { /* load-time fault: state vars may not exist yet */ }
     try {
       if (inputRow) inputRow.style.display = 'flex';
       if (typeof blank === 'function' && typeof line === 'function') {
@@ -375,7 +390,9 @@
   }
   function toggleAchievements() {
     if (eggNudgeDismiss) eggNudgeDismiss(true); // they found it — job done
+    let busy = null;
     if (!achLoading) {
+      if (typeof initAchUI !== 'function') busy = moduleLoadLine('achievements panel');
       achLoading = new Promise((resolve, reject) => {
         if (typeof initAchUI === 'function') { resolve(); return; }
         const s = document.createElement('script');
@@ -384,7 +401,8 @@
         document.head.appendChild(s);
       }).then(() => { if (!achHandlers) achHandlers = initAchUI(achBridge()); });
     }
-    achLoading.then(() => achHandlers.toggle()).catch(() => {
+    achLoading.then(() => { if (busy) busy(); achHandlers.toggle(); }).catch(() => {
+      if (busy) busy();
       achLoading = null; achHandlers = null;
       blank();
       line('error: could not load the achievements panel — check your connection and try again.', 'err');
@@ -416,6 +434,101 @@
     finaleArmed = false;
     runFinale();
   }
+
+  /* ── Idle screensaver — a CRT-era starfield after ~4 minutes of nothing ──
+     Gated like the finale (never over a game, a mode, an overlay, or pending
+     input — the hidden input row covers games/desktop/matrix) and skipped
+     entirely under reduced motion. Any key, click, or mouse move wakes it; the
+     waking keystroke is swallowed (capture + preventDefault) so it never types
+     into the prompt. It sits UNDER the CRT glass layers (z 99000 < 99997) so
+     the scanlines play over it — it's on the monitor, not in front of it.
+     Once `meet-hal` is unlocked, a familiar red eye drifts through the field. */
+  const SS_IDLE_MS = 4 * 60 * 1000;
+  let ssTimer = null, ssActive = false, ssLastMove = 0;
+  function ssBusy() {
+    return !!(awaitingInput || halMode || sansMode || sansBattleActive ||
+              inputRow.style.display === 'none' || achOverlayEl || projOverlayEl ||
+              roomActive || document.hidden);
+  }
+  function ssArm() {
+    clearTimeout(ssTimer);
+    ssTimer = setTimeout(ssStart, SS_IDLE_MS);
+  }
+  function ssStart() {
+    if (ssActive || reduceMotion || ssBusy()) { ssArm(); return; }
+    ssActive = true;
+    const cv = document.createElement('canvas');
+    cv.id = 'screensaver';
+    cv.width = window.innerWidth; cv.height = window.innerHeight;
+    document.body.appendChild(cv);
+    requestAnimationFrame(() => cv.classList.add('on'));   // fade the tube over
+    const ctx = cv.getContext('2d');
+    if (!ctx) { cv.remove(); ssActive = false; ssArm(); return; }   // jsdom / headless
+    const stars = Array.from({ length: 160 }, () => ({
+      x: Math.random() * 2 - 1, y: Math.random() * 2 - 1, z: Math.random() * 0.9 + 0.1,
+    }));
+    const eye = foundEggs.has('meet-hal') ? { t: Math.random() * 1000 } : null;
+    let raf;
+    const onResize = () => { cv.width = window.innerWidth; cv.height = window.innerHeight; };
+    window.addEventListener('resize', onResize);
+    function frame() {
+      const w = cv.width, h = cv.height, cx = w / 2, cy = h / 2;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      for (const s of stars) {
+        s.z -= 0.004;   // fly gently forward
+        if (s.z <= 0.02) { s.x = Math.random() * 2 - 1; s.y = Math.random() * 2 - 1; s.z = 1; }
+        const px = cx + (s.x / s.z) * cx * 0.9;
+        const py = cy + (s.y / s.z) * cy * 0.9;
+        if (px < 0 || px >= w || py < 0 || py >= h) continue;
+        const b = 1 - s.z;
+        ctx.fillStyle = 'rgba(0,255,65,' + (0.25 + b * 0.75).toFixed(3) + ')';
+        const r = Math.max(0.6, b * 2.4);
+        ctx.fillRect(px, py, r, r);
+      }
+      if (eye) {   // he is out here too, drifting between the stars
+        eye.t += 1 / 60;
+        const ex = cx + Math.sin(eye.t * 0.13) * cx * 0.6;
+        const ey = cy + Math.sin(eye.t * 0.094 + 1.7) * cy * 0.5;
+        const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, 26);
+        g.addColorStop(0, 'rgba(255,221,221,0.9)');
+        g.addColorStop(0.25, 'rgba(255,48,48,0.75)');
+        g.addColorStop(1, 'rgba(255,48,48,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(ex, ey, 26, 0, Math.PI * 2); ctx.fill();
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    frame();
+    const wake = (e) => {
+      if (e && e.cancelable) e.preventDefault();
+      if (e) e.stopPropagation();
+      document.removeEventListener('keydown', wake, true);
+      document.removeEventListener('pointerdown', wake, true);
+      document.removeEventListener('mousemove', wake, true);
+      window.removeEventListener('resize', onResize);
+      cancelAnimationFrame(raf);
+      cv.classList.remove('on');
+      setTimeout(() => cv.remove(), 650);
+      ssActive = false;
+      ssArm();
+      if (inputRow.style.display !== 'none') cmd.focus();
+    };
+    // attach a beat late so the input burst that armed the timer can't
+    // instantly wake what it just started
+    setTimeout(() => {
+      document.addEventListener('keydown', wake, true);
+      document.addEventListener('pointerdown', wake, true);
+      document.addEventListener('mousemove', wake, true);
+    }, 400);
+  }
+  document.addEventListener('keydown', () => { if (!ssActive) ssArm(); }, { capture: true, passive: true });
+  document.addEventListener('pointerdown', () => { if (!ssActive) ssArm(); }, { capture: true, passive: true });
+  document.addEventListener('mousemove', () => {
+    const now = Date.now();
+    if (now - ssLastMove > 1000) { ssLastMove = now; if (!ssActive) ssArm(); }
+  }, { passive: true });
+  ssArm();
 
   function redFlicker() {
     if (reduceMotion) return;  // no full-screen strobe for motion-sensitive users
@@ -1143,7 +1256,7 @@
     overlay.style.cssText = [
       'position:fixed', 'inset:0', 'z-index:9999',
       'background:#000', 'display:flex', 'align-items:center', 'justify-content:center',
-      'font-family:\'Courier New\',monospace', 'font-size:15px', 'color:#ff3030',
+      'font-family:\'JetBrains Mono\',\'Courier New\',monospace', 'font-size:15px', 'color:#ff3030',
     ].join(';');
 
     const box = document.createElement('pre');
@@ -1200,7 +1313,8 @@
         e.preventDefault();
         typed = typed.slice(0, -1);
         render();
-      } else if (e.key.length === 1) {
+      } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // leave browser shortcuts alone (Cmd+R, Cmd+C, …) — same rule as projKeyShield
         e.preventDefault();
         typed += e.key;
         render();
@@ -2222,6 +2336,22 @@
     scroll();
   }
 
+  /* One-line "loading …" feedback while a lazy chunk downloads. On a slow
+     connection the lazy loaders were dead silence between the command and the
+     content; a retro loading beat makes the fetch read as intentional. Only
+     shown when the chunk genuinely isn't loaded yet (the callers check), so a
+     warm cache never flashes it. Returns a remover. Dots animate via CSS
+     (.mod-dots — static under prefers-reduced-motion). */
+  function moduleLoadLine(label) {
+    const el = document.createElement('span');
+    el.className = 'line dim mod-load';
+    el.innerHTML = 'loading ' + label + '<span class="mod-dots"><i>.</i><i>.</i><i>.</i></span>';
+    out.appendChild(el);
+    announce('loading ' + label);
+    scroll();
+    return () => el.remove();
+  }
+
   /* ── Shell games (lazy-loaded) ──
      The four createGameShell games — racecar / snake / pong / 2048 (~1,400
      lines) — live in games.js and are fetched on demand the first time one is
@@ -2248,7 +2378,9 @@
     };
   }
   function launchGame(name) {
+    let busy = null;
     if (!gamesLoading) {
+      if (typeof initGames !== 'function') busy = moduleLoadLine('game module');
       gamesLoading = new Promise((resolve, reject) => {
         if (typeof initGames === 'function') { resolve(); return; }
         const s = document.createElement('script');
@@ -2257,7 +2389,8 @@
         document.head.appendChild(s);
       }).then(() => { if (!gamesHandlers) gamesHandlers = initGames(gamesBridge()); });
     }
-    gamesLoading.then(() => gamesHandlers[name]()).catch(() => {
+    gamesLoading.then(() => { if (busy) busy(); gamesHandlers[name](); }).catch(() => {
+      if (busy) busy();
       gamesLoading = null; gamesHandlers = null;
       blank();
       line('error: could not load the game module — check your connection and try again.', 'err');
@@ -2301,7 +2434,9 @@
     };
   }
   function launchChess() {
+    let busy = null;
     if (!chessLoading) {
+      if (typeof initChess !== 'function') busy = moduleLoadLine('chess module');
       chessLoading = new Promise((resolve, reject) => {
         if (typeof initChess === 'function') { resolve(); return; }
         const s = document.createElement('script');
@@ -2310,7 +2445,8 @@
         document.head.appendChild(s);
       }).then(() => { if (!chessHandlers) chessHandlers = initChess(chessBridge()); });
     }
-    chessLoading.then(() => chessHandlers.chess()).catch(() => {
+    chessLoading.then(() => { if (busy) busy(); chessHandlers.chess(); }).catch(() => {
+      if (busy) busy();
       chessLoading = null; chessHandlers = null;
       blank();
       line('error: could not load the chess module — check your connection and try again.', 'err');
@@ -2348,7 +2484,9 @@
     };
   }
   function launchDesktop() {
+    let busy = null;
     if (!desktopLoading) {
+      if (typeof initDesktop !== 'function') busy = moduleLoadLine('desktop environment');
       desktopLoading = new Promise((resolve, reject) => {
         if (typeof initDesktop === 'function') { resolve(); return; }
         const s = document.createElement('script');
@@ -2357,7 +2495,8 @@
         document.head.appendChild(s);
       }).then(() => { if (!desktopHandlers) desktopHandlers = initDesktop(desktopBridge()); });
     }
-    desktopLoading.then(() => desktopHandlers.open()).catch(() => {
+    desktopLoading.then(() => { if (busy) busy(); desktopHandlers.open(); }).catch(() => {
+      if (busy) busy();
       desktopLoading = null; desktopHandlers = null;
       blank();
       line('error: could not load the desktop module — check your connection and try again.', 'err');
@@ -2404,7 +2543,9 @@
     };
   }
   function launchRoom() {
+    let busy = null;
     if (!roomLoading) {
+      if (typeof initRoom !== 'function') busy = moduleLoadLine('the room');
       roomLoading = new Promise((resolve, reject) => {
         if (typeof initRoom === 'function') { resolve(); return; }
         const s = document.createElement('script');
@@ -2413,7 +2554,8 @@
         document.head.appendChild(s);
       }).then(() => { if (!roomHandlers) roomHandlers = initRoom(roomBridge()); });
     }
-    roomLoading.then(() => roomHandlers.open()).catch(() => {
+    roomLoading.then(() => { if (busy) busy(); roomHandlers.open(); }).catch(() => {
+      if (busy) busy();
       roomLoading = null; roomHandlers = null;
       blank();
       line('error: could not load the room — check your connection and try again.', 'err');
@@ -2594,6 +2736,12 @@
 
   function projCard(p) {
     const card = projEl('div', 'proj-card');
+    if (p.shot) {   // real capture of the shipped thing (lazy — the overlay may never open)
+      const img = document.createElement('img');
+      img.className = 'proj-shot';
+      img.src = p.shot; img.alt = p.shotAlt || ''; img.loading = 'lazy';
+      card.appendChild(img);
+    }
     card.appendChild(projEl('div', 'proj-title', p.title));
     card.appendChild(projEl('div', 'proj-sub', p.sub));
     const chips = projEl('div', 'proj-chips');
@@ -2660,6 +2808,8 @@
 
   function renderProjIndex() {
     projBoxEl.appendChild(projCard({
+      shot: 'assets/proj_calc.jpg',
+      shotAlt: 'The Derivative Calculator web app: equation input with a full math button pad',
       title: 'Derivative Calculator  <span class="dim">— full-stack symbolic math engine</span>',
       sub: 'Parses arbitrary expressions into an AST and computes exact symbolic derivatives ' +
            '— power, product, quotient, and chain rules through trig, hyperbolic, and log ' +
@@ -2674,6 +2824,8 @@
       ],
     }));
     projBoxEl.appendChild(projCard({
+      shot: 'assets/proj_site.jpg',
+      shotAlt: 'This terminal running neofetch: green phosphor text, connect cards, CRT scanlines',
       title: 'This Terminal  <span class="dim">— you are inside the project right now</span>',
       sub: 'A zero-framework, zero-build web terminal: eight lazy-loaded feature chunks, a ' +
            'live-LLM HAL 9000 you talk your way past, a horde-survival brawler with ' +
@@ -3012,8 +3164,18 @@
       canvas.height = window.innerHeight;
       const FS   = 14;
       const CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF<>{}[]\\/-+=?!@#';
-      const cols  = Math.floor(canvas.width / FS);
-      const drops = Array.from({length: cols}, () => Math.random() * -50);
+      let cols  = Math.floor(canvas.width / FS);
+      let drops = Array.from({length: cols}, () => Math.random() * -50);
+      // rotating a phone / resizing mid-effect used to leave a letterboxed
+      // canvas until exit — track the viewport (existing columns keep falling,
+      // new ones start above the screen; width assignment clears the canvas)
+      const onResize = () => {
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+        cols = Math.floor(canvas.width / FS);
+        drops = Array.from({ length: cols }, (_, i) => (i < drops.length ? drops[i] : Math.random() * -50));
+      };
+      window.addEventListener('resize', onResize);
 
       const hint = document.createElement('div');
       hint.textContent = 'press any key to exit';
@@ -3045,6 +3207,7 @@
         setTimeout(() => { canvas.remove(); inputRow.style.display = 'flex'; setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0); }, 400);
         document.removeEventListener('keydown', stop);
         canvas.removeEventListener('click', stop);
+        window.removeEventListener('resize', onResize);
       }
       setTimeout(() => { document.addEventListener('keydown', stop); canvas.addEventListener('click', stop); }, 300);
     },
@@ -3160,11 +3323,16 @@
       }
 
       try {
+        // 8s abort: without it a stalled (never-rejecting) connection left the
+        // "fetching..." status line up forever
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
         const res = await fetch(
           'https://api.open-meteo.com/v1/forecast?latitude=47.6062&longitude=-122.3321' +
           '&current=temperature_2m,weathercode,windspeed_10m,relative_humidity_2m' +
-          '&temperature_unit=fahrenheit&wind_speed_unit=mph'
-        );
+          '&temperature_unit=fahrenheit&wind_speed_unit=mph',
+          { signal: ctrl.signal }
+        ).finally(() => clearTimeout(timer));
         if (!res.ok) throw new Error();
         const { current: c } = await res.json();
         const tempF = Math.round(c.temperature_2m);

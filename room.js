@@ -744,8 +744,9 @@ function initRoom(api) {
      /room-dial. A not_allowlisted refusal becomes the choice: [1] verify by
      text (/room-verify-start sends the code, the 'code' stage checks it via
      /room-verify-code, then redials) or [2] just call HAL's own number
-     (api.halPhone). Escape at any stage returns to the conversation. Input
-     charsets are restricted per stage, so the rendered HTML is safe.
+     (api.halPhone). Escape at any stage returns to the conversation. Typed
+     input is HTML-escaped at render (escPop) — the chat auto-path can hand
+     the popup a raw free-text line, so per-stage charsets alone don't cover it.
      The 'num' stage doubles as the A2P SMS opt-in form (carrier compliance):
      it must keep the consent checkbox (NEVER pre-checked — every pop object
      starts agree:false and submitPop refuses without it), the message-type +
@@ -785,6 +786,12 @@ function initRoom(api) {
   function maskNum(num) {
     return '··· ··· ' + String(num).replace(/[^0-9]/g, '').slice(-4);
   }
+  // The keyboard paths restrict input charsets per stage, but the chat
+  // auto-path (submitCallLine → openPop) copies the RAW typed line into
+  // p.input — escape at the render, not the intake, so no path can inject.
+  function escPop(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
   function renderPop() {
     if (!call || !call.pop) return;
     ensurePop();
@@ -796,7 +803,7 @@ function initRoom(api) {
         '<div class="rm-pop-opt">HAL wants to place one real voice call to you. give him your cell number' +
         ' and he will text it a one-time verification code by SMS; enter the code and he calls.</div>' +
         '<div class="rm-pop-opt">verification codes only, never marketing · one SMS per verification request.</div>' +
-        '<div class="rm-pop-in"><span>' + p.input + '</span><u></u></div>' +
+        '<div class="rm-pop-in"><span>' + escPop(p.input) + '</span><u></u></div>' +
         '<div class="rm-pop-chk' + (p.agree ? ' on' : '') + '" data-act="agree" role="checkbox"' +
         ' aria-checked="' + (p.agree ? 'true' : 'false') + '">' +
         '<span class="rm-pop-box">' + (p.agree ? '✓' : '') + '</span>' +
@@ -825,7 +832,7 @@ function initRoom(api) {
       html =
         '<div class="rm-pop-title">— he texted a one-time code to ' + maskNum(p.num) + ' —</div>' +
         '<div class="rm-pop-opt">enter the 6 digits and he will place his call.</div>' +
-        '<div class="rm-pop-in"><span>' + p.input + '</span><u></u></div>' +
+        '<div class="rm-pop-in"><span>' + escPop(p.input) + '</span><u></u></div>' +
         '<div class="rm-pop-note">' + (p.note || 'enter to verify · esc to go back') + '</div>';
     }
     popEl.innerHTML = html;
@@ -1227,6 +1234,29 @@ function initRoom(api) {
     world.style.transform = zoomInTransform();
     world.addEventListener('transitionend', finish, { once: true });
     later(finish, 1800); // safety if transitionend never fires
+  }
+
+  /* ── test seam ──
+     Exposed ONLY when the page set window.ROOM_TEST_HOOKS before initRoom ran
+     (test/sms-optin.test.js). The SMS opt-in popup is carrier-compliance
+     load-bearing (consent box never pre-checked, submit refuses without it,
+     required disclosures) — this lets the tests pin those invariants without
+     driving the whole creep → ring → Turnstile → /room-call flow. */
+  if (window.ROOM_TEST_HOOKS) {
+    window.__roomPopTest = {
+      open(stage) {
+        if (!callEl) callEl = document.createElement('div');   // closePop → callNote needs it
+        if (!call) call = { phase: 'chat', token: 'test-token', input: '', busy: false, askSeen: true, pop: null };
+        openPop(stage || 'num');
+        return call.pop;
+      },
+      key(k) { handlePopKey({ key: k, preventDefault() {} }); },
+      submit() { submitPop(); },
+      render() { renderPop(); },
+      get pop() { return call && call.pop; },
+      get el() { return popEl; },
+      reset() { if (popEl) { popEl.remove(); popEl = null; } call = null; },
+    };
   }
 
   return { open };
