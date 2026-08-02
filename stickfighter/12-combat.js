@@ -7,6 +7,7 @@ function isGreatBoss(e) {
 function knockback(cx, cy, killR, push, stun) {
   for (const e of enemies) {
     if (isGreatBoss(e)) continue;   // matches the frost/chain exclusions — bosses only fall to real strikes
+    if (untouchable(e)) continue;   // scripted intros/cutscenes: a stray blast must not kill mid-monologue
     const dx = e.x - cx, dy = e.y - cy, d = Math.hypot(dx, dy) || 1;
     if (killR > 0 && d < killR) {
       if (!e.hp || (e.hp -= 2) <= 0) { killEnemy(e); continue; }
@@ -206,7 +207,7 @@ function endRun() {
   alive = false;
   if (dailyRun) sfUnlock('daily');   // seeing a daily through counts, win or lose
   lbTicks = tick; lbKills = kills;   // the run's proof stats, frozen at death
-  if (score > best) { best = score; newBest = true; localStorage.setItem('ilaird_sf_best', String(best)); }
+  if (score > best) { best = score; newBest = true; try { localStorage.setItem('ilaird_sf_best', String(best)); } catch (_) { /* private mode */ } }
   sfSfx.die(); shake = 14;
   lbBegin();
 }

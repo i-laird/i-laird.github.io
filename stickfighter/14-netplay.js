@@ -30,16 +30,20 @@ function netLog(msg) {
    - slot rooms (pre-run, joiners 2..3): rejoinHash(code + ':join:' + n, 0)
    - per-seat rejoin rooms (mid-run reconnection): rejoinHash(code + ':' + seat, seed) */
 function netSlotRoom(code, n) { return rejoinHash(code + ':join:' + n, 0); }
-function netSeatRoom(seat) { return rejoinHash(netRoomCode + ':' + seat, netCfg ? netCfg.seed >>> 0 : 0); }
+// derived from the run's FIRST seed (seed0), never the current one: a rematch
+// changes netCfg.seed, and a peer that drops during the restart exchange would
+// otherwise re-signal into a different room than the one being polled
+function netSeatRoom(seat) { return rejoinHash(netRoomCode + ':' + seat, netCfg ? (netCfg.seed0 != null ? netCfg.seed0 : netCfg.seed) >>> 0 : 0); }
 function netOpen(mode) {
   netTeardown();
-  // a stale paired pick can't cross into the wrong seat: the joiner never plays
-  // the wyrm (they're P2+), and nobody plays the rider except through the pair
-  if (classSel === PAIR_RIDER || (classSel === PAIR_WYRM && mode !== 'host')) classSel = 0;
   netDiag = { local: '?', remote: '?', states: [] };
+  // save BEFORE the pair coercion below, so backing out restores the real pick
   netSaved = { c1: classSel, c2: classSel2, coop, daily: dailyRun, hs: hardSel,
                top: menuTop, ss: subSingle, sm: subMulti,
                gw: xp.offsetWidth, gh: xp.offsetHeight - 40 };
+  // a stale paired pick can't cross into the wrong seat: the joiner never plays
+  // the wyrm (they're P2+), and nobody plays the rider except through the pair
+  if (classSel === PAIR_RIDER || (classSel === PAIR_WYRM && mode !== 'host')) classSel = 0;
   netIsHost = mode === 'host';
   netSeat = netIsHost ? 0 : -1;
   netConns = []; netArming = null;
@@ -205,6 +209,9 @@ async function netHostArm(slotCode) {
         const rr = await fetch(base + '/mp-answer?code=' + encodeURIComponent(pend.room));
         if (!rr.ok) return;
         const dd = await rr.json();
+        // re-check after the awaits — a teardown/hello may have retired this pend
+        // while the fetch was in flight
+        if (netArming !== pend) { clearInterval(pend.pollId); pend.pollId = 0; return; }
         if (dd && dd.answer && pend.pc && pend.pc.signalingState === 'have-local-offer') {
           clearInterval(pend.pollId); pend.pollId = 0;
           if (netDiag && !slotCode) netDiag.remote = netCandSummary(dd.answer.sdp);
@@ -215,7 +222,14 @@ async function netHostArm(slotCode) {
       } catch (_) { /* transient poll failure — try again next interval */ }
     }, 2000);
   } catch (_) {
+    // release the arming slot — leaving netArming set would block netHostArmNext
+    // forever, silently capping the band at however many had already joined
+    if (netArming === pend) {
+      netArming = null;
+      try { if (pend.pc) pend.pc.close(); } catch (_2) { /* already dead */ }
+    }
     if (!netConns.length && !slotCode) netAbort('could not create a room — check your connection and try again');
+    else setTimeout(() => { netHostArmNext(); }, 5000);   // transient failure — retry the slot arm
   }
 }
 // a pre-run link died (or a lobby member left): free the seat, shift the ones
@@ -230,6 +244,14 @@ function netHostDropLink(conn, why) {
   netConns.splice(i, 1);
   for (const c of netConns) {
     if (c.seat > conn.seat) { c.seat--; netSendTo(c, { t: 'seat', n: c.seat, nv: NET_VER, sv: NET_SIM_V }); }
+  }
+  // a drop while the cfg was in flight ('starting') invalidates the header — the
+  // seats just shifted and the missing ack would never arrive, wedging the lobby.
+  // Fall back to an un-readied lobby and let the band confirm the new lineup.
+  if (!netplay && netCfg && netUi && netUi.phase === 'starting') {
+    netCfg = null;
+    netUi.phase = 'lobby'; netUi.myReady = false;
+    for (const c of netConns) { c.ready = false; c.ack = false; }
   }
   netLobbySync();
   netHostArmNext();
@@ -378,7 +400,8 @@ function netHandle(m, conn) {
       if (m.nv !== NET_VER || m.v !== NET_SIM_V) { netAbort('version mismatch — you are on different builds. everyone: reload the page and retry.'); return; }
       const cs = (Array.isArray(m.cs) ? m.cs : []).slice(0, NET_MAX_SEATS).map((c) => clamp(c | 0, 0, CLASSES.length - 1));
       if (cs.length < 2) return;
-      netCfg = { v: m.v, seed: m.seed >>> 0, cs,
+      netCfg = { v: m.v, seed: m.seed >>> 0,
+                 seed0: (typeof m.seed0 === 'number' ? m.seed0 : m.seed) >>> 0, cs,
                  hd: m.hd ? 1 : 0, up0: Array.isArray(m.up0) ? m.up0 : [],
                  tk0: m.tk0 | 0, mw0: m.mw0 | 0,
                  gw: Math.max(320, m.gw | 0), gh: Math.max(240, m.gh | 0) };
@@ -403,8 +426,24 @@ function netHandle(m, conn) {
       break;
     }
     case 'resume': {  // a link is back mid-run: refill whatever the drop swallowed
-      if (!netplay || m.r !== netRunId) return;
+      if (!netplay) return;
+      if (m.r !== netRunId) {
+        // a returning peer that missed a rematch: hand it the CURRENT restart so
+        // it netBeginRuns on the shared cfg and locksteps from the top (repeats
+        // until its runId converges); dropping it silently would wedge both ends
+        if (netIsHost && conn && netConns.includes(conn) && netCfg) {
+          conn.recon = null;
+          netSendTo(conn, { t: 'restart', seed: netCfg.seed });
+        }
+        return;
+      }
+      // EVENTS BEFORE FRAMES, both directions: frames unblock the lockstep gate,
+      // and a sim that steps past an event's stamp before the event lands drops
+      // it (`ek <= tick`) — a guaranteed desync. Queued events are harmless early.
       if (netIsHost && conn) {
+        for (const ev of netEventLog) {
+          if (ev[0] > (m.k | 0)) netSendTo(conn, { t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
+        }
         // the client reported per-seat floors — refill EVERY seat from our buffers
         const floors = Array.isArray(m.have) ? m.have : [];
         for (let sIdx = 0; sIdx < netFrames.length; sIdx++) {
@@ -415,19 +454,16 @@ function netHandle(m, conn) {
             if (f) netSendTo(conn, { t: 'f', r: netRunId, p: sIdx, k, m: f.m, e: f.e, s: f.s, h: f.h });
           }
         }
-        for (const ev of netEventLog) {
-          if (ev[0] > (m.k | 0)) netSendTo(conn, { t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
-        }
         conn.recon = null;
       } else if (!netIsHost) {
+        for (const ev of netEventLog) {
+          if (ev[0] > (m.k | 0)) netSend({ t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
+        }
         // the host reported the scalar floor of OUR frames — resend our own
         const mine = netFrames[netSeat];
         for (let k = (m.have | 0) + 1; k <= tick + NET_DELAY; k++) {
           const f = mine.get(k);
           if (f) netSend({ t: 'f', r: netRunId, p: netSeat, k, m: f.m, e: f.e, s: f.s, h: f.h });
-        }
-        for (const ev of netEventLog) {
-          if (ev[0] > (m.k | 0)) netSend({ t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
         }
         netRecon = null;
       }
@@ -468,6 +504,12 @@ function netHandle(m, conn) {
       break;
     case 'bye':
       if (netplay) {
+        // only a seated band member may disband the run — a stray link (e.g. a
+        // stranger answering a rejoin room) must not kill four players' game
+        if (conn && !netConns.includes(conn)) {
+          try { if (conn.chan) conn.chan.close(); } catch (_) { /* dying anyway */ }
+          return;
+        }
         if (netIsHost) netSend({ t: 'bye' });   // one leaver disbands the band — tell the rest
         netLeave('A FIGHTER LEFT — the war band disbands');
       } else if (netIsHost && conn) netHostDropLink(conn, 'a joiner backed out');
@@ -502,7 +544,7 @@ function netLobbyMaybeStart() {
   classSel2 = savedC2; coop = savedCoop;
   let gw = GW, gh = GH;
   for (const c of netConns) { gw = Math.min(gw, c.gw || GW); gh = Math.min(gh, c.gh || GH); }
-  netCfg = { v: NET_SIM_V, seed, cs, hd: 0, up0, tk0, mw0, gw, gh };
+  netCfg = { v: NET_SIM_V, seed, seed0: seed, cs, hd: 0, up0, tk0, mw0, gw, gh };
   for (const c of netConns) c.ack = false;
   netUi.phase = 'starting';
   netSend({ t: 'cfg', nv: NET_VER, ...netCfg });
@@ -636,7 +678,16 @@ function netReconSeat() {
 function netStartRecon(conn, why) {
   if (!netplay) return;
   if (conn) {
-    // HOST: one seat's link died — re-signal just that seat, keep the others
+    // HOST: one seat's link died — re-signal just that seat, keep the others.
+    // Only a SEATED member gets a recon loop (a stray/replaced link is just closed),
+    // and each conn carries its OWN token: bumping the global netReconSeq here
+    // would go inert every OTHER seat's in-flight reconnect the moment a second
+    // seat dropped, stranding the first until the 10-minute concede.
+    if (!netConns.includes(conn)) {
+      try { if (conn.chan) conn.chan.close(); } catch (_) {}
+      try { if (conn.pc) conn.pc.close(); } catch (_) {}
+      return;
+    }
     if (conn.recon) return;
     netLog('P' + (conn.seat + 1) + ' link lost (' + why + ') — holding the run, re-signaling');
     try { if (conn.discoT) clearTimeout(conn.discoT); conn.discoT = 0; } catch (_) {}
@@ -644,8 +695,8 @@ function netStartRecon(conn, why) {
     try { if (conn.pc) { conn.pc.onconnectionstatechange = null; conn.pc.close(); } } catch (_) {}
     conn.pc = null; conn.chan = null;
     conn.recon = { attempt: 0, t0: performance.now(), gen: '' };
-    netReconSeq++;
-    netReconHostAttempt(conn, netReconSeq);
+    conn.reconTok = (conn.reconTok | 0) + 1;
+    netReconHostAttempt(conn, conn.reconTok);
     return;
   }
   // CLIENT: our link to the host died
@@ -663,7 +714,9 @@ function netStartRecon(conn, why) {
 // HOST: repost offers into the dropped seat's rejoin room until it answers
 async function netReconHostAttempt(conn, tok) {
   const live = () => {
-    if (!(netplay && conn.recon && tok === netReconSeq && netConns.includes(conn))) return false;
+    // per-conn token: another seat's drop must not kill this loop. Teardown is
+    // covered by netConns.includes (netTeardown empties the registry).
+    if (!(netplay && conn.recon && tok === (conn.reconTok | 0) && netConns.includes(conn))) return false;
     if (performance.now() - conn.recon.t0 > NET_RECON_MAX_MS) {
       netLog('reconnect window exhausted — conceding the run');
       netSend({ t: 'bye' });

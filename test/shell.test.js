@@ -72,6 +72,13 @@ test('pipeFilter head/tail slice with counts', () => {
   assert.deepEqual(pipeFilter('head -2', lines).lines, ['1', '2']);
   assert.deepEqual(pipeFilter('tail -n 2', lines).lines, ['4', '5']);
   assert.deepEqual(pipeFilter('head', lines).lines, lines); // default 10 > input
+  // an explicit zero count means zero lines, not the default (and never the whole file)
+  assert.deepEqual(pipeFilter('head -n 0', lines).lines, []);
+  assert.deepEqual(pipeFilter('head -0', lines).lines, []);
+  assert.deepEqual(pipeFilter('tail -n 0', lines).lines, []);
+  assert.deepEqual(pipeFilter('tail -0', lines).lines, []);
+  // a non-numeric count falls back to the default
+  assert.deepEqual(pipeFilter('head -n foo', lines).lines, lines);
 });
 
 test('pipeFilter wc counts lines, words, chars', () => {

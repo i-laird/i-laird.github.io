@@ -132,7 +132,7 @@ function advanceSidiousFinale() {
     if (f.exitDir > 0 ? f.vx > GW + 54 : f.vx < -54) { finishSidiousFinale(); return; }
   }
   if (f.phase !== 'rise' && f.t % 10 === 0) ltnFlash = Math.max(ltnFlash, 6);  // the void strobes violet
-  if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 5);    // jolts from the shocks
+  if (f.t % 8 === 0) shake = Math.max(shake, 5);    // jolts from the shocks (shake is sim state — RM gates only the translate)
 }
 function finishSidiousFinale() {
   sidFinale = null;
@@ -162,6 +162,12 @@ function startJojo() {
   dioStopT = 0; roadRoller = null; ltnFlash = 0; dlg = []; dlgT = 0; playerStand = 0; freezeT = 0;
   if (allies.length) { allies.forEach(g => sparks.push({ x: g.x, y: g.y - 50, t: 30, color: '#fff', txt: '...gone.' })); allies = []; }
   player.x = GW * 0.26; player.y = GH / 2; player.vx = 0; player.vy = 0; player.choke = 0; player.stunT = 0;
+  // a fresh set-piece revives any fallen partner (mirrors startStarWars) so
+  // nobody spends the whole DIO fight face-down with no one free to revive them
+  if (coop && p2) {
+    for (const h of heroesAll()) { h.down = false; h.reviveT = 0; h.shield = up.shield; h.choke = 0; h.stunT = 0; }
+    p2.x = GW * 0.26; p2.y = GH / 2 + 42; p2.vx = 0; p2.vy = 0;
+  }
   jojoBg = [];   // drifting ゴ menacing glyphs
   for (let i = 0; i < 22; i++) jojoBg.push({ x: rnd() * GW, y: rnd() * GH, s: 14 + rnd() * 34, vy: -(0.08 + rnd() * 0.30), a: 0.05 + rnd() * 0.09 });
   enemies.push(makeEnemy('dio', GW * 0.78, GH / 2));
@@ -261,7 +267,7 @@ function advanceDioFinale() {
     }
     if (f.t >= 132) { finishDioFinale(); return; }
   }
-  if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 4);
+  if (f.t % 8 === 0) shake = Math.max(shake, 4);   // shake is sim state — RM gates only the translate
 }
 function finishDioFinale() {
   sfUnlock('dio');
@@ -411,6 +417,8 @@ function startSidious() {
   banishAllies();                                 // face the Emperor alone
   if (!swStars.length) { for (let i = 0; i < 70; i++) swStars.push({ x: rnd() * GW, y: rnd() * GH, r: rnd() * 1.3 + 0.3 }); }
   player.choke = 0; player.stunT = 0;
+  // a fresh set-piece revives any fallen partner (mirrors startStarWars)
+  if (coop && p2) for (const h of heroesAll()) { h.down = false; h.reviveT = 0; h.shield = up.shield; h.choke = 0; h.stunT = 0; }
   // the Emperor stands at the far side, flanked by two Royal Guards
   const sx = GW * 0.82, sy = GH / 2;
   enemies.push(makeEnemy('sidious', sx, sy));

@@ -217,6 +217,7 @@ function initSansMode(api) {
   }
 
   function sansBattleCommand(token) {
+    if (sansBattle && sansBattle._locked) return;   // final-blow beat is playing out
     if (token === 'run') {
       if (sansBattle._stop) sansBattle._stop();
       api.sansBattleActive = false;
@@ -392,7 +393,12 @@ function initSansMode(api) {
     function rndGapY() { return 1 + Math.floor(Math.random() * (BH - 4)); }
     function wall(x, dir, gapY, gapH, spd, blue) { bones.push({ kind: 'wall', x, dir, gapY, gapH, spd, blue: !!blue }); }
     function strip(y, x, dir, len, spd) { bones.push({ kind: 'strip', y, x, dir, len, spd }); }
-    function blaster(orient, idx) { blasters.push({ orient, idx, t: 0 }); }
+    function blaster(orient, idx) {
+      // a row blaster indexes grid rows (0..BH-1), a col blaster grid columns
+      // (0..BW-1) — clamp so a bad index can never crash the render loop
+      idx = Math.max(0, Math.min(orient === 'row' ? BH - 1 : BW - 1, idx | 0));
+      blasters.push({ orient, idx, t: 0 });
+    }
 
     function waveSlalom(t)  { if (t % 24 === 0) wall(BW - 1, -1, rndGapY(), 3, 2); }
     function waveWalls(t)   {
@@ -401,8 +407,13 @@ function initSansMode(api) {
     }
     function waveBlue(t)    { if (t % 17 === 0) wall(BW - 1, -1, rndGapY(), 3, 2, Math.floor(t / 17) % 2 === 1); }
     function waveBlaster(t) {
-      if (t % 46 === 0) blaster(Math.random() < 0.5 ? 'row' : 'col',
-        Math.random() < 0.5 ? hy : Math.floor(Math.random() * BH));
+      if (t % 46 === 0) {
+        const orient = Math.random() < 0.5 ? 'row' : 'col';
+        const idx = orient === 'row'
+          ? (Math.random() < 0.5 ? hy : Math.floor(Math.random() * BH))
+          : (Math.random() < 0.5 ? hx : Math.floor(Math.random() * BW));
+        blaster(orient, idx);
+      }
       if (t % 34 === 17) wall(BW - 1, -1, rndGapY(), 4, 2);
     }
     function waveMix(t)     {
@@ -412,7 +423,13 @@ function initSansMode(api) {
     }
     function waveHard(t)    {
       if (t % 18 === 0) wall(BW - 1, -1, rndGapY(), 3, Math.random() < 0.5 ? 1 : 2, Math.random() < 0.35);
-      if (t % 42 === 20) blaster(Math.random() < 0.6 ? 'row' : 'col', Math.random() < 0.6 ? (Math.random() < 0.5 ? hy : hx) : Math.floor(Math.random() * BH));
+      if (t % 42 === 20) {
+        const orient = Math.random() < 0.6 ? 'row' : 'col';
+        const idx = orient === 'row'
+          ? (Math.random() < 0.6 ? hy : Math.floor(Math.random() * BH))
+          : (Math.random() < 0.6 ? hx : Math.floor(Math.random() * BW));
+        blaster(orient, idx);
+      }
     }
     function waveNothing()  {} // the special attack. it's literally nothing.
     function waveBlueSoul(t) {
@@ -504,7 +521,9 @@ function initSansMode(api) {
     }
 
     function chooseMercy() {
-      if (done || dunking) return;
+      // no dunk once the battle is decided: not during the death shatter ('dying')
+      // or the winning-blow beat ('hit')
+      if (done || dunking || mode === 'dying' || mode === 'hit') return;
       dunking = true;
       asleep = false;
       say(["so you're sparing me?", 'finally. buddy. pal.',
@@ -518,7 +537,9 @@ function initSansMode(api) {
       missLabel = '9999999'; missTimer = 30;
       dialogText = ''; dialogPos = 0;
       mode = 'hit';
+      sansBattle._locked = true;   // the battle is decided — typed run/mercy do nothing now
       setTimeout(() => {
+        if (done) return;          // a bail-out beat us to teardown — don't run the win beat too
         stopAndRemove();
         api.sansBattleActive = false;
         unlockAchievement('bad-time');
@@ -926,7 +947,17 @@ function initSansMode(api) {
     else                                             { sansUnknown(raw); }
   }
 
-  return { activate: activateSansMode, command: sansCommand, battleCommand: sansBattleCommand };
+  return {
+    activate: activateSansMode,
+    command: sansCommand,
+    battleCommand: sansBattleCommand,
+    // emergency teardown for app.js's global error boundary: stops the battle
+    // interval, removes the capture-phase key listeners, and silences the music
+    // so a crash mid-battle can't leave a zombie loop eating keystrokes
+    stopBattle() {
+      try { if (sansBattle && sansBattle._stop) sansBattle._stop(); } catch (e) { /* already down */ }
+    },
+  };
 }
 
 // Explicit window export: in the obfuscated build this file is wrapped in an

@@ -51,10 +51,18 @@ window.openStickFighter = openStickFighter;
 `;
 
 function partFiles() {
-  return fs
-    .readdirSync(PARTS_DIR)
-    .filter((f) => /^\d+.*\.js$/.test(f))
-    .sort();
+  // Exactly two digits + dash: parts are order-dependent fragments of one
+  // closure, and plain lexicographic sort only equals numeric order when every
+  // prefix has the same width ('100-' would sort between '10-' and '11-').
+  // Anything digit-prefixed but non-conforming is a hard error, not a skip.
+  const all = fs.readdirSync(PARTS_DIR).filter((f) => f.endsWith('.js'));
+  const bad = all.filter((f) => /^\d/.test(f) && !/^\d\d-.+\.js$/.test(f));
+  if (bad.length) {
+    throw new Error(
+      `part files must match NN-*.js (two digits, then a dash): ${bad.join(', ')}`
+    );
+  }
+  return all.filter((f) => /^\d\d-.+\.js$/.test(f)).sort();
 }
 
 function assemble() {

@@ -2,8 +2,11 @@
 const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
 const KEG_R     = 42;    // the bombardier's powder-keg blast radius
 const KEG_AIR   = 62;    // ticks a lobbed keg hangs in the air (the dodge window)
-let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, CLASSES.length - 1);
-let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, CLASSES.length - 1);
+let classSel = 0, classSel2 = 0;
+try {
+  classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, CLASSES.length - 1);
+  classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, CLASSES.length - 1);
+} catch (_) { /* private mode — localStorage may throw */ }
 // HARD MODE — unlocked forever by sparing Ian (finishIanSpare). Once earned it's a
 // CHOICE on the intro (SINGLEPLAYER → ☠ HARD): enemy types arrive a wave early,
 // elites stalk from wave 1, the support pieces join at 4/6. DAILY runs stay normal
@@ -35,8 +38,8 @@ function resetPend() {
 // via GET /scores?day=…, written via POST /score with a `day` field).
 function dailyDayStr() { return new Date().toISOString().slice(0, 10).replace(/-/g, ''); }  // e.g. '20260712' (UTC)
 function dailyDayPretty() { const d = dailyDayStr(); return d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6); }
-function dailySeed() {
-  const s = 'sf-daily-' + dailyDayStr();
+function dailySeed(day) {
+  const s = 'sf-daily-' + (day || dailyDayStr());
   let h = 5381 >>> 0;
   for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
   return h >>> 0;
@@ -145,7 +148,7 @@ function init() {
     // change (damage, speeds, AI, economy), or old replays re-simulate under new
     // rules and silently diverge from their recorded scores.
     recEv = []; recLastM = -1; recOverflow = false;
-    recHdr = { v: 5, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
+    recHdr = { v: 6, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
                up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
   }
   player.dashCharges = up.dashMax; player.rechargeT = 0;
@@ -223,7 +226,8 @@ function bossTarget() {
   if (!coop) return player;
   if (!player.down) return player;
   if (p2 && !p2.down) return p2;
-  return player;                 // both down — the run is ending anyway
+  for (const h of heroesLive()) return h;   // war-band seats 3/4 keep the duel alive
+  return player;                 // everyone down — the run is ending anyway
 }
 // the goblin shaman's ritual circle: grunts inside are hastened 1.3× — 1.55×
 // while the shaman is mid frenzy-shriek. ≤2 shamans afield keeps this scan

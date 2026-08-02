@@ -103,7 +103,7 @@ function pickBoon(id) {
   b.apply(picker);
   banner = (coop && !bane ? 'P' + (who + 1) + ' · ' : '') + b.icon + ' ' + b.name + (bane ? ' — your burden' : '');
   bannerSub = b.desc; bannerT = 110;
-  boonMenu = null; paused = false; keys = {};
+  boonMenu = null; paused = !!upMenu; keys = {};   // an open shop underneath keeps the sim held
   bane ? sfSfx.thud() : sfSfx.sword();
   // co-op: the next seat picks — their OWN offer, their OWN confirm
   if (!bane && coop && who + 1 < heroesAll().length) openBoonMenu(title, who + 1);

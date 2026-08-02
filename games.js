@@ -456,7 +456,8 @@ function initGames(api) {
       let snake, dir, nextDir, food, score, alive, ded, halObs = [], halMsg = '', halMsgTimeout = null, tickCount = 0,
           halSnakeMode = 0, modeTickCount = 0, modeScore = 0,
           innerTop = 0, innerBottom = ROWS-1, innerLeft = 0, innerRight = COLS-1,
-          shrinkTimer = 0, bladeTick = 0, bladeAngle = 0, blade1Orbit = 0, blade2Orbit = Math.PI;
+          shrinkTimer = 0, bladeTick = 0, bladeAngle = 0, blade1Orbit = 0, blade2Orbit = Math.PI,
+          tickTimer = null;
 
       const phasesSeen = new Set();
 
@@ -552,6 +553,9 @@ function initGames(api) {
       function initHalMode(m) {
         halObs = [];
         halSnakeMode = m;
+        // leaving the shrinking-walls phase must restore the full arena — food/maze
+        // placement reads these bounds in every phase, not just while walls are drawn
+        innerTop = 0; innerBottom = ROWS-1; innerLeft = 0; innerRight = COLS-1;
         phasesSeen.add(m);
         if (phasesSeen.size === 4) unlockAchievement('grand-tour');
         modeTickCount = 0;
@@ -568,7 +572,7 @@ function initGames(api) {
         halMsgTimeout = setTimeout(() => { halMsg = ''; }, 3000);
         if (m === 1) generateMaze();
         if (m === 2) { bladeAngle = 0; bladeTick = 0; blade1Orbit = 0; blade2Orbit = Math.PI; }
-        if (m === 3) { innerTop = 0; innerBottom = ROWS-1; innerLeft = 0; innerRight = COLS-1; shrinkTimer = 0; }
+        if (m === 3) shrinkTimer = 0;
       }
 
       function draw() {
@@ -775,7 +779,7 @@ function initGames(api) {
 
         draw();
         const speed = Math.max(75, 150 - Math.floor(score / 3) * 10);
-        setTimeout(tick, speed);
+        tickTimer = setTimeout(tick, speed);
       }
 
       function start() {
@@ -797,7 +801,9 @@ function initGames(api) {
         placeFood();
         draw();
         if (api.godmodeUnlocked) setTimeout(() => initHalMode(0), 600);
-        setTimeout(tick, 150);
+        // a quit leaves a pending tick behind; clear it so a fast restart can't run two chains
+        if (tickTimer) clearTimeout(tickTimer);
+        tickTimer = setTimeout(tick, 150);
       }
 
       function end() {
@@ -828,7 +834,11 @@ function initGames(api) {
           e.preventDefault();
         }
         if (api.godmodeUnlocked && e.key >= '1' && e.key <= '4') initHalMode(Number(e.key) - 1);
-        if (e.key === 'q') { alive = false; ded = true; draw(); }
+        if (e.key === 'q') {
+          alive = false; ded = true;
+          if (tickTimer) { clearTimeout(tickTimer); tickTimer = null; }
+          draw();
+        }
       }
 
       draw();
@@ -1003,12 +1013,22 @@ function initGames(api) {
           }
         }
         ballDY = Math.max(-1.5, Math.min(1.5, ballDY));
-        if (ballX < 0)  { rScore++; if (rScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX= 1.15; ballDY=(Math.random()-0.5)*1.15; }
-        if (ballX >= W) { lScore++; if (lScore >= 7) { alive=false; ded=true; clearInterval(tickId); draw(); return; } ballX=W/2; ballY=H/2; ballDX=-1.15; ballDY=(Math.random()-0.5)*1.15; }
+        if (ballX < 0)  { rScore++; if (rScore >= 7) { haltMatch(); return; } ballX=W/2; ballY=H/2; ballDX= 1.15; ballDY=(Math.random()-0.5)*1.15; }
+        if (ballX >= W) { lScore++; if (lScore >= 7) { haltMatch(); return; } ballX=W/2; ballY=H/2; ballDX=-1.15; ballDY=(Math.random()-0.5)*1.15; }
         draw();
       }
 
       function start() { init(); draw(); wrap.scrollIntoView({ block: 'start' }); tickId = setInterval(tick, 50); }
+
+      // match over (win or quit): stop the loop AND the HAL interference timers, so a
+      // pending side-switch restore can't write over the death screen
+      function haltMatch() {
+        alive = false; ded = true;
+        clearInterval(tickId);
+        if (switchTimer) { clearTimeout(switchTimer); switchTimer = null; }
+        if (halPongMsgTimeout) { clearTimeout(halPongMsgTimeout); halPongMsgTimeout = null; }
+        draw();
+      }
 
       function end() {
         alive = false; if (tickId) clearInterval(tickId);
@@ -1021,7 +1041,7 @@ function initGames(api) {
         keys[e.key] = true;
         if (ded)    { if (e.key==='r') { start(); return; } if (e.key==='q') { end(); return; } return; }
         if (!alive) { if (e.key==='q') { end(); return; } start(); return; }
-        if (e.key === 'q') { alive=false; ded=true; clearInterval(tickId); draw(); }
+        if (e.key === 'q') { haltMatch(); }
         if (['ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
         if (api.godmodeUnlocked) {
           if (e.key === '1') halDo('switch');
@@ -1035,7 +1055,7 @@ function initGames(api) {
     },
 
     '2048'() {
-      let grid, score, best = 0, alive, ded, won = false, hal64done = false, hal256done = false,
+      let grid, score, best = 0, alive, ded, won = false, everWon = false, hal64done = false, hal256done = false,
           hal128done = false, hal512done = false, lockedR = -1, lockedC = -1, lockedMovesLeft = 0;
       let meddleCooldown = 6;
 
@@ -1328,7 +1348,7 @@ function initGames(api) {
 
       function start() {
         grid = Array.from({length:4}, () => Array(4).fill(0));
-        score = 0; alive = true; ded = false; won = false;
+        score = 0; alive = true; ded = false; won = false; everWon = false;
         hal64done = false; hal128done = false; hal256done = false; hal512done = false;
         lockedR = -1; lockedC = -1; lockedMovesLeft = 0;
         meddleCooldown = 6;
@@ -1398,8 +1418,8 @@ function initGames(api) {
               halMeddle();
             }
           }
-          if (!won && grid.some(row => row.some(v => v === 2048))) {
-            won = true;
+          if (!won && !everWon && grid.some(row => row.some(v => v === 2048))) {
+            won = true; everWon = true;   // latch: [c] keep-going must not re-trigger the win screen
             unlockAchievement('2048-club');
             if (api.godmodeUnlocked) unlockAchievement('audited');
           }

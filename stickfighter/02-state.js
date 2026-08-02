@@ -1,5 +1,6 @@
 // ── state — all run state: sim entities, leaderboard/proof, replay recorder, netplay vars, co-op, class tuning + SPELLS ──
-let best = parseInt(localStorage.getItem('ilaird_sf_best') || '0', 10) || 0;
+let best = 0;
+try { best = parseInt(localStorage.getItem('ilaird_sf_best') || '0', 10) || 0; } catch (_) { /* private mode */ }
 let player, enemies, warns, coins, powerups, blasts, sparks, ghosts,
     score, mult, wave, alive, started, frame, keys, rafId,
     freezeT, banner, bannerSub, bannerT, deadT, shake, newBest,
@@ -60,7 +61,7 @@ function recPush(ev) {
 // hal-worker (/mp-host, /mp-offer, /mp-join, /mp-answer); gameplay traffic is pure
 // P2P — no server ever sees it. Nothing persists out of an online run (noPersist).
 const NET_VER = 2;      // wire-protocol version (handshake-checked); 2 = resume/reconnect protocol
-const NET_SIM_V = 5;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 5 = great-boss knockback immunity + deterministic equal-tick event order
+const NET_SIM_V = 6;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 6 = 2026-08 audit batch (Vader phase-2 at half band-scaled HP, boss target falls through to seats 3/4, upgrade min/max applies, RM-independent boss-intro typewriter, cutscene shake, untouchable knockback guard)
 const NET_DELAY = 5;    // ticks of input delay (~83ms) — local input applies at tick+NET_DELAY on both sims
 const NET_MAX_SEATS = 4; // the WAR BAND: up to four fighters — host = seat 0 (P1), joiners 1..3.
                          // Topology is a host-relayed STAR: every client links only to the host,
@@ -106,6 +107,9 @@ let netDiscoT = 0;      // grace timer: pc 'disconnected' must persist ~10s befo
 // 2=JOIN (online). coop/dailyRun stay the derived per-run flags, persisting across
 // R-restarts exactly as before.
 let coop = false, dailyRun = false, p2 = null, p3 = null, p4 = null;
+// the daily run's board day, snapshotted WITH the seed at run start — a run that
+// crosses UTC midnight must submit to the board its seed belongs to, not "today"
+let dailyDay = '';
 let heat = 0;   // the wyrm & rider's shared fire gauge (reset in init; see WYRM & RIDER)
 // ── the death KILL CAM (render-only): a rolling ghost tape of draw-ready entity
 //    snapshots; on death the last seconds replay in slow motion, camera tight on

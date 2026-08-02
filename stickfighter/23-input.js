@@ -95,7 +95,15 @@ function onKey(e) {
       const backOut = () => {
         netSend({ t: 'bye' });
         netTeardown();
-        netUi = null; netSaved = null; netCfg = null;
+        // restore the selections netOpen saved (mirrors netLeave) — otherwise a
+        // coerced pick (e.g. a joiner's wyrm zeroed to melee) sticks after backing out
+        if (netSaved) {
+          classSel = netSaved.c1; classSel2 = netSaved.c2;
+          coop = netSaved.coop; dailyRun = netSaved.daily; hardSel = netSaved.hs;
+          menuTop = netSaved.top; subSingle = netSaved.ss; subMulti = netSaved.sm;
+          netSaved = null;
+        }
+        netUi = null; netCfg = null;
       };
       // class is still changeable on the connect screens (◀ ▶) right up until
       // the link opens — the host's cfg reads classSel when the hello arrives,
@@ -221,8 +229,10 @@ function onKey(e) {
       dailyRun = menuTop === 0 && subSingle === 2;
       hardSel = menuTop === 0 && subSingle === 1;            // only reachable once hardUnlocked
       // daily pins the shared per-day seed through the existing MP/replay hook;
-      // a normal run clears it back to fresh entropy
-      sfSeedOverride = dailyRun ? dailySeed() : null;
+      // a normal run clears it back to fresh entropy. The day is snapshotted with
+      // the seed so a run crossing UTC midnight still submits to its own board.
+      dailyDay = dailyRun ? dailyDayStr() : '';
+      sfSeedOverride = dailyRun ? dailySeed(dailyDay) : null;
       init();                     // fresh state on the chosen seed (init reads classSel/coop/hardSel)
       beginRunProof();            // stamp the start time for the leaderboard's proof check
       started = true; frame = 0;
@@ -249,8 +259,13 @@ function onKey(e) {
     if (['ArrowLeft', 'a', 'A'].includes(e.key))       { boonMenu.sel = (boonMenu.sel + n - 1) % n; sfSfx.killE(); }
     else if (['ArrowRight', 'd', 'D'].includes(e.key)) { boonMenu.sel = (boonMenu.sel + 1) % n; sfSfx.killE(); }
     else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) {
-      // stamped tick+1 like every between-tick UI event (see the shop below)
-      if (netplay) netQueueEvent(12, boonMenu.opts[boonMenu.sel].id);
+      // stamped tick+1 like every between-tick UI event (see the shop below).
+      // ONLINE the menu stays open until the feeder applies the event a few ticks
+      // later — `confirmed` stops a second Z queueing a duplicate pick meanwhile
+      // (pickBoon replaces boonMenu for the next seat, so the flag self-resets)
+      if (netplay) {
+        if (!boonMenu.confirmed) { boonMenu.confirmed = true; netQueueEvent(12, boonMenu.opts[boonMenu.sel].id); }
+      }
       else { recPush([tick + 1, 12, boonMenu.opts[boonMenu.sel].id]); pickBoon(boonMenu.opts[boonMenu.sel].id); }
     }
     e.preventDefault();
@@ -331,15 +346,30 @@ function onKey(e) {
     e.preventDefault();
     return;
   }
-  // Force choke: the only escape is to struggle — mash attack/dash; nothing else responds.
-  // Mashes queue like every other combat input and land on the next tick.
+  // Force choke: the only escape is to struggle — mash attack/dash. The choke
+  // grips P1 ALONE, so only P1's own bindings are consumed here; every other
+  // seat's keys fall through to the normal combat block below (previously the
+  // whole handler returned, freezing couch P2 and online clients for the hold).
   if (player.choke > 0) {
-    if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) {
-      if (netplay) { if (netIsHost) netLocal.mash++; }   // the choke grips P1 = the host
-      else pend.mash++;
+    if (netplay) {
+      if (netIsHost) {   // the choked hero is the host's — clients fall through untouched
+        if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) netLocal.mash++;
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+        return;
+      }
+    } else if (coop) {
+      // couch: P1's bindings mash; P2's keys continue into the combat block
+      if (e.code === 'ShiftRight' || e.code === 'Slash') {
+        if (!e.repeat) pend.mash++;
+        e.preventDefault();
+        return;
+      }
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); return; }
+    } else {
+      if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) pend.mash++;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+      return;
     }
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
-    return;
   }
   // combat keys. Solo: Space/Shift dash, X/F swing (unchanged). Co-op splits them by
   // hand — P1 = Right-Shift dash + '/' swing, P2 = Left-Shift dash + F swing (the two
@@ -387,7 +417,8 @@ function onKey(e) {
       e.preventDefault();
       return;
     }
-    sfSeedOverride = dailyRun ? dailySeed() : null;   // re-pin today's seed (recomputed in case midnight passed)
+    dailyDay = dailyRun ? dailyDayStr() : '';         // re-snapshot the day with the seed
+    sfSeedOverride = dailyRun ? dailySeed(dailyDay) : null;   // re-pin today's seed (recomputed in case midnight passed)
     init();
     beginRunProof();
     started = true;

@@ -51,19 +51,14 @@ gen() {
     return 1
   fi
 
+  # ALWAYS write both files from the same API response. ElevenLabs synthesis is
+  # nondeterministic, so pairing a fresh response's timing data with an OLD mp3
+  # (the previous "keep existing mp3" path) permanently desyncs that clip's
+  # typewriter. Backfilling a lost .json therefore regenerates the audio too.
   if [[ -f "$out_mp3" ]]; then
-    # Existing mp3 — keep it exactly, only extract timing data
-    python3 -c "
-import json
-with open('$tmp') as f:
-    d = json.load(f)
-with open('$out_json', 'w') as f:
-    a = d['alignment']
-    json.dump({'characters': a['characters'], 'starts': a['character_start_times_seconds']}, f, separators=(',', ':'))
-"
-    echo "  TIMING: saved ${filename}.json (kept existing mp3)"
-  else
-    python3 -c "
+    echo "  NOTE: ${filename}.mp3 regenerated so audio and timing stay in sync"
+  fi
+  python3 -c "
 import json, base64
 with open('$tmp') as f:
     d = json.load(f)
@@ -73,10 +68,9 @@ with open('$out_json', 'w') as f:
     a = d['alignment']
     json.dump({'characters': a['characters'], 'starts': a['character_start_times_seconds']}, f, separators=(',', ':'))
 "
-    local size
-    size=$(wc -c < "$out_mp3")
-    echo "  OK: ${size} bytes"
-  fi
+  local size
+  size=$(wc -c < "$out_mp3")
+  echo "  OK: ${size} bytes"
 
   rm -f "$tmp"
   sleep 0.4

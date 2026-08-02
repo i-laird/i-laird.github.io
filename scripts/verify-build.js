@@ -62,11 +62,20 @@ function inject(window, code) {
 async function verifyBoot() {
   const html = read(path.join(DIST, 'index.html'));
   const { dom, window, errors } = makeDom(html);
+
+  // The static home screen ships the banner and a visible input row in the HTML
+  // itself (fast first paint), which would satisfy the asserts below before the
+  // bundle even runs. Strip #out and hide the row first so passing them requires
+  // boot()'s fallback render to have actually executed inside the obfuscated
+  // bundle — this is what catches obfuscation breaking boot.
+  window.document.getElementById('out').innerHTML = '';
+  const inputRow = window.document.getElementById('input-row');
+  inputRow.style.display = 'none';
+
   inject(window, read(path.join(DIST, 'app.js'))); // the IIFE auto-calls boot()
 
-  // Wait for boot()'s async tail: it appends the banner synchronously but only
-  // reveals the input row after an internal sleep(40), so poll on that.
-  const inputRow = window.document.getElementById('input-row');
+  // Wait for boot()'s async tail: with #out stripped it takes the fallback
+  // render path (banner + cards) and only reveals the input row at the end.
   for (let i = 0; i < 100 && inputRow.style.display !== 'flex'; i++) await sleep(20);
 
   const out = window.document.getElementById('out').textContent;

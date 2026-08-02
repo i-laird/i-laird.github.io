@@ -27,7 +27,7 @@ function lbBegin() {
   if (cheated) { lbState = 'off'; return; }   // warp/grant cheats: a fine playground, not a ranked run
   if (!base || score <= 0) { lbState = 'off'; return; }
   lbState = 'loading';
-  const day = dailyDayStr();
+  const day = (dailyRun && dailyDay) ? dailyDay : dailyDayStr();   // the run's own day, even past UTC midnight
   // fetch both boards: the all-time hall is required; today's board is best-effort
   // (an old worker without daily support echoes the all-time board WITHOUT a `day`
   // field, so requiring d.day === day keeps a stale backend from faking a daily list)
@@ -68,7 +68,7 @@ function lbSubmit() {
     body: JSON.stringify({ game: 'sf', name: nm, score: lbScore, wave: lbWave,
                            token: runToken, ticks: lbTicks, kills: lbKills,
                            ...replayField,
-                           ...(dailyRun ? { day: dailyDayStr() } : {}) }),
+                           ...(dailyRun ? { day: dailyDay || dailyDayStr() } : {}) }),
   })
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(d => {
@@ -103,7 +103,7 @@ function startWatch(item) {
       const rd = d && d.replay;
       // v must match the CURRENT sim-balance version — an older recording would
       // re-simulate under new rules and play back a different run than it claims
-      if (!rd || rd.v !== 5 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+      if (!rd || rd.v !== 6 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
       startReplay(rd, item.entry);
     })
     .catch(() => { watchSel = null; watchErr = 'replay unavailable — recorded on an older build, or expired'; });

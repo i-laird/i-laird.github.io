@@ -21,8 +21,15 @@ function initChess(api) {
   const { appendNode, blank, line, halSpeak, halD, unlockAchievement,
           inputRow, cmd } = api;
 
+  // one game at a time: typing `chess` again while a game is loading/running
+  // (e.g. twice on a slow CDN, or via both callbacks of a double chunk-load)
+  // must not stack a second board/worker/music over the first
+  let chessRunning = false;
+
   return {
     chess() {
+      if (chessRunning) return;
+      chessRunning = true;
       const isHAL    = api.halMode || api.godmodeUnlocked;
       const SKILL    = api.godmodeUnlocked ? 20 : api.halMode ? 12 : 5;
       const THINK_MS = api.godmodeUnlocked ? 1500 : api.halMode ? 1000 : 600;
@@ -43,7 +50,7 @@ function initChess(api) {
       boardRow.appendChild(boardEl); boardRow.appendChild(histEl);
       statusEl.className = 'line';
       hintEl.className   = 'line dim';
-      hintEl.textContent = '  type move (e.g. e4  Nf3  e2e4)    [q] quit    [r] new game';
+      hintEl.textContent = '  type move (e.g. e4  Nf3  e2e4  O-O)    [q] quit    [r] new game';
       wrap.appendChild(halMsgEl); wrap.appendChild(boardRow);
       wrap.appendChild(statusEl); wrap.appendChild(hintEl);
       appendNode(wrap); blank();
@@ -51,6 +58,8 @@ function initChess(api) {
       api.silentInput = true;
 
       let game = null, sfWorker = null, waitingSF = false, gameOver = false, moveLog = [];
+      let discardMoves = 0;   // engine replies owed to an abandoned game (restart while thinking)
+      let loadCancelled = false;
 
       const chessMusicSrc = api.godmodeUnlocked ? 'assets/audio/ais_gambit.mp3' : 'assets/audio/checkmate_in_the_void.mp3';
       const chessMusic = new Audio(chessMusicSrc);
@@ -104,6 +113,7 @@ function initChess(api) {
       }
 
       function endGame() {
+        chessRunning = false;
         api.awaitingInput = null;
         api.silentInput = false;
         if (sfWorker) { sfWorker.terminate(); sfWorker = null; }
@@ -112,6 +122,15 @@ function initChess(api) {
         if (api.activeMusic === chessMusic) api.activeMusic = null;
         inputRow.style.display = 'flex';
         setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
+      }
+
+      // the engine died mid-game (bad CDN body, worker crash): don't leave the
+      // player stuck at "thinking..." forever — surface it and offer the exit
+      function engineFailed() {
+        if (sfWorker) { sfWorker.terminate(); sfWorker = null; }
+        waitingSF = false; gameOver = true;
+        setStatus('  The chess engine crashed. [q] quit', 'err');
+        api.awaitingInput = inp => { if (inp.toLowerCase() === 'q') endGame(); };
       }
 
       function checkOver() {
@@ -168,7 +187,14 @@ function initChess(api) {
         if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(inp)) {
           mv = game.move({ from: inp.slice(0,2).toLowerCase(), to: inp.slice(2,4).toLowerCase(), promotion: inp[4] ? inp[4].toLowerCase() : 'q' });
         }
-        if (!mv) mv = game.move(inp);
+        if (!mv) {
+          // be forgiving about notation: o-o / 0-0 castling, lowercase SAN (nf3),
+          // then chess.js's own sloppy parser as the last resort
+          let san = inp.trim();
+          if (/^(o|0)-(o|0)(-(o|0))?[+#]?$/i.test(san)) san = san.length > 4 ? 'O-O-O' : 'O-O';
+          else if (/^[kqrbn][a-h1-8x]/i.test(san)) san = san[0].toUpperCase() + san.slice(1);
+          mv = game.move(san) || game.move(san, { sloppy: true });
+        }
 
         if (!mv) {
           if (game.moves().length === 0) { checkOver(); return; }
@@ -205,6 +231,7 @@ function initChess(api) {
       function onSFMsg(e) {
         const msg = typeof e === 'string' ? e : (e.data || '');
         if (!msg.startsWith('bestmove')) return;
+        if (discardMoves > 0) { discardMoves--; return; }   // reply belongs to a game we restarted away from
         const bm = msg.split(' ')[1];
         if (!bm || bm === '(none)') { waitingSF = false; checkOver(); return; }
         const mv = game.move({ from: bm.slice(0,2), to: bm.slice(2,4), promotion: bm[4] || 'q' });
@@ -219,6 +246,12 @@ function initChess(api) {
       }
 
       function startChess() {
+        if (waitingSF && sfWorker) {
+          // restarting while the engine thinks: its in-flight reply belongs to the
+          // old game — flush it fast and mark it to be dropped on arrival
+          discardMoves++;
+          sfWorker.postMessage('stop');
+        }
         game = new window.Chess();
         gameOver = false; waitingSF = false; moveLog = [];
         drawBoard(); drawHistory();
@@ -237,24 +270,32 @@ function initChess(api) {
       }
 
       boardEl.textContent = '\n  Loading chess engine...\n';
+      // claim typed input for the whole load window: without this a second
+      // `chess` (or a `hal` setup flow) could clobber awaitingInput mid-load
+      api.awaitingInput = inp => { if (inp.toLowerCase() === 'q') { loadCancelled = true; endGame(); } };
       loadScript('https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js')
         .then(() => fetch('https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js'))
-        .then(r => r.text())
+        .then(r => { if (!r.ok) throw new Error('stockfish fetch ' + r.status); return r.text(); })
         .then(code => {
+          if (loadCancelled) return;
           const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
           sfWorker = new Worker(url);
           URL.revokeObjectURL(url);
           sfWorker.onmessage = onSFMsg;
+          sfWorker.onerror = () => engineFailed();   // a dead worker must never leave "thinking..." forever
           sfWorker.postMessage('uci');
           sfWorker.postMessage('setoption name Skill Level value ' + SKILL);
           sfWorker.postMessage('isready');
           startChess();
         })
         .catch(() => {
+          if (loadCancelled) return;
           boardEl.textContent = '';
-          setStatus('  Failed to load chess engine. Check your connection.', 'err');
+          setStatus('  Failed to load chess engine. Check your connection. [q] quit', 'err');
           blank();
-          api.awaitingInput = inp => { if (inp.toLowerCase() === 'q') { api.awaitingInput = null; api.silentInput = false; inputRow.style.display = 'flex'; setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0); } };
+          // endGame (not a bare input restore): the music started before the load,
+          // and activeMusic must be released or the sound toggle resurrects it
+          api.awaitingInput = inp => { if (inp.toLowerCase() === 'q') endGame(); };
         });
     },
   };

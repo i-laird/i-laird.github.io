@@ -226,7 +226,7 @@ function drawVader(e, col) {
     const px = Math.cos(pa), py = Math.sin(pa);
     ctx.strokeStyle = rim; ctx.lineWidth = 3; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(dir * 3, -28); ctx.lineTo(px * 13, -22 + py * 13); ctx.stroke();
-    const reach = e.mode === 'choke' ? 1 : (0.5 + 0.5 * Math.abs(Math.sin(frame * 0.4)));
+    const reach = e.mode === 'choke' ? 1 : (api.reduceMotion ? 1 : (0.5 + 0.5 * Math.abs(Math.sin(frame * 0.4))));
     ctx.fillStyle = 'rgba(150,120,210,' + (0.28 * reach).toFixed(2) + ')';
     ctx.beginPath(); ctx.arc(px * 16, -22 + py * 16, 7 + 4 * reach, 0, Math.PI * 2); ctx.fill();
     if (e.mode === 'choke') {  // a taut line of dark energy to the throttled hero

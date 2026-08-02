@@ -8,7 +8,9 @@ set -e
 cd "$(dirname "$0")"
 
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-TMP_HTML="$(mktemp -t og_image).html"
+TMP_BASE="$(mktemp -t og_image)"
+TMP_HTML="${TMP_BASE}.html"
+trap 'rm -f "$TMP_BASE" "$TMP_HTML"' EXIT
 
 # head: unquoted heredoc so $PWD resolves the font paths (no JS in this part)
 cat > "$TMP_HTML" << EOF

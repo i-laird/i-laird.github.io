@@ -20,10 +20,15 @@ function initDesktop(api) {
   // re-read through api inside sfBridge() below.
   const { cmd, openUrl, unlockAchievement, _chirp, makeRng, HAL_WORKER_URL } = api;
 
+      let xpLive = null;   // the open desktop, if any — `gui` twice must not stack two
+
       function launchXP() {
+        if (xpLive) return;
         cmd.blur();
 
         const xp = document.createElement('div');
+        xpLive = xp;
+        let dead = false;   // set by shutdown(); gates the async Stick Fighter launch
         xp.style.cssText = `
           position:fixed;inset:0;z-index:500;
           font-family:Tahoma,Arial,sans-serif;font-size:12px;
@@ -239,6 +244,7 @@ function initDesktop(api) {
           };
         }
         function launchStickFighter() {
+          if (dead) return;   // Escape during the shutdown fade — icons are still clickable
           if (typeof window.openStickFighter === 'function') { window.openStickFighter(xp, sfBridge()); return; }
           if (!sfLoading) {
             sfLoading = new Promise((resolve, reject) => {
@@ -248,17 +254,23 @@ function initDesktop(api) {
               document.head.appendChild(s);
             });
           }
-          sfLoading.then(() => window.openStickFighter(xp, sfBridge())).catch(() => { sfLoading = null; });
+          // the chunk can land AFTER the desktop was shut down (Escape during the
+          // fetch) — booting then would leak the game's document-level listeners
+          // forever, since shutdown() already ran and nothing calls _sfCleanup
+          sfLoading.then(() => { if (!dead && xp.isConnected) window.openStickFighter(xp, sfBridge()); })
+                   .catch(() => { sfLoading = null; });
         }
         // ────────────────────────────────────────────────────────────
 
         function shutdown() {
+          if (dead) return;
+          dead = true;
           if (xp._sfCleanup) { xp._sfCleanup(); xp._sfCleanup = null; }
           clearInterval(clockId);
           document.removeEventListener('keydown', escHandler);
           xp.style.transition = 'opacity 0.5s';
           xp.style.opacity = '0';
-          setTimeout(() => { xp.remove(); cmd.focus(); }, 500);
+          setTimeout(() => { xp.remove(); if (xpLive === xp) xpLive = null; cmd.focus(); }, 500);
         }
         function escHandler(e) { if (e.key === 'Escape') shutdown(); }
         document.addEventListener('keydown', escHandler);

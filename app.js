@@ -42,6 +42,11 @@
     try {
       awaitingInput = null;
       silentInput = false;
+      if (sansBattleActive && sansHandlers && sansHandlers.stopBattle) {
+        // stop the battle's interval + capture-phase key listeners, or the
+        // "recovered" terminal keeps a zombie loop eating every keystroke
+        sansHandlers.stopBattle();
+      }
       if (halMode || sansMode || sansBattleActive) {
         sansBattleActive = false;
         restoreNormal();   // clears halMode/halLLM/halLLMBusy/sansMode + theme
@@ -218,7 +223,10 @@
 
   function resumeModeAudio() {
     if (activeMusic) activeMusic.play().catch(() => {});
-    else if (sansMode) sansMenuMusic().play().catch(() => {});
+    // menu music only OUTSIDE a battle: during the battle's deliberately-silent
+    // intro activeMusic is still null, and starting the menu track here would
+    // stack it under the battle music when that drops in
+    else if (sansMode && !sansBattleActive) sansMenuMusic().play().catch(() => {});
   }
 
   function toggleSound() {
@@ -448,7 +456,8 @@
   function ssBusy() {
     return !!(awaitingInput || halMode || sansMode || sansBattleActive ||
               inputRow.style.display === 'none' || achOverlayEl || projOverlayEl ||
-              roomActive || document.hidden);
+              roomActive || document.hidden ||
+              document.getElementById('halllm-confirm'));   // the LLM HAL gate opens before halMode is set
   }
   function ssArm() {
     clearTimeout(ssTimer);
@@ -1143,6 +1152,9 @@
       document.head.appendChild(fav);
     }
     fav.href = theme.icon;
+    // reduced-motion godmode uses variable overrides instead of the CSS hue sweep;
+    // returning to the normal theme just removed them, so paint the tint back on
+    if (!theme.colors && rainbowId === 'static') applyGodmodeTint();
     crtDegauss(); // a theme change degausses the tube (no-op at load / CRT off / reduced motion)
   }
   applyTheme('normal'); // set the default favicon/title on load
@@ -1611,6 +1623,7 @@
     if (!segs.length) return { err: 'Is a directory' };
     const ph = fsWalk(segs.slice(0, -1));
     if (!ph || !ph.node.d) return { err: 'No such file or directory' };
+    if (ph.node.locked) return { err: 'Permission denied' };   // cd/rm refuse locked dirs; writes must too
     let leaf = segs[segs.length - 1];
     const existKey = Object.keys(ph.node.d).find(k => k.toLowerCase() === leaf.toLowerCase());
     if (existKey) leaf = existKey;
@@ -1734,7 +1747,7 @@
     const words = expandArgList(arg || '');
     if (!words.length) { line('cat: missing file operand', 'err'); blank(); return false; }
     if (words.length === 1 && words[0].toLowerCase() === 'resume.pdf') {
-      line('cat: resume.pdf: Binary file — try <span class="blue">resume</span> instead.'); blank(); return;
+      line('cat: resume.pdf: Binary file — try <span class="blue">resume</span> instead.'); blank(); return false;
     }
     const { lines, errs } = catLines(words);
     errs.forEach(e => line(esc(e), 'err'));
@@ -2925,7 +2938,7 @@
     b.appendChild(projEl('div', 'proj-sec', 'Highlights'));
     [
       ['Two HAL 9000s', 'A scripted HAL voiced by ~135 pregenerated ElevenLabs clips synced to a typewriter — and an experimental, opt-in HAL run by a live language model that you have to talk your way past to escape the terminal.'],
-      ['47 easter eggs', 'Discoveries unlock achievements that persist in localStorage and render to a shareable card — a few are deep cuts, with a finale for the completionists.'],
+      [`${ACHIEVEMENTS.length} easter eggs`, 'Discoveries unlock achievements that persist in localStorage and render to a shareable card — a few are deep cuts, with a finale for the completionists.'],
       ['Five games + a hidden brawler', 'Racecar, Snake, Pong, 2048, and Stockfish-powered chess across three difficulty tiers. Buried in the XP desktop: Stick Fighter 2000, a horde-survival brawler with couch and online co-op, a boss gauntlet, daily seeded runs, and an online leaderboard with watchable replays.'],
       ['A room, and a phone call', 'Type `room` and the camera pulls back from the terminal into a walkable CSS-3D bedroom. Stay long enough and a phone rings down the hallway — answer it, and HAL can end up calling your real telephone through an SMS-verified, consent-gated Twilio pipeline.'],
     ].forEach(([t, d]) => {
@@ -2984,7 +2997,7 @@
         scroll();
         // Prefetch the LLM chunk while they read the menu — it's usually loaded
         // by choice time. Errors surface on actual use, not here.
-        loadHalLLM().catch(() => {});
+        loadHalLLM().catch(() => { halLLMLoading = null; });   // a failed prefetch must not cache the rejection
         awaitingInput = choice => {
           awaitingInput = null;
           const c = (choice || '').trim().toLowerCase();
@@ -3084,7 +3097,7 @@
       unlockAchievement('ian');
       blank();
 
-      const msg = endingSeen                ? '26/26. you absolute legend.' :
+      const msg = endingSeen                ? `${ACHIEVEMENTS.length}/${ACHIEVEMENTS.length}. you absolute legend.` :
                   foundEggs.has('godmode')  ? 'you KILLED HAL?! ...nice.'   :
                   foundEggs.has('meet-hal') ? 'so you met HAL. be careful.' :
                                               'Real Ian uses Zshell!';
@@ -4224,7 +4237,7 @@ Of a bicycle built for two.`;
   } else {
     boot();
   }
-  // safety net: 26/26 reached but the finale never fired (e.g. closed mid-unlock)
+  // safety net: all eggs found but the finale never fired (e.g. closed mid-unlock)
   if (!endingSeen && foundEggs.size === ACHIEVEMENTS.length) setTimeout(armFinale, 3000);
   showEggNudge();
 
@@ -4248,7 +4261,10 @@ Of a bicycle built for two.`;
   // onclick handlers in index.html). As a classic script they're already window
   // globals; making the exports explicit means they survive the obfuscated build,
   // where this file is wrapped in an IIFE and top-level names no longer auto-attach
-  // to window. Keep these four on the obfuscator's reserved-names list.
+  // to window. These survive obfuscation because they are PROPERTY assignments and
+  // build.js keeps renameProperties off — only the RHS identifier gets mangled, which
+  // is fine. (They are deliberately NOT in build.js's reservedNames, which lists only
+  // the eight chunk entry points; verify-build's typeof checks pin this contract.)
   // (openStickFighter is exported by stickfighter.js; the api bridge is passed in,
   // not looked up by name — see launchStickFighter / sfBridge.)
   window.unlockAchievement = unlockAchievement;

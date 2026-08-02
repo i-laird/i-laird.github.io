@@ -256,7 +256,7 @@ function updateEnemy(e) {
     if (e.intro > 0) { e.intro--; e.phase += 0.04; return; }  // step from the shadows, then begin the duel
     e.st--;
     e.disarmed = arrows.some(a => a.kind === 'vsaber');     // his blade is mid-flight
-    if (!e.phase2 && e.hp <= 5 && e.mode !== 'slash') enterVaderPhase2(e);
+    if (!e.phase2 && e.hp <= e.maxhp / 2 && e.mode !== 'slash') enterVaderPhase2(e);
     else if (e.mode === 'advance') {
       if (e.stun <= 0) { e.x += dx / d * e.spd; e.y += dy / d * e.spd; e.phase += 0.12; }
       if (e.st <= 0) { if (d < 160) vaderNextAttack(e, d); else e.st = 22; }  // close, then commit
@@ -348,7 +348,7 @@ function updateEnemy(e) {
     } else if (e.mode === 'cast') {                          // hands raised — a long, building lightning telegraph
       if (e.st === e.castDur - 14) sfSfx.ignite();           // a charging whir partway in
       if (e.st <= 0) {
-        if (player.dashT > 0) { e.mode = 'recover'; e.st = 18; sparks.push({ x: e.x, y: e.y - 46, t: 12, color: '#d0b3ff', txt: 'MISSED' }); }
+        if (bossTarget().dashT > 0) { e.mode = 'recover'; e.st = 18; sparks.push({ x: e.x, y: e.y - 46, t: 12, color: '#d0b3ff', txt: 'MISSED' }); }
         else {
           sidiousLightning(e); e.mode = 'lightning';
           // the rake sweeps slowly (slower than a running player) over a long window; the bolt is a quick zap

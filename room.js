@@ -624,6 +624,9 @@ function initRoom(api) {
   function stopCallAudio() {
     if (callAudio) { try { callAudio.pause(); } catch (e) { /* already dead */ } }
     callAudio = null;
+    // the no-worker-audio path speaks through the bridged halSpeak, which falls
+    // back to browser TTS for live replies — hang-up must silence that too
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) { /* unsupported */ }
   }
 
   // Speak one HAL line: worker-synthesized mp3 when it came back (sound on),
@@ -1084,6 +1087,8 @@ function initRoom(api) {
     cam.x = CAM_START.x; cam.y = CAM_START.y; cam.z = CAM_START.z;
     cam.yaw = CAM_START.yaw; cam.pitch = CAM_START.pitch;
     dragging = false;
+    dragDist = 0;   // a look-drag from the LAST visit must not suppress this visit's first click
+    while (timers.length) clearTimeout(timers.pop());   // e.g. the previous exit's deferred blink removal
     lastT = '';
     billYaw = null;
     creepStage = 0;

@@ -224,7 +224,7 @@ function drawBossIntro() {
 
     // prompt
     ctx.save();
-    ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 0.16);
+    ctx.globalAlpha = api.reduceMotion ? 1 : 0.6 + 0.4 * Math.sin(t * 0.16);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 15px Tahoma,Arial'; ctx.textAlign = 'center';
     ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
     ctx.fillText('▶  press  Z  to face them  ◀', GW / 2, GH - 22);
@@ -248,7 +248,9 @@ function drawBossIntro() {
     const line = cfg.lines[bi.lineIdx];
     if (bi.chars < line.text.length) {
       const before = Math.floor(bi.chars);
-      bi.chars = Math.min(line.text.length, bi.chars + (api.reduceMotion ? 2.4 : 0.62));
+      // constant rate: bossIntro ticks advance the sim clock, so the typewriter
+      // speed must not depend on settings (reduce-motion users press Z to skip)
+      bi.chars = Math.min(line.text.length, bi.chars + 0.62);
       if (Math.floor(bi.chars) > before && Math.floor(bi.chars) % 2 === 0 && line.text[before] !== ' ') sfSfx.blip();
       bi.holdT = 0;
     } else {

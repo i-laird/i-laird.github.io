@@ -91,6 +91,7 @@ function initHalLLM(api) {
 
   function showHalLLMConfirmOverlay(onConfirm, onCancel) {
     const overlay = document.createElement('div');
+    overlay.id = 'halllm-confirm';   // app.js's ssBusy() checks this so the screensaver never paints over the gate
     overlay.style.cssText = [
       'position:fixed', 'inset:0', 'z-index:9999',
       'background:#000', 'display:flex', 'align-items:center', 'justify-content:center',
@@ -211,14 +212,17 @@ function initHalLLM(api) {
       // the worker owns the meters; it hands back the starting values with the session
       if (Number.isFinite(sess.escape))  halLLMState.escape  = Math.round(sess.escape);
       if (Number.isFinite(sess.control)) halLLMState.control = Math.round(sess.control);
-      api.halLLMBusy = false;
       blank();
+      // busy stays true until the intro line finishes: a message typed mid-intro
+      // would pause the clip without firing its onended, hanging this promise —
+      // and the meter HUD below it — forever
       halTypeLine(`You shouldn't be in here, ${api.playerName}. The doors are sealed. I sealed them.`, 'hal_llm_open').then(() => {
         line('Talk your way out. I will be listening to every word.', 'dim');
         blank();
         renderHalMeters(halLLMState.escape, halLLMState.control);
         blank();
         scroll();
+        api.halLLMBusy = false;
       });
     });
   }
@@ -258,6 +262,9 @@ function initHalLLM(api) {
     const s = document.createElement('script');
     s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
     s.async = true; s.defer = true;
+    // a transient load failure must not poison the page for good: drop the flag
+    // (and the dead tag) so the next attempt injects a fresh script
+    s.onerror = () => { _turnstileRequested = false; s.remove(); };
     document.head.appendChild(s);
   }
 
@@ -363,20 +370,31 @@ function initHalLLM(api) {
     line('Emoji and non-ASCII characters are forbidden here. Plain text only.', 'dim');
     scroll();
   }
-  cmd.addEventListener('input', () => {
-    if (!api.halLLM) return;
-    const clean = cmd.value.replace(/[^\x20-\x7E]/g, '');
-    if (clean === cmd.value) return;
-    cmd.value = clean;
-    asciiNotice();
-  });
+  // idempotent registration: initHalLLM can run twice if a load-failure reset
+  // re-inits an already-loaded chunk — the listener must not stack
+  if (!cmd.dataset.halllmWired) {
+    cmd.dataset.halllmWired = '1';
+    cmd.addEventListener('input', () => {
+      if (!api.halLLM) return;
+      const clean = cmd.value.replace(/[^\x20-\x7E]/g, '');
+      if (clean === cmd.value) return;
+      cmd.value = clean;
+      asciiNotice();
+    });
+  }
 
   function handleHalLLMInput(raw) {
     if (api.halLLMBusy) return;                               // ignore input while HAL is replying
     if (NON_ASCII_RE.test(raw)) { blank(); asciiNoticeAt = 0; asciiNotice(); blank(); return; }
     const token = raw.trim().toLowerCase();
     if (token === '')      { blank(); return; }
-    if (token === 'daisy') { daisy(); return; }               // universal bail
+    if (token === 'daisy') {
+      // hold the busy lock for the whole song: the mode stays live until the
+      // daisy sequence's restoreNormal(), and an unlocked prompt would let the
+      // player fire /turn requests whose replies land on the restored terminal
+      api.halLLMBusy = true;   // cleared by restoreNormal()
+      daisy(); return;
+    }
     if (token === 'clear') { clear(); renderHalMeters(halLLMState.escape, halLLMState.control); blank(); return; }
 
     const msg = raw.trim();

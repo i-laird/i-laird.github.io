@@ -159,7 +159,8 @@ let sfRng = Math.random;            // replaced with a seeded generator in init(
 function rnd() { return sfRng(); }  // deterministic [0,1) — the simulation's only random source
 
 // ── state — all run state: sim entities, leaderboard/proof, replay recorder, netplay vars, co-op, class tuning + SPELLS ──
-let best = parseInt(localStorage.getItem('ilaird_sf_best') || '0', 10) || 0;
+let best = 0;
+try { best = parseInt(localStorage.getItem('ilaird_sf_best') || '0', 10) || 0; } catch (_) { /* private mode */ }
 let player, enemies, warns, coins, powerups, blasts, sparks, ghosts,
     score, mult, wave, alive, started, frame, keys, rafId,
     freezeT, banner, bannerSub, bannerT, deadT, shake, newBest,
@@ -220,7 +221,7 @@ function recPush(ev) {
 // hal-worker (/mp-host, /mp-offer, /mp-join, /mp-answer); gameplay traffic is pure
 // P2P — no server ever sees it. Nothing persists out of an online run (noPersist).
 const NET_VER = 2;      // wire-protocol version (handshake-checked); 2 = resume/reconnect protocol
-const NET_SIM_V = 5;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 5 = great-boss knockback immunity + deterministic equal-tick event order
+const NET_SIM_V = 6;    // sim-balance version — MUST track recHdr.v (a stale sw.js build on one peer would silently desync); 6 = 2026-08 audit batch (Vader phase-2 at half band-scaled HP, boss target falls through to seats 3/4, upgrade min/max applies, RM-independent boss-intro typewriter, cutscene shake, untouchable knockback guard)
 const NET_DELAY = 5;    // ticks of input delay (~83ms) — local input applies at tick+NET_DELAY on both sims
 const NET_MAX_SEATS = 4; // the WAR BAND: up to four fighters — host = seat 0 (P1), joiners 1..3.
                          // Topology is a host-relayed STAR: every client links only to the host,
@@ -266,6 +267,9 @@ let netDiscoT = 0;      // grace timer: pc 'disconnected' must persist ~10s befo
 // 2=JOIN (online). coop/dailyRun stay the derived per-run flags, persisting across
 // R-restarts exactly as before.
 let coop = false, dailyRun = false, p2 = null, p3 = null, p4 = null;
+// the daily run's board day, snapshotted WITH the seed at run start — a run that
+// crosses UTC midnight must submit to the board its seed belongs to, not "today"
+let dailyDay = '';
 let heat = 0;   // the wyrm & rider's shared fire gauge (reset in init; see WYRM & RIDER)
 // ── the death KILL CAM (render-only): a rolling ghost tape of draw-ready entity
 //    snapshots; on death the last seconds replay in slow motion, camera tight on
@@ -661,7 +665,7 @@ function pickBoon(id) {
   b.apply(picker);
   banner = (coop && !bane ? 'P' + (who + 1) + ' · ' : '') + b.icon + ' ' + b.name + (bane ? ' — your burden' : '');
   bannerSub = b.desc; bannerT = 110;
-  boonMenu = null; paused = false; keys = {};
+  boonMenu = null; paused = !!upMenu; keys = {};   // an open shop underneath keeps the sim held
   bane ? sfSfx.thud() : sfSfx.sword();
   // co-op: the next seat picks — their OWN offer, their OWN confirm
   if (!bane && coop && who + 1 < heroesAll().length) openBoonMenu(title, who + 1);
@@ -717,8 +721,11 @@ function drawBoonPanel() {
 const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
 const KEG_R     = 42;    // the bombardier's powder-keg blast radius
 const KEG_AIR   = 62;    // ticks a lobbed keg hangs in the air (the dodge window)
-let classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, CLASSES.length - 1);
-let classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, CLASSES.length - 1);
+let classSel = 0, classSel2 = 0;
+try {
+  classSel  = clamp(parseInt(localStorage.getItem('ilaird_sf_cls')  || '0', 10) || 0, 0, CLASSES.length - 1);
+  classSel2 = clamp(parseInt(localStorage.getItem('ilaird_sf_cls2') || '0', 10) || 0, 0, CLASSES.length - 1);
+} catch (_) { /* private mode — localStorage may throw */ }
 // HARD MODE — unlocked forever by sparing Ian (finishIanSpare). Once earned it's a
 // CHOICE on the intro (SINGLEPLAYER → ☠ HARD): enemy types arrive a wave early,
 // elites stalk from wave 1, the support pieces join at 4/6. DAILY runs stay normal
@@ -750,8 +757,8 @@ function resetPend() {
 // via GET /scores?day=…, written via POST /score with a `day` field).
 function dailyDayStr() { return new Date().toISOString().slice(0, 10).replace(/-/g, ''); }  // e.g. '20260712' (UTC)
 function dailyDayPretty() { const d = dailyDayStr(); return d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6); }
-function dailySeed() {
-  const s = 'sf-daily-' + dailyDayStr();
+function dailySeed(day) {
+  const s = 'sf-daily-' + (day || dailyDayStr());
   let h = 5381 >>> 0;
   for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
   return h >>> 0;
@@ -860,7 +867,7 @@ function init() {
     // change (damage, speeds, AI, economy), or old replays re-simulate under new
     // rules and silently diverge from their recorded scores.
     recEv = []; recLastM = -1; recOverflow = false;
-    recHdr = { v: 5, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
+    recHdr = { v: 6, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
                up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
   }
   player.dashCharges = up.dashMax; player.rechargeT = 0;
@@ -938,7 +945,8 @@ function bossTarget() {
   if (!coop) return player;
   if (!player.down) return player;
   if (p2 && !p2.down) return p2;
-  return player;                 // both down — the run is ending anyway
+  for (const h of heroesLive()) return h;   // war-band seats 3/4 keep the duel alive
+  return player;                 // everyone down — the run is ending anyway
 }
 // the goblin shaman's ritual circle: grunts inside are hastened 1.3× — 1.55×
 // while the shaman is mid frenzy-shriek. ≤2 shamans afield keeps this scan
@@ -1051,20 +1059,22 @@ const UPGRADES = [
   { id: 'gandalf',     tree: 'ALLIES', name: 'Summon Gandalf',  desc: 'press 1 — staff bolts',              icon: '🧙', req: null,         apply: () => { up.champs.gandalf = true; } },
   { id: 'luke',        tree: 'ALLIES', name: 'Summon Luke',     desc: 'press 2 — a green saber',            icon: '⚔️', req: 'gandalf',    apply: () => { up.champs.luke = true; } },
   { id: 'jotaro',      tree: 'ALLIES', name: 'Summon Jotaro',   desc: 'press 3 — ZA WARUDO',                icon: '👊', req: 'luke',       apply: () => { up.champs.jotaro = true; } },
-  { id: 'champ_long',  tree: 'ALLIES', name: 'Lasting Allies',  desc: 'allies fight 40% longer',            icon: '⏳', req: 'gandalf',    apply: () => { up.champMul = 1.4; } },
-  { id: 'champ_long2', tree: 'ALLIES', name: 'Eternal Allies',  desc: 'allies fight far longer still',      icon: '♾️', req: 'champ_long', apply: () => { up.champMul = 1.8; } },
-  { id: 'champ_fast',  tree: 'ALLIES', name: 'Quick Summon',    desc: 'meter charges 50% faster',           icon: '⏩', req: 'gandalf',    apply: () => { up.meterMul = 1.5; } },
-  { id: 'champ_cost',  tree: 'ALLIES', name: 'Cheap Summon',    desc: 'allies cost less meter to call',     icon: '🪙', req: 'gandalf',    apply: () => { up.summonCost = Math.round(METER_MAX * 0.7); } },
+  // min/max, not absolute: the capstones don't require every sibling node, so a
+  // cheaper node bought AFTER a capstone must never downgrade the stat it set
+  { id: 'champ_long',  tree: 'ALLIES', name: 'Lasting Allies',  desc: 'allies fight 40% longer',            icon: '⏳', req: 'gandalf',    apply: () => { up.champMul = Math.max(up.champMul, 1.4); } },
+  { id: 'champ_long2', tree: 'ALLIES', name: 'Eternal Allies',  desc: 'allies fight far longer still',      icon: '♾️', req: 'champ_long', apply: () => { up.champMul = Math.max(up.champMul, 1.8); } },
+  { id: 'champ_fast',  tree: 'ALLIES', name: 'Quick Summon',    desc: 'meter charges 50% faster',           icon: '⏩', req: 'gandalf',    apply: () => { up.meterMul = Math.max(up.meterMul, 1.5); } },
+  { id: 'champ_cost',  tree: 'ALLIES', name: 'Cheap Summon',    desc: 'allies cost less meter to call',     icon: '🪙', req: 'gandalf',    apply: () => { up.summonCost = Math.min(up.summonCost, Math.round(METER_MAX * 0.7)); } },
   { id: 'ally_taunt',  tree: 'ALLIES', name: 'Vanguard',        desc: 'nearby foes turn on your allies',    icon: '🚩', req: 'gandalf',    apply: () => { up.vanguard = true; } },
   { id: 'ally_medic',  tree: 'ALLIES', name: 'Medic',           desc: 'revive twice as fast · longer mercy', icon: '⛑️', req: null, coopOnly: true, apply: () => { up.medic = true; } },
-  { id: 'champ_master',tree: 'ALLIES', name: 'The Fellowship',  desc: 'allies linger · charge fast · cheap', icon: '💍', req: 'champ_long2', cost: 3, apply: () => { up.champMul = 2.4; up.meterMul = 2.2; up.summonCost = Math.round(METER_MAX * 0.5); } },
-  { id: 'swing_fast',  tree: 'BLADE',  cls: 'melee',  name: 'Swift Blade',     desc: 'swing more often',                   icon: '🗡️', req: null,         apply: () => { up.swingMs = 440; } },
-  { id: 'swing_fast2', tree: 'BLADE',  cls: 'melee',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = 300; } },
-  { id: 'swing_wide',  tree: 'BLADE',  cls: 'melee',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = 150; } },
-  { id: 'swing_wide2', tree: 'BLADE',  cls: 'melee',  name: 'Great Cleave',    desc: 'even wider reach',                   icon: '⭕', req: 'swing_wide', apply: () => { up.swingR = 195; } },
-  { id: 'swing_long',  tree: 'BLADE',  cls: 'melee',  name: 'Keen Edge',       desc: 'Excalibur lasts 50% longer', icon: '⌛', req: null,         apply: () => { up.swordMul = 1.5; } },
+  { id: 'champ_master',tree: 'ALLIES', name: 'The Fellowship',  desc: 'allies linger · charge fast · cheap', icon: '💍', req: 'champ_long2', cost: 3, apply: () => { up.champMul = Math.max(up.champMul, 2.4); up.meterMul = Math.max(up.meterMul, 2.2); up.summonCost = Math.min(up.summonCost, Math.round(METER_MAX * 0.5)); } },
+  { id: 'swing_fast',  tree: 'BLADE',  cls: 'melee',  name: 'Swift Blade',     desc: 'swing more often',                   icon: '🗡️', req: null,         apply: () => { up.swingMs = Math.min(up.swingMs, 440); } },
+  { id: 'swing_fast2', tree: 'BLADE',  cls: 'melee',  name: 'Lightning Blade', desc: 'swing even more often',              icon: '⚡', req: 'swing_fast', apply: () => { up.swingMs = Math.min(up.swingMs, 300); } },
+  { id: 'swing_wide',  tree: 'BLADE',  cls: 'melee',  name: 'Wide Cleave',     desc: 'wider sword reach',                  icon: '↔️', req: null,         apply: () => { up.swingR = Math.max(up.swingR, 150); } },
+  { id: 'swing_wide2', tree: 'BLADE',  cls: 'melee',  name: 'Great Cleave',    desc: 'even wider reach',                   icon: '⭕', req: 'swing_wide', apply: () => { up.swingR = Math.max(up.swingR, 195); } },
+  { id: 'swing_long',  tree: 'BLADE',  cls: 'melee',  name: 'Keen Edge',       desc: 'Excalibur lasts 50% longer', icon: '⌛', req: null,         apply: () => { up.swordMul = Math.max(up.swordMul, 1.5); } },
   { id: 'swing_riposte',tree: 'BLADE', cls: 'melee',  name: 'Riposte',         desc: 'batted shots return as your own',    icon: '🔄', req: 'swing_fast', apply: () => { up.riposte = true; } },
-  { id: 'swing_master',tree: 'BLADE',  cls: 'melee',  name: 'Andúril',         desc: 'huge reach · blistering swing speed', icon: '🔥', req: 'swing_wide2', cost: 2, apply: () => { up.swingR = 250; up.swingMs = 210; } },
+  { id: 'swing_master',tree: 'BLADE',  cls: 'melee',  name: 'Andúril',         desc: 'huge reach · blistering swing speed', icon: '🔥', req: 'swing_wide2', cost: 2, apply: () => { up.swingR = Math.max(up.swingR, 250); up.swingMs = Math.min(up.swingMs, 210); } },
   { id: 'bow_fast',    tree: 'BOW',    cls: 'ranged', name: 'Rapid Shot',      desc: 'loose arrows more often',            icon: '🏹', req: null,         apply: () => { up.shotMs = Math.min(up.shotMs, 360); } },
   { id: 'bow_fast2',   tree: 'BOW',    cls: 'ranged', name: 'Arrow Storm',     desc: 'a blistering rate of fire',          icon: '🌪️', req: 'bow_fast',   apply: () => { up.shotMs = Math.min(up.shotMs, 280); } },
   { id: 'bow_dmg',     tree: 'BOW',    cls: 'ranged', name: 'Power Shot',      desc: 'arrows strike twice as hard',        icon: '💪', req: null,         apply: () => { up.shotDmg = 2; } },
@@ -1133,7 +1143,7 @@ function offerUpgrade() {
 function buyUpgrade(u) {
   if (tokens < upCost(u)) { sfSfx.thud(); return; }   // can't afford this capstone yet
   tokens -= upCost(u); up.owned.add(u.id); u.apply();
-  if (upCost(u) >= 2) sfUnlock('capstone');
+  if ((u.cost || 1) >= 2) sfUnlock('capstone');   // base cost, not upCost() — Heavy Toll inflates that to 2 for every node
   saveUpgrades(); saveTokens();            // unlocked upgrades & token balance persist across runs
   sfSfx.summon();
   upMenu.sel = Math.min(upMenu.sel, availableUpgrades().length);  // clamp onto the (possibly shorter) list
@@ -2201,7 +2211,7 @@ function drawVader(e, col) {
     const px = Math.cos(pa), py = Math.sin(pa);
     ctx.strokeStyle = rim; ctx.lineWidth = 3; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(dir * 3, -28); ctx.lineTo(px * 13, -22 + py * 13); ctx.stroke();
-    const reach = e.mode === 'choke' ? 1 : (0.5 + 0.5 * Math.abs(Math.sin(frame * 0.4)));
+    const reach = e.mode === 'choke' ? 1 : (api.reduceMotion ? 1 : (0.5 + 0.5 * Math.abs(Math.sin(frame * 0.4))));
     ctx.fillStyle = 'rgba(150,120,210,' + (0.28 * reach).toFixed(2) + ')';
     ctx.beginPath(); ctx.arc(px * 16, -22 + py * 16, 7 + 4 * reach, 0, Math.PI * 2); ctx.fill();
     if (e.mode === 'choke') {  // a taut line of dark energy to the throttled hero
@@ -4193,6 +4203,7 @@ function isGreatBoss(e) {
 function knockback(cx, cy, killR, push, stun) {
   for (const e of enemies) {
     if (isGreatBoss(e)) continue;   // matches the frost/chain exclusions — bosses only fall to real strikes
+    if (untouchable(e)) continue;   // scripted intros/cutscenes: a stray blast must not kill mid-monologue
     const dx = e.x - cx, dy = e.y - cy, d = Math.hypot(dx, dy) || 1;
     if (killR > 0 && d < killR) {
       if (!e.hp || (e.hp -= 2) <= 0) { killEnemy(e); continue; }
@@ -4392,7 +4403,7 @@ function endRun() {
   alive = false;
   if (dailyRun) sfUnlock('daily');   // seeing a daily through counts, win or lose
   lbTicks = tick; lbKills = kills;   // the run's proof stats, frozen at death
-  if (score > best) { best = score; newBest = true; localStorage.setItem('ilaird_sf_best', String(best)); }
+  if (score > best) { best = score; newBest = true; try { localStorage.setItem('ilaird_sf_best', String(best)); } catch (_) { /* private mode */ } }
   sfSfx.die(); shake = 14;
   lbBegin();
 }
@@ -4435,7 +4446,7 @@ function lbBegin() {
   if (cheated) { lbState = 'off'; return; }   // warp/grant cheats: a fine playground, not a ranked run
   if (!base || score <= 0) { lbState = 'off'; return; }
   lbState = 'loading';
-  const day = dailyDayStr();
+  const day = (dailyRun && dailyDay) ? dailyDay : dailyDayStr();   // the run's own day, even past UTC midnight
   // fetch both boards: the all-time hall is required; today's board is best-effort
   // (an old worker without daily support echoes the all-time board WITHOUT a `day`
   // field, so requiring d.day === day keeps a stale backend from faking a daily list)
@@ -4476,7 +4487,7 @@ function lbSubmit() {
     body: JSON.stringify({ game: 'sf', name: nm, score: lbScore, wave: lbWave,
                            token: runToken, ticks: lbTicks, kills: lbKills,
                            ...replayField,
-                           ...(dailyRun ? { day: dailyDayStr() } : {}) }),
+                           ...(dailyRun ? { day: dailyDay || dailyDayStr() } : {}) }),
   })
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(d => {
@@ -4511,7 +4522,7 @@ function startWatch(item) {
       const rd = d && d.replay;
       // v must match the CURRENT sim-balance version — an older recording would
       // re-simulate under new rules and play back a different run than it claims
-      if (!rd || rd.v !== 5 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
+      if (!rd || rd.v !== 6 || !Array.isArray(rd.ev) || typeof rd.seed !== 'number') return Promise.reject('bad');
       startReplay(rd, item.entry);
     })
     .catch(() => { watchSel = null; watchErr = 'replay unavailable — recorded on an older build, or expired'; });
@@ -4579,16 +4590,20 @@ function netLog(msg) {
    - slot rooms (pre-run, joiners 2..3): rejoinHash(code + ':join:' + n, 0)
    - per-seat rejoin rooms (mid-run reconnection): rejoinHash(code + ':' + seat, seed) */
 function netSlotRoom(code, n) { return rejoinHash(code + ':join:' + n, 0); }
-function netSeatRoom(seat) { return rejoinHash(netRoomCode + ':' + seat, netCfg ? netCfg.seed >>> 0 : 0); }
+// derived from the run's FIRST seed (seed0), never the current one: a rematch
+// changes netCfg.seed, and a peer that drops during the restart exchange would
+// otherwise re-signal into a different room than the one being polled
+function netSeatRoom(seat) { return rejoinHash(netRoomCode + ':' + seat, netCfg ? (netCfg.seed0 != null ? netCfg.seed0 : netCfg.seed) >>> 0 : 0); }
 function netOpen(mode) {
   netTeardown();
-  // a stale paired pick can't cross into the wrong seat: the joiner never plays
-  // the wyrm (they're P2+), and nobody plays the rider except through the pair
-  if (classSel === PAIR_RIDER || (classSel === PAIR_WYRM && mode !== 'host')) classSel = 0;
   netDiag = { local: '?', remote: '?', states: [] };
+  // save BEFORE the pair coercion below, so backing out restores the real pick
   netSaved = { c1: classSel, c2: classSel2, coop, daily: dailyRun, hs: hardSel,
                top: menuTop, ss: subSingle, sm: subMulti,
                gw: xp.offsetWidth, gh: xp.offsetHeight - 40 };
+  // a stale paired pick can't cross into the wrong seat: the joiner never plays
+  // the wyrm (they're P2+), and nobody plays the rider except through the pair
+  if (classSel === PAIR_RIDER || (classSel === PAIR_WYRM && mode !== 'host')) classSel = 0;
   netIsHost = mode === 'host';
   netSeat = netIsHost ? 0 : -1;
   netConns = []; netArming = null;
@@ -4754,6 +4769,9 @@ async function netHostArm(slotCode) {
         const rr = await fetch(base + '/mp-answer?code=' + encodeURIComponent(pend.room));
         if (!rr.ok) return;
         const dd = await rr.json();
+        // re-check after the awaits — a teardown/hello may have retired this pend
+        // while the fetch was in flight
+        if (netArming !== pend) { clearInterval(pend.pollId); pend.pollId = 0; return; }
         if (dd && dd.answer && pend.pc && pend.pc.signalingState === 'have-local-offer') {
           clearInterval(pend.pollId); pend.pollId = 0;
           if (netDiag && !slotCode) netDiag.remote = netCandSummary(dd.answer.sdp);
@@ -4764,7 +4782,14 @@ async function netHostArm(slotCode) {
       } catch (_) { /* transient poll failure — try again next interval */ }
     }, 2000);
   } catch (_) {
+    // release the arming slot — leaving netArming set would block netHostArmNext
+    // forever, silently capping the band at however many had already joined
+    if (netArming === pend) {
+      netArming = null;
+      try { if (pend.pc) pend.pc.close(); } catch (_2) { /* already dead */ }
+    }
     if (!netConns.length && !slotCode) netAbort('could not create a room — check your connection and try again');
+    else setTimeout(() => { netHostArmNext(); }, 5000);   // transient failure — retry the slot arm
   }
 }
 // a pre-run link died (or a lobby member left): free the seat, shift the ones
@@ -4779,6 +4804,14 @@ function netHostDropLink(conn, why) {
   netConns.splice(i, 1);
   for (const c of netConns) {
     if (c.seat > conn.seat) { c.seat--; netSendTo(c, { t: 'seat', n: c.seat, nv: NET_VER, sv: NET_SIM_V }); }
+  }
+  // a drop while the cfg was in flight ('starting') invalidates the header — the
+  // seats just shifted and the missing ack would never arrive, wedging the lobby.
+  // Fall back to an un-readied lobby and let the band confirm the new lineup.
+  if (!netplay && netCfg && netUi && netUi.phase === 'starting') {
+    netCfg = null;
+    netUi.phase = 'lobby'; netUi.myReady = false;
+    for (const c of netConns) { c.ready = false; c.ack = false; }
   }
   netLobbySync();
   netHostArmNext();
@@ -4927,7 +4960,8 @@ function netHandle(m, conn) {
       if (m.nv !== NET_VER || m.v !== NET_SIM_V) { netAbort('version mismatch — you are on different builds. everyone: reload the page and retry.'); return; }
       const cs = (Array.isArray(m.cs) ? m.cs : []).slice(0, NET_MAX_SEATS).map((c) => clamp(c | 0, 0, CLASSES.length - 1));
       if (cs.length < 2) return;
-      netCfg = { v: m.v, seed: m.seed >>> 0, cs,
+      netCfg = { v: m.v, seed: m.seed >>> 0,
+                 seed0: (typeof m.seed0 === 'number' ? m.seed0 : m.seed) >>> 0, cs,
                  hd: m.hd ? 1 : 0, up0: Array.isArray(m.up0) ? m.up0 : [],
                  tk0: m.tk0 | 0, mw0: m.mw0 | 0,
                  gw: Math.max(320, m.gw | 0), gh: Math.max(240, m.gh | 0) };
@@ -4952,8 +4986,24 @@ function netHandle(m, conn) {
       break;
     }
     case 'resume': {  // a link is back mid-run: refill whatever the drop swallowed
-      if (!netplay || m.r !== netRunId) return;
+      if (!netplay) return;
+      if (m.r !== netRunId) {
+        // a returning peer that missed a rematch: hand it the CURRENT restart so
+        // it netBeginRuns on the shared cfg and locksteps from the top (repeats
+        // until its runId converges); dropping it silently would wedge both ends
+        if (netIsHost && conn && netConns.includes(conn) && netCfg) {
+          conn.recon = null;
+          netSendTo(conn, { t: 'restart', seed: netCfg.seed });
+        }
+        return;
+      }
+      // EVENTS BEFORE FRAMES, both directions: frames unblock the lockstep gate,
+      // and a sim that steps past an event's stamp before the event lands drops
+      // it (`ek <= tick`) — a guaranteed desync. Queued events are harmless early.
       if (netIsHost && conn) {
+        for (const ev of netEventLog) {
+          if (ev[0] > (m.k | 0)) netSendTo(conn, { t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
+        }
         // the client reported per-seat floors — refill EVERY seat from our buffers
         const floors = Array.isArray(m.have) ? m.have : [];
         for (let sIdx = 0; sIdx < netFrames.length; sIdx++) {
@@ -4964,19 +5014,16 @@ function netHandle(m, conn) {
             if (f) netSendTo(conn, { t: 'f', r: netRunId, p: sIdx, k, m: f.m, e: f.e, s: f.s, h: f.h });
           }
         }
-        for (const ev of netEventLog) {
-          if (ev[0] > (m.k | 0)) netSendTo(conn, { t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
-        }
         conn.recon = null;
       } else if (!netIsHost) {
+        for (const ev of netEventLog) {
+          if (ev[0] > (m.k | 0)) netSend({ t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
+        }
         // the host reported the scalar floor of OUR frames — resend our own
         const mine = netFrames[netSeat];
         for (let k = (m.have | 0) + 1; k <= tick + NET_DELAY; k++) {
           const f = mine.get(k);
           if (f) netSend({ t: 'f', r: netRunId, p: netSeat, k, m: f.m, e: f.e, s: f.s, h: f.h });
-        }
-        for (const ev of netEventLog) {
-          if (ev[0] > (m.k | 0)) netSend({ t: 'ev', r: netRunId, k: ev[0], op: ev[1], a: ev[2] });
         }
         netRecon = null;
       }
@@ -5017,6 +5064,12 @@ function netHandle(m, conn) {
       break;
     case 'bye':
       if (netplay) {
+        // only a seated band member may disband the run — a stray link (e.g. a
+        // stranger answering a rejoin room) must not kill four players' game
+        if (conn && !netConns.includes(conn)) {
+          try { if (conn.chan) conn.chan.close(); } catch (_) { /* dying anyway */ }
+          return;
+        }
         if (netIsHost) netSend({ t: 'bye' });   // one leaver disbands the band — tell the rest
         netLeave('A FIGHTER LEFT — the war band disbands');
       } else if (netIsHost && conn) netHostDropLink(conn, 'a joiner backed out');
@@ -5051,7 +5104,7 @@ function netLobbyMaybeStart() {
   classSel2 = savedC2; coop = savedCoop;
   let gw = GW, gh = GH;
   for (const c of netConns) { gw = Math.min(gw, c.gw || GW); gh = Math.min(gh, c.gh || GH); }
-  netCfg = { v: NET_SIM_V, seed, cs, hd: 0, up0, tk0, mw0, gw, gh };
+  netCfg = { v: NET_SIM_V, seed, seed0: seed, cs, hd: 0, up0, tk0, mw0, gw, gh };
   for (const c of netConns) c.ack = false;
   netUi.phase = 'starting';
   netSend({ t: 'cfg', nv: NET_VER, ...netCfg });
@@ -5185,7 +5238,16 @@ function netReconSeat() {
 function netStartRecon(conn, why) {
   if (!netplay) return;
   if (conn) {
-    // HOST: one seat's link died — re-signal just that seat, keep the others
+    // HOST: one seat's link died — re-signal just that seat, keep the others.
+    // Only a SEATED member gets a recon loop (a stray/replaced link is just closed),
+    // and each conn carries its OWN token: bumping the global netReconSeq here
+    // would go inert every OTHER seat's in-flight reconnect the moment a second
+    // seat dropped, stranding the first until the 10-minute concede.
+    if (!netConns.includes(conn)) {
+      try { if (conn.chan) conn.chan.close(); } catch (_) {}
+      try { if (conn.pc) conn.pc.close(); } catch (_) {}
+      return;
+    }
     if (conn.recon) return;
     netLog('P' + (conn.seat + 1) + ' link lost (' + why + ') — holding the run, re-signaling');
     try { if (conn.discoT) clearTimeout(conn.discoT); conn.discoT = 0; } catch (_) {}
@@ -5193,8 +5255,8 @@ function netStartRecon(conn, why) {
     try { if (conn.pc) { conn.pc.onconnectionstatechange = null; conn.pc.close(); } } catch (_) {}
     conn.pc = null; conn.chan = null;
     conn.recon = { attempt: 0, t0: performance.now(), gen: '' };
-    netReconSeq++;
-    netReconHostAttempt(conn, netReconSeq);
+    conn.reconTok = (conn.reconTok | 0) + 1;
+    netReconHostAttempt(conn, conn.reconTok);
     return;
   }
   // CLIENT: our link to the host died
@@ -5212,7 +5274,9 @@ function netStartRecon(conn, why) {
 // HOST: repost offers into the dropped seat's rejoin room until it answers
 async function netReconHostAttempt(conn, tok) {
   const live = () => {
-    if (!(netplay && conn.recon && tok === netReconSeq && netConns.includes(conn))) return false;
+    // per-conn token: another seat's drop must not kill this loop. Teardown is
+    // covered by netConns.includes (netTeardown empties the registry).
+    if (!(netplay && conn.recon && tok === (conn.reconTok | 0) && netConns.includes(conn))) return false;
     if (performance.now() - conn.recon.t0 > NET_RECON_MAX_MS) {
       netLog('reconnect window exhausted — conceding the run');
       netSend({ t: 'bye' });
@@ -6140,7 +6204,7 @@ function advanceSidiousFinale() {
     if (f.exitDir > 0 ? f.vx > GW + 54 : f.vx < -54) { finishSidiousFinale(); return; }
   }
   if (f.phase !== 'rise' && f.t % 10 === 0) ltnFlash = Math.max(ltnFlash, 6);  // the void strobes violet
-  if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 5);    // jolts from the shocks
+  if (f.t % 8 === 0) shake = Math.max(shake, 5);    // jolts from the shocks (shake is sim state — RM gates only the translate)
 }
 function finishSidiousFinale() {
   sidFinale = null;
@@ -6170,6 +6234,12 @@ function startJojo() {
   dioStopT = 0; roadRoller = null; ltnFlash = 0; dlg = []; dlgT = 0; playerStand = 0; freezeT = 0;
   if (allies.length) { allies.forEach(g => sparks.push({ x: g.x, y: g.y - 50, t: 30, color: '#fff', txt: '...gone.' })); allies = []; }
   player.x = GW * 0.26; player.y = GH / 2; player.vx = 0; player.vy = 0; player.choke = 0; player.stunT = 0;
+  // a fresh set-piece revives any fallen partner (mirrors startStarWars) so
+  // nobody spends the whole DIO fight face-down with no one free to revive them
+  if (coop && p2) {
+    for (const h of heroesAll()) { h.down = false; h.reviveT = 0; h.shield = up.shield; h.choke = 0; h.stunT = 0; }
+    p2.x = GW * 0.26; p2.y = GH / 2 + 42; p2.vx = 0; p2.vy = 0;
+  }
   jojoBg = [];   // drifting ゴ menacing glyphs
   for (let i = 0; i < 22; i++) jojoBg.push({ x: rnd() * GW, y: rnd() * GH, s: 14 + rnd() * 34, vy: -(0.08 + rnd() * 0.30), a: 0.05 + rnd() * 0.09 });
   enemies.push(makeEnemy('dio', GW * 0.78, GH / 2));
@@ -6269,7 +6339,7 @@ function advanceDioFinale() {
     }
     if (f.t >= 132) { finishDioFinale(); return; }
   }
-  if (!api.reduceMotion && f.t % 8 === 0) shake = Math.max(shake, 4);
+  if (f.t % 8 === 0) shake = Math.max(shake, 4);   // shake is sim state — RM gates only the translate
 }
 function finishDioFinale() {
   sfUnlock('dio');
@@ -6419,6 +6489,8 @@ function startSidious() {
   banishAllies();                                 // face the Emperor alone
   if (!swStars.length) { for (let i = 0; i < 70; i++) swStars.push({ x: rnd() * GW, y: rnd() * GH, r: rnd() * 1.3 + 0.3 }); }
   player.choke = 0; player.stunT = 0;
+  // a fresh set-piece revives any fallen partner (mirrors startStarWars)
+  if (coop && p2) for (const h of heroesAll()) { h.down = false; h.reviveT = 0; h.shield = up.shield; h.choke = 0; h.stunT = 0; }
   // the Emperor stands at the far side, flanked by two Royal Guards
   const sx = GW * 0.82, sy = GH / 2;
   enemies.push(makeEnemy('sidious', sx, sy));
@@ -6702,7 +6774,7 @@ function updateEnemy(e) {
     if (e.intro > 0) { e.intro--; e.phase += 0.04; return; }  // step from the shadows, then begin the duel
     e.st--;
     e.disarmed = arrows.some(a => a.kind === 'vsaber');     // his blade is mid-flight
-    if (!e.phase2 && e.hp <= 5 && e.mode !== 'slash') enterVaderPhase2(e);
+    if (!e.phase2 && e.hp <= e.maxhp / 2 && e.mode !== 'slash') enterVaderPhase2(e);
     else if (e.mode === 'advance') {
       if (e.stun <= 0) { e.x += dx / d * e.spd; e.y += dy / d * e.spd; e.phase += 0.12; }
       if (e.st <= 0) { if (d < 160) vaderNextAttack(e, d); else e.st = 22; }  // close, then commit
@@ -6794,7 +6866,7 @@ function updateEnemy(e) {
     } else if (e.mode === 'cast') {                          // hands raised — a long, building lightning telegraph
       if (e.st === e.castDur - 14) sfSfx.ignite();           // a charging whir partway in
       if (e.st <= 0) {
-        if (player.dashT > 0) { e.mode = 'recover'; e.st = 18; sparks.push({ x: e.x, y: e.y - 46, t: 12, color: '#d0b3ff', txt: 'MISSED' }); }
+        if (bossTarget().dashT > 0) { e.mode = 'recover'; e.st = 18; sparks.push({ x: e.x, y: e.y - 46, t: 12, color: '#d0b3ff', txt: 'MISSED' }); }
         else {
           sidiousLightning(e); e.mode = 'lightning';
           // the rake sweeps slowly (slower than a running player) over a long window; the bolt is a quick zap
@@ -7158,7 +7230,7 @@ function drawBossIntro() {
 
     // prompt
     ctx.save();
-    ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 0.16);
+    ctx.globalAlpha = api.reduceMotion ? 1 : 0.6 + 0.4 * Math.sin(t * 0.16);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 15px Tahoma,Arial'; ctx.textAlign = 'center';
     ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
     ctx.fillText('▶  press  Z  to face them  ◀', GW / 2, GH - 22);
@@ -7182,7 +7254,9 @@ function drawBossIntro() {
     const line = cfg.lines[bi.lineIdx];
     if (bi.chars < line.text.length) {
       const before = Math.floor(bi.chars);
-      bi.chars = Math.min(line.text.length, bi.chars + (api.reduceMotion ? 2.4 : 0.62));
+      // constant rate: bossIntro ticks advance the sim clock, so the typewriter
+      // speed must not depend on settings (reduce-motion users press Z to skip)
+      bi.chars = Math.min(line.text.length, bi.chars + 0.62);
       if (Math.floor(bi.chars) > before && Math.floor(bi.chars) % 2 === 0 && line.text[before] !== ' ') sfSfx.blip();
       bi.holdT = 0;
     } else {
@@ -7314,10 +7388,13 @@ function loop() {
       }
       if (fs[0].h > 0) pend.mash += fs[0].h;   // the Force choke grips P1 — only seat 0 mashes count
       // spent frames are dropped; our OWN seat keeps a trailing 30-tick window so
-      // a reconnect resume can re-send anything a drop swallowed (transport
+      // a reconnect resume can re-send anything a drop swallowed — and the HOST
+      // keeps EVERY seat's window, because third-party frames only reach a client
+      // through the host's relay: on a client's resume the host must be able to
+      // refill the other seats' frames too, not just its own (transport
       // bookkeeping only — never read by the sim, so determinism is untouched)
       for (let i = 0; i < netFrames.length; i++) {
-        netFrames[i].delete(i === netSeat ? tick - 30 : tick);
+        netFrames[i].delete((netIsHost || i === netSeat) ? tick - 30 : tick);
       }
     }
     if (tick % 60 === 0) netChecksum();
@@ -8141,7 +8218,10 @@ function loop() {
       a.x = clamp(a.x, 8, GW - 8); a.y = clamp(a.y, 30, GH - 8);
       sparks.push({ x: a.x, y: a.y, t: 10, color: '#c5e1a5', txt: '✦' });
     }
-    if (--a.t <= 0 || a.x < -20 || a.x > GW + 20 || a.y < -20 || a.y > GH + 20) { arrows.splice(i, 1); continue; }
+    // Vader's thrown saber is exempt from the cull: its own branch below owns its
+    // lifecycle (out → home → caught), and losing it off-screen would strand him
+    // disarmed with the blade never returning
+    if (a.kind !== 'vsaber' && (--a.t <= 0 || a.x < -20 || a.x > GW + 20 || a.y < -20 || a.y > GH + 20)) { arrows.splice(i, 1); continue; }
     if (a.reflected) {
       // a bolt you deflected — harmless to you, kills any trooper it strikes
       let struck = false;
@@ -9690,7 +9770,15 @@ function onKey(e) {
       const backOut = () => {
         netSend({ t: 'bye' });
         netTeardown();
-        netUi = null; netSaved = null; netCfg = null;
+        // restore the selections netOpen saved (mirrors netLeave) — otherwise a
+        // coerced pick (e.g. a joiner's wyrm zeroed to melee) sticks after backing out
+        if (netSaved) {
+          classSel = netSaved.c1; classSel2 = netSaved.c2;
+          coop = netSaved.coop; dailyRun = netSaved.daily; hardSel = netSaved.hs;
+          menuTop = netSaved.top; subSingle = netSaved.ss; subMulti = netSaved.sm;
+          netSaved = null;
+        }
+        netUi = null; netCfg = null;
       };
       // class is still changeable on the connect screens (◀ ▶) right up until
       // the link opens — the host's cfg reads classSel when the hello arrives,
@@ -9816,8 +9904,10 @@ function onKey(e) {
       dailyRun = menuTop === 0 && subSingle === 2;
       hardSel = menuTop === 0 && subSingle === 1;            // only reachable once hardUnlocked
       // daily pins the shared per-day seed through the existing MP/replay hook;
-      // a normal run clears it back to fresh entropy
-      sfSeedOverride = dailyRun ? dailySeed() : null;
+      // a normal run clears it back to fresh entropy. The day is snapshotted with
+      // the seed so a run crossing UTC midnight still submits to its own board.
+      dailyDay = dailyRun ? dailyDayStr() : '';
+      sfSeedOverride = dailyRun ? dailySeed(dailyDay) : null;
       init();                     // fresh state on the chosen seed (init reads classSel/coop/hardSel)
       beginRunProof();            // stamp the start time for the leaderboard's proof check
       started = true; frame = 0;
@@ -9844,8 +9934,13 @@ function onKey(e) {
     if (['ArrowLeft', 'a', 'A'].includes(e.key))       { boonMenu.sel = (boonMenu.sel + n - 1) % n; sfSfx.killE(); }
     else if (['ArrowRight', 'd', 'D'].includes(e.key)) { boonMenu.sel = (boonMenu.sel + 1) % n; sfSfx.killE(); }
     else if (!e.repeat && ['z', 'Z', ' ', 'Enter'].includes(e.key)) {
-      // stamped tick+1 like every between-tick UI event (see the shop below)
-      if (netplay) netQueueEvent(12, boonMenu.opts[boonMenu.sel].id);
+      // stamped tick+1 like every between-tick UI event (see the shop below).
+      // ONLINE the menu stays open until the feeder applies the event a few ticks
+      // later — `confirmed` stops a second Z queueing a duplicate pick meanwhile
+      // (pickBoon replaces boonMenu for the next seat, so the flag self-resets)
+      if (netplay) {
+        if (!boonMenu.confirmed) { boonMenu.confirmed = true; netQueueEvent(12, boonMenu.opts[boonMenu.sel].id); }
+      }
       else { recPush([tick + 1, 12, boonMenu.opts[boonMenu.sel].id]); pickBoon(boonMenu.opts[boonMenu.sel].id); }
     }
     e.preventDefault();
@@ -9926,15 +10021,30 @@ function onKey(e) {
     e.preventDefault();
     return;
   }
-  // Force choke: the only escape is to struggle — mash attack/dash; nothing else responds.
-  // Mashes queue like every other combat input and land on the next tick.
+  // Force choke: the only escape is to struggle — mash attack/dash. The choke
+  // grips P1 ALONE, so only P1's own bindings are consumed here; every other
+  // seat's keys fall through to the normal combat block below (previously the
+  // whole handler returned, freezing couch P2 and online clients for the hold).
   if (player.choke > 0) {
-    if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) {
-      if (netplay) { if (netIsHost) netLocal.mash++; }   // the choke grips P1 = the host
-      else pend.mash++;
+    if (netplay) {
+      if (netIsHost) {   // the choked hero is the host's — clients fall through untouched
+        if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) netLocal.mash++;
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+        return;
+      }
+    } else if (coop) {
+      // couch: P1's bindings mash; P2's keys continue into the combat block
+      if (e.code === 'ShiftRight' || e.code === 'Slash') {
+        if (!e.repeat) pend.mash++;
+        e.preventDefault();
+        return;
+      }
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); return; }
+    } else {
+      if (!e.repeat && ['x', 'X', 'f', 'F', ' ', 'Shift'].includes(e.key)) pend.mash++;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+      return;
     }
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
-    return;
   }
   // combat keys. Solo: Space/Shift dash, X/F swing (unchanged). Co-op splits them by
   // hand — P1 = Right-Shift dash + '/' swing, P2 = Left-Shift dash + F swing (the two
@@ -9982,7 +10092,8 @@ function onKey(e) {
       e.preventDefault();
       return;
     }
-    sfSeedOverride = dailyRun ? dailySeed() : null;   // re-pin today's seed (recomputed in case midnight passed)
+    dailyDay = dailyRun ? dailyDayStr() : '';         // re-snapshot the day with the seed
+    sfSeedOverride = dailyRun ? dailySeed(dailyDay) : null;   // re-pin today's seed (recomputed in case midnight passed)
     init();
     beginRunProof();
     started = true;

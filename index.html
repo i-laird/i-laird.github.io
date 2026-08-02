@@ -27,7 +27,9 @@
   <link rel="preload" href="assets/fonts/JetBrainsMono-Regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="assets/fonts/JetBrainsMono-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <!-- no crossorigin: chess.js loads this CDN via plain <script> injection (a no-cors
+       request), so a CORS-flavored preconnect would warm a socket that never gets reused -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <link rel="dns-prefetch" href="https://nlflqwapol.execute-api.us-east-1.amazonaws.com">
   <link rel="preconnect" href="https://nlflqwapol.execute-api.us-east-1.amazonaws.com" crossorigin>
   <link rel="dns-prefetch" href="https://challenges.cloudflare.com">
@@ -108,7 +110,7 @@
     </button>
   </div>
 
-  <div class="terminal" id="terminal" onclick="focusCmd()">
+  <div class="terminal" id="terminal" onclick="window.focusCmd&&focusCmd()">
     <!-- Home screen as STATIC markup so it paints instantly — before the (large, obfuscated)
          app.js bundle finishes downloading/parsing. app.js's boot() detects #home-cards and
          skips re-rendering, only wiring the dynamic Projects card (hydrateHomeCards). The plain

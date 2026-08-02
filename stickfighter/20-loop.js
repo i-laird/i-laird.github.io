@@ -116,10 +116,13 @@ function loop() {
       }
       if (fs[0].h > 0) pend.mash += fs[0].h;   // the Force choke grips P1 — only seat 0 mashes count
       // spent frames are dropped; our OWN seat keeps a trailing 30-tick window so
-      // a reconnect resume can re-send anything a drop swallowed (transport
+      // a reconnect resume can re-send anything a drop swallowed — and the HOST
+      // keeps EVERY seat's window, because third-party frames only reach a client
+      // through the host's relay: on a client's resume the host must be able to
+      // refill the other seats' frames too, not just its own (transport
       // bookkeeping only — never read by the sim, so determinism is untouched)
       for (let i = 0; i < netFrames.length; i++) {
-        netFrames[i].delete(i === netSeat ? tick - 30 : tick);
+        netFrames[i].delete((netIsHost || i === netSeat) ? tick - 30 : tick);
       }
     }
     if (tick % 60 === 0) netChecksum();
@@ -943,7 +946,10 @@ function loop() {
       a.x = clamp(a.x, 8, GW - 8); a.y = clamp(a.y, 30, GH - 8);
       sparks.push({ x: a.x, y: a.y, t: 10, color: '#c5e1a5', txt: '✦' });
     }
-    if (--a.t <= 0 || a.x < -20 || a.x > GW + 20 || a.y < -20 || a.y > GH + 20) { arrows.splice(i, 1); continue; }
+    // Vader's thrown saber is exempt from the cull: its own branch below owns its
+    // lifecycle (out → home → caught), and losing it off-screen would strand him
+    // disarmed with the blade never returning
+    if (a.kind !== 'vsaber' && (--a.t <= 0 || a.x < -20 || a.x > GW + 20 || a.y < -20 || a.y > GH + 20)) { arrows.splice(i, 1); continue; }
     if (a.reflected) {
       // a bolt you deflected — harmless to you, kills any trooper it strikes
       let struck = false;

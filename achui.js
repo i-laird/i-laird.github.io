@@ -65,7 +65,9 @@ function initAchUI(api) {
 
     canvas.toBlob(blob => {
       if (!blob) { fail('share failed — could not encode image.'); return; }
+      if (initAchUI._shareUrl) URL.revokeObjectURL(initAchUI._shareUrl);   // don't leak one blob per share/back toggle
       const url = URL.createObjectURL(blob);
+      initAchUI._shareUrl = url;
 
       box.innerHTML = achHeaderHTML(BACK);
       const img = document.createElement('img');
