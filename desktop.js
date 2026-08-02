@@ -51,7 +51,10 @@ function initDesktop(api) {
         xp.appendChild(desktop);
 
         // icons
-        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+        // Stick Fighter is keyboard-only, so the icon appears only where there are
+        // keys to press. Capability, not user agent: a narrow desktop window still
+        // gets the game, and a tablet without a keyboard correctly does not.
+        const isMobile = !api.hasKeyboard();
         const iconData = [
           { emoji:'📄', label:'Resume.pdf',  url:'/assets/documents/ianclaird_resume.pdf', newTab:true  },
           { emoji:'🐙', label:'My GitHub',   url:'https://github.com/i-laird',             newTab:true  },

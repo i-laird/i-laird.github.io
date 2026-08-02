@@ -1,0 +1,121 @@
+# Scheduled CDN integrity monitor — "chess broke and you knew by breakfast."
+#
+# chess.js pins the only third-party code this site executes (chess.js +
+# Stockfish) by SHA-384. That is the right protection, but it converts a silent
+# COMPROMISE into a silent BREAKAGE: if a CDN ever serves different bytes, the
+# browser refuses the file and the chess command dies with "Failed to load chess
+# engine" for every visitor — while the URL stays perfectly reachable, 200, and
+# roughly the right size. No uptime probe can see that. This checks the property
+# the browser actually checks.
+#
+# It also catches the other direction: a version bump whose hash was never
+# recomputed, or a new dependency added with no pin at all.
+#
+# Lives in this repo, not the worker's health.yml, because the pins live in
+# chess.js — scripts/verify-cdn-pins.js reads them from the file rather than
+# restating them, so the monitor cannot drift from what ships.
+#
+# On failure it opens (or updates) a "cdn-alert" issue, which GitHub emails you
+# about, and auto-closes it on the first healthy run. Same pattern as the
+# hal-worker health monitor.
+
+name: CDN pins
+
+on:
+  schedule:
+    # 08:23 UTC daily. Off the hour on purpose — scheduled runs cluster on the
+    # hour across GitHub and get queued.
+    - cron: '23 8 * * *'
+  workflow_dispatch: {}
+  # Also on any push that touches the loader, so a bad re-pin is caught at once
+  # rather than up to a day later.
+  push:
+    branches: [main]
+    paths:
+      - 'chess.js'
+      - 'scripts/verify-cdn-pins.js'
+      - '.github/workflows/cdn-pins.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cdn-pins
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: CDN payloads still match their SHA-384 pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No npm ci: the script uses only node builtins, so the check keeps
+      # working even if the dev dependencies are broken or unavailable.
+      # `shell: bash` is REQUIRED, not cosmetic. The default Actions shell is
+      # `bash -e` with no pipefail, so `node … | tee` would report tee's exit
+      # code — the step would pass green on every mismatch and this monitor
+      # would never fire. `shell: bash` runs `bash -eo pipefail`, so the
+      # script's failure propagates.
+      - name: Verify pins
+        shell: bash
+        run: node scripts/verify-cdn-pins.js | tee pin-report.txt
+
+      - name: Open or update the alert issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let detail = '';
+            try {
+              const fs = require('fs');
+              if (fs.existsSync('pin-report.txt')) {
+                detail = '\n```\n' + fs.readFileSync('pin-report.txt', 'utf8').slice(0, 3000) + '\n```';
+              }
+            } catch (e) { /* the step failed before writing a report */ }
+            const body =
+              `A pinned CDN dependency no longer matches its SHA-384 in \`chess.js\`, ` +
+              `checked at ${new Date().toISOString()}.\n\n` +
+              `**While this is failing, the \`chess\` command is broken for every visitor** — ` +
+              `the browser refuses the mismatched file rather than executing it, so this is a ` +
+              `broken feature, not a compromised site.\n\n` +
+              `[Run log](${runUrl})${detail}`;
+            const open = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'cdn-alert',
+            });
+            if (open.data.length) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: open.data[0].number, body: `Still failing.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo,
+                title: '🔴 CDN integrity pin mismatch — chess is broken',
+                labels: ['cdn-alert'],
+                body: `${body}\n\nThis issue auto-closes on the first healthy run.`,
+              });
+            }
+
+      - name: Close the alert issue on recovery
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const open = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'cdn-alert',
+            });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `Pins verified again as of ${new Date().toISOString()}. Closing.`,
+              });
+              await github.rest.issues.update({
+                ...context.repo, issue_number: issue.number, state: 'closed',
+              });
+            }

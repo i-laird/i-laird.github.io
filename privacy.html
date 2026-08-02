@@ -76,7 +76,7 @@
   <body>
     <main>
       <h1>Privacy Policy</h1>
-      <p class="dim">ianclaird.com — last updated July 30, 2026</p>
+      <p class="dim">ianclaird.com — last updated August 2, 2026</p>
 
       <p>The short, honest version, at a glance:</p>
 
@@ -84,14 +84,24 @@
         <dt>Cookies &amp; trackers</dt>
         <dd>none — no cookies, no analytics, no trackers, no ads</dd>
         <dt>Accounts</dt>
-        <dd>none — achievements and settings live only in your own browser (localStorage)</dd>
+        <dd>
+          none — achievements and settings live only in your own browser (localStorage); type
+          <strong>forget</strong> in the terminal to erase them
+        </dd>
         <dt>AI conversations</dt>
-        <dd>held server-side for at most ~30 minutes, then deleted; nothing you type is kept</dd>
+        <dd>
+          held on my server for at most ~30 minutes, then deleted — though the AI providers
+          keep their own copies under their own policies
+        </dd>
         <dt>Phone numbers</dt>
         <dd>
           never stored in readable form · never shared · verified status expires in 48h · a
           hashed record that you consented is kept for 4 years
         </dd>
+        <dt>Minimum age</dt>
+        <dd>the phone/SMS feature is 18+; everything else has no age requirement</dd>
+        <dt>Server logs</dt>
+        <dd>none — the backend has no permission to write logs at all</dd>
         <dt>Opt out</dt>
         <dd>reply <strong>STOP</strong> to any text and that number is never contacted again</dd>
       </dl>
@@ -106,12 +116,24 @@
           ElevenLabs; Cloudflare Turnstile is the bot check.
         </li>
         <li>
-          <strong>How long they live:</strong> at most ~30 minutes server-side, deleted when
+          <strong>How long they live:</strong> at most ~30 minutes on my server, deleted when
           the session ends.
+        </li>
+        <li>
+          <strong>What the providers keep:</strong> Anthropic, ElevenLabs, Cloudflare and
+          Twilio are separate companies, and each keeps its own copies of what passes through
+          it under its own retention policy. My ~30 minutes describes my server, not theirs —
+          I can delete my copy, and I can't delete theirs.
         </li>
         <li>
           <strong>Rate limits:</strong> abuse counters key a salted one-way hash of your IP
           address — never the address itself — and expire within hours to days.
+        </li>
+        <li>
+          <strong>No server logs:</strong> the backend cannot write to its logging service —
+          the permission has been removed, so not even a crash trace is recorded. Nothing you
+          type reaches a log file, because there is no log file. (The host that serves this
+          site, GitHub Pages, keeps its own request logs under its own policy.)
         </li>
       </ul>
 
@@ -119,6 +141,11 @@
 
       <h2>The phone number, the SMS code, and the call</h2>
       <ul>
+        <li>
+          <strong>18 or older:</strong> this feature is for adults. You confirm your age on the
+          same form, in its own separate checkbox, and the backend refuses the request without
+          it. Nothing else on the site has an age requirement.
+        </li>
         <li>
           <strong>Consent first:</strong> HAL only calls a number you typed in yourself, after
           you actively tick the consent box. He texts a one-time verification code via Twilio;

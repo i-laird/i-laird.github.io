@@ -166,14 +166,21 @@ function init() {
 // Build P2 and stand the two heroes apart at centre-screen. Called from init() (so R
 // restarts straight into co-op) and the moment 2-PLAYER is confirmed on the intro.
 function makeAllyHero(clsIdx, x, y, fx) {
+  // Clamp ONCE and use it everywhere below. Previously `cls` was built from a
+  // clamped index while the `mounted` check read the raw one, so an
+  // out-of-range index would produce a rider that starts unmounted. Both sides
+  // of netplay already clamp `cs` (netHostBuildCfg and the 'cfg' handler), so
+  // that was unreachable — this keeps it that way if a future caller is less
+  // careful. No behaviour change for any in-range index, hence no sim-version bump.
+  const ci = clamp(clsIdx | 0, 0, CLASSES.length - 1);
   const h = { x, y, vx: 0, vy: 0, phase: 0, fx, fy: 0,
               dashT: 0, dashCd: 0, stunT: 0, choke: 0, chokeBreak: 0, iframe: 0,
               shield: up.shield, dashCharges: up.dashMax, rechargeT: 0,
               swingT: 0, swingReadyTick: 0, swordT: 0, heldSaber: false, down: false, downT: 0, reviveT: 0,
-              cls: CLASSES[clamp(clsIdx | 0, 0, CLASSES.length - 1)], castT: 0, castMax: 0, casting: null,
+              cls: CLASSES[ci], castT: 0, castMax: 0, casting: null,
               mana: up.manaMax, spellSel: 0, souls: 25, chillT: 0,
               manaHoldTick: 0, flapReadyTick: 0, flapT: -99,
-              mounted: CLASSES[clsIdx] === 'rider' };   // a rider starts in the saddle
+              mounted: CLASSES[ci] === 'rider' };   // a rider starts in the saddle
   resetHeroBn(h);
   return h;
 }

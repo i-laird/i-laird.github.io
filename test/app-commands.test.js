@@ -192,3 +192,48 @@ test('a failed lazy-chunk load prints an error, resets the loader, and a retry w
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(window.__snakeRan, true, 'retyping the command retries and dispatches');
 });
+
+test('forget: confirms, then clears every ilaird* key', async (t) => {
+  // The site has no accounts and no server-side profile, so localStorage is the
+  // entirety of what it knows about a visitor — `forget` is the whole of the
+  // "delete my data" story, and it has to actually be complete. The sweep is by
+  // PREFIX because Stick Fighter's profile-scoped keys carry a suffix
+  // (ilaird_sf_upgrades_<profile>); an explicit key list would miss them.
+  const { dom, window } = await bootPage();
+  t.after(() => dom.window.close());
+  const run = makeRunner(window);
+  const ls = window.localStorage;
+
+  ls.setItem('ilaird_eggs', '["curious"]');
+  ls.setItem('ilaird_crt', '0');
+  ls.setItem('ilaird_sf_upgrades_2', '["dash"]'); // profile-scoped: the suffix case
+  ls.setItem('unrelated_key', 'keep me'); // another site's key must survive
+
+  // declining leaves everything alone
+  const prompt = run('forget');
+  assert.ok(hasLine(prompt, /Erase it all\?/i), 'it asks before erasing');
+  assert.ok(hasLine(prompt, /cannot be undone/i), 'it warns that it is irreversible');
+  run('n');
+  assert.equal(ls.getItem('ilaird_eggs'), '["curious"]', 'declining keeps the data');
+
+  // confirming clears every ilaird key and nothing else
+  run('forget');
+  const done = run('y');
+  assert.ok(hasLine(done, /Erased 3 items/i), 'it reports what it erased');
+  assert.equal(ls.getItem('ilaird_eggs'), null);
+  assert.equal(ls.getItem('ilaird_crt'), null);
+  assert.equal(ls.getItem('ilaird_sf_upgrades_2'), null, 'profile-scoped keys are swept too');
+  assert.equal(ls.getItem('unrelated_key'), 'keep me', "another site's key is untouched");
+
+  // in-memory state is reset, not just storage
+  assert.equal(window.document.getElementById('ach-count').textContent.split('/')[0], '0');
+
+  // The reload itself is jsdom-unimplemented (and the call site swallows that),
+  // so assert the intent: the visitor is told the page is about to reload.
+  assert.ok(hasLine(done, /Reloading/i), 'it reloads so no stale in-memory copy survives');
+  await new Promise((r) => setTimeout(r, 1100)); // let the reload timer fire harmlessly
+
+  // with nothing stored it says so instead of prompting
+  const empty = run('forget');
+  assert.ok(hasLine(empty, /Nothing stored/i), 'a clean browser gets a plain answer');
+});

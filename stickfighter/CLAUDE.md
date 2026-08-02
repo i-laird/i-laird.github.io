@@ -11,6 +11,22 @@ This directory is the game's **source of truth**. The served `stickfighter.js` a
 - Parts use normal 2-space indentation. New part files must match the `NN-*.js` pattern or the assembler silently skips them (the assembly test's inventory check catches this).
 - The part map: `01-head` (api destructure, canvas/hud/audio, tuning consts, SF_SPEED, sim clock + seeded `rnd()`) · `02-state` (all run state + netplay vars + class tuning/SPELLS) · `03-trophies` · `04-boons` (boons + banes) · `05-init` (`init()`/`setupCoop()`, daily seed, hero/target helpers) · `06-upgrades` (tree, shop, meter/mana gauges) · `07-sfx` · `08-render-horde` · `09-render-bosses` · `10-render-field` · `11-render-intro` · `12-combat` (killEnemy/strike/endRun) · `13-leaderboard` · `14-netplay` · `15-screens` (connect + death screens) · `16-spawn` · `17-bosses` (Vader/Sidious/DIO/Ian logic) · `18-enemy-ai` (`updateEnemy`) · `19-boss-intro` · `20-loop` (fixed-timestep driver + the ~1,500-line `loop()`) · `21-hero-actions` (movement, dash, swing/shoot/cast/scythe, summons) · `22-flow` (interlude transitions, stopGame, warp cheats) · `23-input` (`onKey`, wiring, boot).
 
+## Soak testing (`npm run fuzz-sf`)
+
+`scripts/fuzz-sf.js` drives the REAL game headlessly (real page + real `stickfighter.js` in jsdom, manual rAF pump) and **inspects** the draw stream rather than hashing it: any draw op carrying a `NaN`/`Infinity` argument means an entity's position, size or angle went non-finite. Canvas silently ignores such an op, so it is invisible in play — but the value is in the sim, it spreads, and in netplay it desyncs. Nothing in `npm test` would notice. It also fails on any uncaught throw from the frame loop.
+
+Deliberately NOT in `npm test` (a useful sweep is minutes). Run it before a release and after any balance/AI change. Exits non-zero on a finding, so it can gate a deploy.
+
+```
+npm run fuzz-sf                      # 6 seeds x 5 classes x [wave 1, the Nine, Vader, Ian]
+npm run fuzz-sf -- --quick           # smoke sweep
+npm run fuzz-sf -- --coop            # couch co-op (two heroes)
+npm run fuzz-sf -- --warps=3,4,5,6,7,8,9   # the whole boss gauntlet
+npm run fuzz-sf -- --seeds=7 --frames=8000
+```
+
+**Driving the intro is the fragile part, and getting it wrong makes a sweep silently worthless.** Intro rows are `0` SINGLE/MULTI · `1` sub-mode · `2` P1 class (`3` P2 class in couch co-op) — `ArrowRight` on row 0 toggles SINGLE/MULTI, so walking right without going DOWN first parks the run on the online lobby, where it renders the menu forever and reports a clean sweep. Couch co-op additionally needs a second Enter (the party sheet) and **one `z` per hero** (each player picks their own boon; one `z` leaves Player 2's chooser up and the run never starts). Both mistakes were made while writing it. The harness therefore **fails if every run produced an identical draw count** — that means the inputs never varied the run and the sweep proved nothing. Keep that guard.
+
 ## Cross-cutting invariants (bite people outside this directory too)
 
 - **Sim-balance version lives in FOUR places** and must bump together on ANY gameplay-affecting change (damage, speeds, AI, economy): `recHdr.v` (in `05-init`), `startWatch`'s check (`13-leaderboard`), `NET_SIM_V` (`02-state`), and the hal-worker's `REPLAY_VERSION`. Miss one and stored replays silently re-simulate under new rules, or netplay peers on stale sw.js chunks desync. This is also why **the site and `~/hal-worker` deploy together**.

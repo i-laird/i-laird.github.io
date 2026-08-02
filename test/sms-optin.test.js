@@ -77,16 +77,27 @@ test('consent checkbox is never pre-checked', (t) => {
 
   const pop = hook.open('num');
   assert.equal(pop.agree, false, 'a fresh pop object must start agree:false');
+  assert.equal(pop.age, false, 'a fresh pop object must start age:false');
   const box = hook.el.querySelector('[data-act="agree"]');
   assert.ok(box, 'the consent checkbox is rendered');
   assert.equal(box.getAttribute('aria-checked'), 'false');
   assert.ok(!box.classList.contains('on'));
 
-  // even after a previous consent, a re-opened form starts unticked
+  const ageBox = hook.el.querySelector('[data-act="age"]');
+  assert.ok(ageBox, 'the age checkbox is rendered');
+  assert.equal(ageBox.getAttribute('aria-checked'), 'false');
+
+  // space ticks the first UNTICKED box: age, then consent. Never both at once.
   hook.key(' ');
-  assert.equal(hook.pop.agree, true, 'space ticks the box');
+  assert.equal(hook.pop.age, true, 'first space ticks age');
+  assert.equal(hook.pop.agree, false, 'and does NOT tick consent as a side effect');
+  hook.key(' ');
+  assert.equal(hook.pop.agree, true, 'second space ticks consent');
+
+  // even after a previous consent, a re-opened form starts unticked
   hook.open('num');
   assert.equal(hook.pop.agree, false, 're-opening resets consent to unticked');
+  assert.equal(hook.pop.age, false, 're-opening resets the age attestation too');
   assert.ok(window); // keep jsdom alive until after()
 });
 
@@ -101,13 +112,20 @@ test('submit refuses without a number and without consent; consent enables the d
   assert.equal(fetches.length, 0, 'no dial without a number');
   assert.match(hook.el.textContent, /not a telephone number/i);
 
-  // a number, but the box unticked → refused, no network
+  // a number, but neither box ticked → refused on age first, no network
   for (const d of '5551234567') hook.key(d);
+  hook.submit();
+  assert.equal(fetches.length, 0, 'no dial without the age attestation');
+  assert.match(hook.el.textContent, /18 or older/i);
+
+  // age ticked but consent not → still refused
+  hook.key(' ');
+  assert.equal(hook.pop.age, true);
   hook.submit();
   assert.equal(fetches.length, 0, 'no dial without consent');
   assert.match(hook.el.textContent, /consent/i);
 
-  // tick the box → the dial goes out, carrying the typed number
+  // both ticked → the dial goes out, carrying the typed number
   hook.key(' ');
   assert.equal(hook.pop.agree, true);
   hook.submit();
@@ -136,13 +154,21 @@ test('required disclosures and legal links are present on the opt-in form', (t) 
   assert.ok(hook.el.querySelector('a[href="terms.html"]'), 'links the SMS program terms');
   assert.ok(hook.el.querySelector('a[href="privacy.html"]'), 'links the privacy policy');
 
-  // submit button reads disabled until the box is ticked
+  // the age attestation is its own disclosure, not bundled into consent
+  assert.match(text, /18 or older/i, 'states the minimum age');
+
+  // submit button reads disabled until BOTH boxes are ticked
   const btn = hook.el.querySelector('[data-act="submit"]');
   assert.ok(btn.classList.contains('off'), 'submit is off while unticked');
-  hook.key(' ');
+  hook.key(' '); // age only
+  assert.ok(
+    hook.el.querySelector('[data-act="submit"]').classList.contains('off'),
+    'submit stays off with only the age box ticked'
+  );
+  hook.key(' '); // consent
   assert.ok(
     !hook.el.querySelector('[data-act="submit"]').classList.contains('off'),
-    'submit enables once ticked'
+    'submit enables once both are ticked'
   );
 });
 
@@ -189,7 +215,8 @@ test('the verify-start request carries the consent record', async (t) => {
 
   hook.open('num');
   for (const d of '5551234567') hook.key(d);
-  hook.key(' ');
+  hook.key(' '); // age
+  hook.key(' '); // consent
   hook.submit();
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(hook.pop.stage, 'offer');
@@ -219,5 +246,21 @@ test('the verify-start request carries the consent record', async (t) => {
       shown.includes(phrase),
       `the rendered form must show "${phrase}" — the record must match what was displayed`
     );
+  }
+});
+
+test('the verify-start request carries the age attestation', () => {
+  // Enforced server-side too (400 age_required), so this must actually be sent.
+  const { hook, fetches, close } = setup();
+  try {
+    hook.open('num');
+    for (const d of '5551234567') hook.key(d);
+    hook.key(' ');
+    hook.key(' ');
+    hook.submit();
+    const dial = fetches.find((f) => /\/room-dial$/.test(f.url));
+    assert.ok(dial, 'both boxes ticked lets the dial through');
+  } finally {
+    close();
   }
 });

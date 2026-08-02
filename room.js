@@ -766,6 +766,7 @@ function initRoom(api) {
       if (!act) return;
       const a = act.dataset.act;
       if (a === 'agree') { call.pop.agree = !call.pop.agree; renderPop(); }
+      else if (a === 'age') { call.pop.age = !call.pop.age; renderPop(); }
       else if (a === 'submit') submitPop();
       else if (a === 'verify') startVerify();
       else if (a === 'self' && api.halPhone) selfCall();
@@ -774,7 +775,9 @@ function initRoom(api) {
   }
   function openPop(stage) {
     ensurePop();
-    call.pop = { stage, input: '', num: (call.pop && call.pop.num) || '', note: '', agree: false };
+    // agree/age ALWAYS start false — a re-opened form is never pre-ticked,
+    // even if the visitor ticked both a moment ago.
+    call.pop = { stage, input: '', num: (call.pop && call.pop.num) || '', note: '', agree: false, age: false };
     renderPop();
   }
   function selfCall() {
@@ -807,6 +810,13 @@ function initRoom(api) {
     'I agree to receive a one-time SMS verification code from ianclaird.com at the' +
     ' number above. message & data rates may apply. reply HELP for help, STOP to opt out.';
   const SMS_CONSENT_VERSION = '2026-08-02';
+  /* Age gate for the phone/SMS flow only — not the site, which is an ordinary
+     portfolio. This is the one feature that collects a telephone number and
+     places a real call, so it is the one that needs a minimum age. 18+ rather
+     than 13+: it is the bar US SMS programs conventionally state, and it sits
+     comfortably above COPPA's under-13 threshold rather than at it. Enforced
+     client-side here and again in the worker, which refuses without it. */
+  const SMS_AGE_TEXT = 'I confirm I am 18 or older and this is my own telephone number.';
 
   function renderPop() {
     if (!call || !call.pop) return;
@@ -820,16 +830,24 @@ function initRoom(api) {
         ' and he will text it a one-time verification code by SMS; enter the code and he calls.</div>' +
         '<div class="rm-pop-opt">verification codes only, never marketing · one SMS per verification request.</div>' +
         '<div class="rm-pop-in"><span>' + escPop(p.input) + '</span><u></u></div>' +
+        // Age attestation FIRST, and in its own box. It is deliberately not
+        // bundled into the SMS consent tick: carrier guidance wants the consent
+        // checkbox to cover SMS consent and nothing else, and a bundled box
+        // weakens the consent record it produces.
+        '<div class="rm-pop-chk' + (p.age ? ' on' : '') + '" data-act="age" role="checkbox"' +
+        ' aria-checked="' + (p.age ? 'true' : 'false') + '">' +
+        '<span class="rm-pop-box">' + (p.age ? '✓' : '') + '</span>' +
+        '<span>' + escPop(SMS_AGE_TEXT) + '</span></div>' +
         '<div class="rm-pop-chk' + (p.agree ? ' on' : '') + '" data-act="agree" role="checkbox"' +
         ' aria-checked="' + (p.agree ? 'true' : 'false') + '">' +
         '<span class="rm-pop-box">' + (p.agree ? '✓' : '') + '</span>' +
         '<span>' + escPop(SMS_CONSENT_TEXT) + '</span></div>' +
-        '<div class="rm-pop-btn' + (p.agree ? '' : ' off') + '" data-act="submit">yes — text my code, then call me</div>' +
+        '<div class="rm-pop-btn' + (p.agree && p.age ? '' : ' off') + '" data-act="submit">yes — text my code, then call me</div>' +
         '<div class="rm-pop-note">' +
-        (p.note || 'US numbers only · used once to place his call · never stored') +
+        (p.note || 'US numbers only · 18+ · used once to place his call · never stored') +
         '<br><a href="terms.html" target="_blank" rel="noopener">terms of service</a> · ' +
         '<a href="privacy.html" target="_blank" rel="noopener">privacy policy</a>' +
-        '<br>space or click ticks the box · enter to submit · esc to decline</div>';
+        '<br>space or click ticks each box · enter to submit · esc to decline</div>';
     } else if (p.stage === 'offer') {
       html =
         '<div class="rm-pop-title">— that telephone is not on his list —</div>' +
@@ -869,8 +887,13 @@ function initRoom(api) {
       return;
     }
     if (p.stage === 'num' && e.key === ' ') {
+      // Two boxes, no focus model: space ticks the first UNTICKED one (age,
+      // then consent). Once both are ticked it does nothing — untick by
+      // clicking the box directly, which the data-act delegation handles.
+      // Neither box can ever be ticked as a side effect of the other.
       e.preventDefault();
-      p.agree = !p.agree;
+      if (!p.age) p.age = true;
+      else if (!p.agree) p.agree = true;
       renderPop();
       return;
     }
@@ -889,11 +912,12 @@ function initRoom(api) {
     const p = call.pop;
     if (p.stage === 'num') {
       if (p.input.replace(/[^0-9]/g, '').length < 10) { popNote('that is not a telephone number.'); return; }
+      if (!p.age) { popNote('he only calls adults — confirm you are 18 or older (space, or click the box).'); return; }
       if (!p.agree) { popNote('he needs your consent first — tick the box (space, or click it).'); return; }
       // Remember it on the CALL, not the pop: the pop object is replaced when
       // the flow moves to the offer/code stages, and the consent granted here
       // is what /room-verify-start has to record.
-      call.consent = { text: SMS_CONSENT_TEXT, version: SMS_CONSENT_VERSION };
+      call.consent = { text: SMS_CONSENT_TEXT, version: SMS_CONSENT_VERSION, ageText: SMS_AGE_TEXT };
       p.num = p.input;
       dialFlow(p.num);
     } else if (p.stage === 'code') {
@@ -928,7 +952,9 @@ function initRoom(api) {
       token: call.token,
       phone: call.pop.num,
       consent: true,
+      ageConfirmed: true,
       consentText: consent.text || SMS_CONSENT_TEXT,
+      ageText: consent.ageText || SMS_AGE_TEXT,
       consentVersion: consent.version || SMS_CONSENT_VERSION,
     }, true).then((d) => {
       if (!call) return;
@@ -947,9 +973,14 @@ function initRoom(api) {
         return;
       }
       if (d && d.error === 'daily_cap') { popNote('no more texts today' + (api.halPhone ? ' — call him instead.' : '.')); return; }
-      if (d && d.error === 'consent_required') {
-        // Server-side consent gate refused — send the visitor back to the box.
-        call.pop = { stage: 'num', num: '', input: '', agree: false, note: 'he needs your consent first — tick the box.' };
+      if (d && d.error === 'consent_required' || (d && d.error === 'age_required')) {
+        // Server-side gate refused — send the visitor back to the boxes.
+        call.pop = {
+          stage: 'num', num: '', input: '', agree: false, age: false,
+          note: d.error === 'age_required'
+            ? 'he only calls adults — confirm you are 18 or older.'
+            : 'he needs your consent first — tick the box.',
+        };
         renderPop();
         return;
       }

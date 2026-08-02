@@ -567,11 +567,114 @@ pre.ascii {
   border-color: #ffd24d;
 }
 
-@media (max-width: 540px) {
-  pre.ascii { font-size: 7px; }
-  .terminal { padding: 12px 14px 10px; }
+/* ── Phone: terminal-first, thumb-driven ──────────────────────────────────
+   The terminal stays the interface on a phone; what changes is that typing
+   becomes optional. Measured at 390px: one character is 7.8px, so ~49 columns
+   fit — plenty for prose and command output, nowhere near the 80 the wider
+   ASCII art assumes. Rather than restyle every box, wide blocks scroll inside
+   their own container and the page itself never scrolls sideways. */
+@media (max-width: 640px) {
   body { font-size: 13px; }
+  .terminal { padding: 12px 14px 10px; }
+
+  /* The window must track the VISIBLE viewport, not the largest possible one.
+     100vh on iOS is measured with the browser chrome retracted and does not
+     shrink for the keyboard, so the prompt ends up underneath both. dvh fixes
+     the chrome; app.js's visualViewport handler fixes the keyboard. */
+  .window { height: 100dvh; }
+
+  /* 16px is not a style choice — Safari force-zooms any focused input below
+     it, and never zooms back out. At 13px every tap on the prompt lurched the
+     page. Do not lower this. */
+  #cmd { font-size: 16px; }
+  .input-row .prompt { font-size: 14px; }
+
+  /* Wide ASCII (banners, boxes, neofetch) scrolls in place instead of forcing
+     the page sideways or shrinking to the old unreadable 7px. */
+  pre.ascii {
+    font-size: 10px;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Runnable command words are already tappable (clickRunnable in app.js).
+     On a phone they need to be finger-sized, not text-sized — this reaches the
+     44px target without making them look like buttons. */
+  #out .blue {
+    display: inline-block;
+    /* Vertical padding does the work of reaching a comfortable target; keep
+       horizontal padding near zero or inline-block pushes the following comma
+       or period away from the word it belongs to. */
+    padding: 6px 1px;
+    min-height: 32px;
+    line-height: 20px;
+  }
+
+  .cards-home .card { padding: 10px 12px; min-height: 44px; }
+
+  /* The titlebar is a single row of controls that assumes desktop width. At
+     390px the "ian@portfolio — bash — 80×24" label wrapped to three lines and
+     pushed the sound toggle clean off the right edge. The label is decoration;
+     the controls are not — so the label goes and the controls stay on one row. */
+  .titlebar { padding: 8px 10px; gap: 6px; flex-wrap: nowrap; }
+  .titlebar-label { display: none; }
+  #legal-links { margin-left: auto; font-size: 11px; }
+  #ach-badge, #sound-toggle { flex-shrink: 0; }
+  .titlebar .dot { flex-shrink: 0; }
+  /* SOUND's text label is the widest thing left; the toggle itself still reads. */
+  #sound-toggle .sound-toggle-text { display: none; }
 }
+
+/* Never let the page scroll sideways: a stray wide line should scroll its own
+   block, not the document. */
+@media (max-width: 640px) {
+  html, body { overflow-x: hidden; }
+  #out { max-width: 100%; }
+  #out pre, #out table { max-width: 100%; overflow-x: auto; }
+}
+
+/* ── Tap-first command bar ────────────────────────────────────────────────
+   Hidden entirely above the breakpoint — desktop has a keyboard. Populated by
+   renderChips() in app.js, which swaps the set per mode and hides the bar
+   during multi-step prompts and games. Horizontally scrollable so the set can
+   grow without wrapping and eating vertical space the keyboard already took. */
+#cmd-chips { display: none; }
+
+@media (max-width: 640px) {
+  #cmd-chips[hidden] { display: none; }
+  #cmd-chips {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 6px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+  #cmd-chips::-webkit-scrollbar { display: none; }
+  .cmd-chip {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 7px 12px;
+    border: 1px solid var(--green-dim);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--green);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .cmd-chip:active { background: var(--green-dim); color: var(--bg); }
+}
+
+/* The one line that says what he actually does, above the fold on every
+   device. Deliberately dim so it reads as terminal output, not a headline. */
+.tagline { color: var(--white); opacity: 0.75; }
 
 /* ── Accessibility: honour "reduce motion" — stop the pulsing/glowing loops.
    The JS also reads this preference to kill the rainbow, full-screen flashes,

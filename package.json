@@ -23,6 +23,8 @@
     "build": "node scripts/build.js",
     "verify-build": "node scripts/verify-build.js",
     "verify-deployed": "node scripts/verify-deployed.js",
+    "verify-cdn-pins": "node scripts/verify-cdn-pins.js",
+    "fuzz-sf": "node scripts/assemble-sf.js && node scripts/fuzz-sf.js",
     "check": "npm run lint && npm run lint:html && npm run format:check && npm test"
   },
   "devDependencies": {

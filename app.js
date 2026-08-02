@@ -4,7 +4,10 @@
   const cmd      = document.getElementById('cmd');
   const terminal = document.getElementById('terminal');
 
-  function focusCmd() { cmd.focus(); }
+  // Also re-syncs the phone chip bar: a game teardown restores the input row
+  // from inside a lazy chunk, which never calls back here — and tapping the
+  // terminal is the first thing anyone does afterwards.
+  function focusCmd() { cmd.focus(); if (typeof renderChips === 'function') renderChips(); }
   // Coalesce scroll-to-bottom into one rAF so the per-character typewriter loops
   // (and the 50+ other call sites) don't each force a synchronous layout/reflow.
   let _scrollPending = false;
@@ -366,7 +369,11 @@
   function showEggNudge() {
     try { if (localStorage.getItem('ilaird_nudge') === '1') return; } catch (e) {}
     if (foundEggs.size > 0) return;                        // already hunting
-    if (/Mobi|Android/i.test(navigator.userAgent)) return; // desktop terminal only
+    // Width, not user agent. The nudge is anchored to the badge in the top-right
+    // corner and is wide enough to cover the banner on a narrow screen — which
+    // is a bad first impression regardless of what device is behind it. A UA
+    // sniff also missed narrow desktop windows entirely.
+    if (window.innerWidth <= 640) return;
     const badge = document.getElementById('ach-badge');
     if (!badge) return;
 
@@ -1178,6 +1185,7 @@
   crtWarmup();          // one-shot tube power-on (skipped under reduceMotion)
 
   function restoreNormal() {
+    setTimeout(renderChips, 0);   // mode flags are cleared below; re-render after
     halMode = false;
     halLLM = false; halLLMBusy = false;
     sansMode = false;
@@ -2097,6 +2105,9 @@
 
   async function boot() {
     wireChrome();   // titlebar + terminal click handlers (formerly inline on* attributes)
+    trackViewport();
+    syncChipPoll();
+    window.addEventListener('resize', syncChipPoll);
 
     // Fast path: the home screen (banner + connect cards + help line) is pre-rendered as static
     // HTML in index.html, so it paints instantly — before this (large, obfuscated) bundle finishes
@@ -2138,6 +2149,102 @@
       proj.dataset.wired = '1';
       proj.addEventListener('click', e => { e.preventDefault(); COMMANDS.projects(); });
     }
+  }
+
+  /* ── Phone: keep the prompt above the software keyboard ──
+     iOS Safari does not shrink the layout viewport when the keyboard opens — it
+     overlays it — so a `height: 100vh` window puts the input row underneath the
+     keyboard and you type blind. `100dvh` in the stylesheet fixes the browser
+     chrome; only visualViewport knows about the keyboard. Android gets this for
+     free from `interactive-widget=resizes-content` in the viewport meta, but
+     running both is harmless (the height it reports is already correct there).
+     Guarded: visualViewport is absent in jsdom and older browsers, where the
+     CSS height stands on its own. */
+  function trackViewport() {
+    const vv = window.visualViewport;
+    const win = document.querySelector('.window');
+    if (!vv || !win) return;
+    let raf = 0;
+    const apply = () => {
+      raf = 0;
+      // Only take over on phone-sized viewports; desktop keeps the CSS height.
+      if (window.innerWidth > 640) { win.style.height = ''; return; }
+      win.style.height = vv.height + 'px';
+      scroll();   // keep the newest line visible as the keyboard eats the space
+    };
+    const queue = () => { if (!raf) raf = requestAnimationFrame(apply); };
+    vv.addEventListener('resize', queue);
+    vv.addEventListener('scroll', queue);
+    apply();
+  }
+
+  /* ── Tap-first command bar (phone only) ──
+     The terminal stays the interface on a phone; typing stops being mandatory.
+     The site already had half of this: clickRunnable() makes command words in
+     output tappable, so `help` output is effectively a menu. What was missing
+     was somewhere to tap BEFORE any output exists, and something that follows
+     the mode you're in.
+
+     Deliberately not shown while awaitingInput is set (a multi-step prompt
+     wants a typed answer, and a stray tap would derail it) or while a game owns
+     the screen (the input row is hidden then, and the chips would float over
+     the canvas). CSS hides the bar entirely above 640px. */
+  const CHIPS_NORMAL = ['help', 'about', 'projects', 'resume', 'games', 'ls', 'neofetch', 'gui', 'clear'];
+  const CHIPS_HAL    = ['daisy', 'help', 'chess', 'settings', 'clear'];
+  const CHIPS_SANS   = ['check', 'act', 'fight', 'item', 'mercy', 'run'];
+
+  function renderChips() {
+    const bar = document.getElementById('cmd-chips');
+    if (!bar) return;
+
+    // Width-gated here as well as in CSS. Leaving it to the stylesheet meant
+    // desktop still built a row of buttons it never displays — dead DOM inside
+    // a role="toolbar", which is also a minor accessibility wart.
+    if (window.innerWidth > 640) { bar.hidden = true; bar.dataset.set = ''; bar.textContent = ''; return; }
+
+    const busy = !!awaitingInput || inputRow.style.display === 'none';
+    if (busy) { bar.hidden = true; bar.dataset.set = ''; bar.textContent = ''; return; }
+
+    const set = halMode ? CHIPS_HAL : sansMode ? CHIPS_SANS : CHIPS_NORMAL;
+    // Cheap idempotence: skip the DOM work when the same set is already up.
+    // This is what makes the poll below effectively free.
+    if (bar.dataset.set === set.join(',')) { bar.hidden = false; return; }
+    bar.dataset.set = set.join(',');
+    bar.textContent = '';
+    for (const token of set) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cmd-chip';
+      b.textContent = token;
+      b.addEventListener('click', () => {
+        if (awaitingInput) return;         // state changed between paint and tap
+        cmd.value = '';
+        submitCommand(token);
+        renderChips();
+      });
+      bar.appendChild(b);
+    }
+    bar.hidden = false;
+  }
+
+  /* Keep the bar in sync with state that changes ASYNCHRONOUSLY.
+     Rendering after each dispatch is not enough: `hal` prints a timed sequence
+     and only then sets awaitingInput, sans activates from a lazy chunk, `daisy`
+     restores normal mode when a song finishes, and games restore the input row
+     from inside their own teardown. None of those call back here, and the bar
+     showing the wrong set (or showing at all during a typed prompt) is worse
+     than the cost of checking.
+
+     The check is a string compare against dataset.set and returns immediately
+     when nothing changed, and it only runs on phone-sized viewports where the
+     bar is visible at all — so it costs nothing on desktop and nearly nothing
+     on mobile. Rebound on resize so rotating a phone starts/stops it. */
+  let chipPoll = 0;
+  function syncChipPoll() {
+    const wantPoll = window.innerWidth <= 640;
+    if (wantPoll && !chipPoll) chipPoll = setInterval(renderChips, 400);
+    else if (!wantPoll && chipPoll) { clearInterval(chipPoll); chipPoll = 0; }
+    renderChips();
   }
 
   /* ── Chrome wiring (titlebar + terminal) ──
@@ -2429,7 +2536,49 @@
       get playerName() { return playerName; },
     };
   }
+  /* Is there a physical keyboard? No web API answers this, so use the best
+     available proxy: a FINE pointer means a mouse or trackpad, which means a
+     real computer, which means a keyboard. Phones and tablets report only a
+     coarse pointer — but an iPad with a Magic Keyboard reports a fine one, and
+     it does have a keyboard, so the proxy holds in the awkward case too. Falls
+     back to viewport width where matchMedia is unavailable (jsdom, old
+     browsers), matching the 640px breakpoint used everywhere else. */
+  function hasKeyboard() {
+    try {
+      if (window.matchMedia) return matchMedia('(any-pointer: fine)').matches;
+    } catch (e) { /* fall through */ }
+    return window.innerWidth > 640;
+  }
+
+  /* Anything that captures the keyboard AND hides the input row is a trap on a
+     phone: with no input row the software keyboard can't even be summoned, so
+     there is no way to start, play, or quit — only a page reload. Rather than
+     let someone walk into that, say so plainly and stay at the prompt.
+     `keys` describes what the thing actually needs, so the refusal is specific
+     instead of a generic "not supported". */
+  let _kbHintShown = false;
+  function keyboardRequired(name, keys) {
+    blank();
+    line(`${esc(name)} needs a physical keyboard.`, 'err');
+    line(`It is played with ${esc(keys)}, and this device has no keys to press.`, 'dim');
+    // The "try these instead" nudge is useful once. Someone tapping through the
+    // games list would otherwise read it four times in a row.
+    if (!_kbHintShown) {
+      _kbHintShown = true;
+      line('Everything else here works fine — try <span class="blue">projects</span>, ' +
+           '<span class="blue">about</span>, or <span class="blue">chess</span> (chess takes typed moves).', 'dim');
+    }
+    blank();
+    scroll();
+  }
+
   function launchGame(name) {
+    // Gated here rather than in the four COMMANDS stubs: one place, and it also
+    // covers any future game that routes through this loader.
+    if (!hasKeyboard()) {
+      keyboardRequired(name, name === '2048' ? 'the arrow keys' : 'the arrow keys or WASD');
+      return;
+    }
     let busy = null;
     if (!gamesLoading) {
       if (typeof initGames !== 'function') busy = moduleLoadLine('game module');
@@ -2526,6 +2675,7 @@
       cmd,
       openUrl,
       unlockAchievement,
+      hasKeyboard,
       _chirp,
       makeRng,
       HAL_WORKER_URL,
@@ -3091,6 +3241,7 @@
       line(r('settings',  'configure terminal options'));
       line(r('crt',       'toggle the CRT glass'));
       line(r('privacy',   'what this site does with your data'));
+      line(r('forget',    'erase everything stored in this browser'));
       line(r('clear',     'clear the terminal'));
       blank();
       line('<span class="bold">Easter Eggs</span>');
@@ -3293,6 +3444,66 @@
     },
 
 
+    /* Erase everything this site has stored in the visitor's browser.
+       The site has no accounts and no server-side profile, so localStorage IS
+       the entirety of what it knows about someone — this is the whole of the
+       "delete my data" story, and it runs entirely client-side.
+
+       Swept by PREFIX rather than an explicit key list: Stick Fighter's
+       profile-scoped keys are `ilaird_sf_<thing>_<profile>` (see profKey in
+       stickfighter/06-upgrades.js), so an explicit list would silently miss
+       them and would rot every time a key is added. Anything following the
+       `ilaird` convention is caught automatically, now and later.
+
+       Destructive and irreversible (46 easter eggs, trophies, upgrades), so it
+       confirms first. On confirmation it reloads: foundEggs, crtEnabled,
+       endingSeen, the active theme and the lazy chunks' own state are all held
+       in memory, and a reload is the only way to guarantee none of it survives
+       as a stale copy of data the visitor just asked to erase. */
+    forget() {
+      let keys = [];
+      try { keys = Object.keys(localStorage).filter(k => k.startsWith('ilaird')); }
+      catch (e) { /* storage unavailable — nothing to erase */ }
+
+      blank();
+      if (!keys.length) {
+        line('Nothing stored. This browser has no data from this site.', 'white');
+        blank();
+        scroll();
+        return;
+      }
+      line('<span class="bold">forget</span> — erase everything stored in this browser');
+      blank();
+      line(`  ${keys.length} item${keys.length === 1 ? '' : 's'}: easter eggs, settings, and game progress.`, 'dim');
+      line('  This cannot be undone, and the page will reload.', 'dim');
+      blank();
+      line('Erase it all? (y/N)', 'white');
+      scroll();
+
+      awaitingInput = (answer) => {
+        awaitingInput = null;
+        if (!/^y(es)?$/i.test((answer || '').trim())) {
+          blank();
+          line('Left untouched.', 'dim');
+          blank();
+          scroll();
+          return;
+        }
+        let gone = 0;
+        for (const k of keys) {
+          try { localStorage.removeItem(k); gone++; } catch (e) { /* keep going */ }
+        }
+        foundEggs.clear();
+        syncEggBadge();
+        blank();
+        line(`Erased ${gone} item${gone === 1 ? '' : 's'}. Reloading...`, 'white');
+        announce(`Erased ${gone} items. Reloading.`);
+        blank();
+        scroll();
+        setTimeout(() => { try { location.reload(); } catch (e) { /* nothing else to do */ } }, 900);
+      };
+    },
+
     /* Plain-English privacy notice (GDPR Art. 13-style transparency for the
        HAL LLM + hallway-phone features; linked from the LLM CONFIRM gate and
        the room call UI). Keep in sync with what the hal-worker actually
@@ -3304,13 +3515,17 @@
       line('This site has no cookies, no analytics, and no trackers.', 'white');
       line('Your achievements and settings live only in your own browser', 'white');
       line('(localStorage). There are no accounts and no profiles.', 'white');
+      line('Type <span class="blue">forget</span> to erase everything this site has stored about you.', 'white');
       blank();
       line('<span class="bold">Talking to HAL</span> (the LLM mode, or the room’s hallway phone)');
       line('  · your typed lines go to a small backend (AWS) that forwards them to', 'dim');
       line('    Anthropic’s Claude to write HAL’s replies; optional voice is', 'dim');
       line('    synthesized by ElevenLabs; Cloudflare Turnstile is the bot check.', 'dim');
-      line('  · the conversation is held server-side for at most ~30 minutes and', 'dim');
-      line('    is deleted when the session ends. nothing you type is kept.', 'dim');
+      line('  · the conversation is held on my server for at most ~30 minutes and', 'dim');
+      line('    is deleted when the session ends. nothing you type is kept there.', 'dim');
+      line('  · those providers are separate companies and keep their own copies', 'dim');
+      line('    under their own retention policies — my 30 minutes covers my', 'dim');
+      line('    server, not theirs.', 'dim');
       line('  · abuse/rate counters key a salted one-way hash of your IP address', 'dim');
       line('    (never the address itself) and expire within hours to days.', 'dim');
       blank();
@@ -4014,7 +4229,14 @@ Of a bicycle built for two.`;
   });
 
   /* ── Command dispatch — used by the Enter key and click-to-run ── */
+  /* The chip bar has to follow the terminal's state, and submitCommand has a
+     dozen early returns — so wrap it rather than trying to hit every exit.
+     Every dispatch path (typed, tapped chip, click-to-run) goes through here. */
   function submitCommand(raw) {
+    try { dispatchCommand(raw); } finally { renderChips(); }
+  }
+
+  function dispatchCommand(raw) {
     if (awaitingInput) {
       if (!silentInput) echoCmd(raw);
       awaitingInput(raw.trim());
@@ -4271,11 +4493,14 @@ Of a bicycle built for two.`;
     }
   }, { capture: true });
 
-  if (/Mobi|Android/i.test(navigator.userAgent)) {
-    boot().then(() => COMMANDS.gui(true)); // auto-launch — doesn't count as finding it
-  } else {
-    boot();
-  }
+  /* Phones land on the TERMINAL, same as everywhere else.
+     This used to auto-launch the XP desktop for any /Mobi|Android/ user agent,
+     which meant every phone visitor arrived at an unbranded Bliss wallpaper
+     with emoji icons and nothing identifying whose site it was — the terminal,
+     the projects and the whole portfolio sat behind a start menu pinned to the
+     bottom edge of the screen. The desktop is still one `gui` away, and still
+     unlocks its egg when found deliberately. */
+  boot();
   // safety net: all eggs found but the finale never fired (e.g. closed mid-unlock)
   if (!endingSeen && foundEggs.size === ACHIEVEMENTS.length) setTimeout(armFinale, 3000);
   showEggNudge();

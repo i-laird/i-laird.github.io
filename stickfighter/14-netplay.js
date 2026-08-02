@@ -420,6 +420,14 @@ function netHandle(m, conn) {
       if (p < 0 || p >= netFrames.length || p === netSeat) return;
       if (netIsHost && (!conn || p !== conn.seat)) return;   // a client only speaks for its own seat
       const fk = m.k | 0;
+      // Bound how far AHEAD a frame may be stamped. The per-tick prune only
+      // drops keys at `tick` / `tick - 30`, so a peer stamping frames far in
+      // the future would pile up Map entries the prune never reaches — steady
+      // memory growth driven by network input. A peer legitimately leads by
+      // NET_DELAY (5) plus jitter; 600 ticks is ten seconds, far past anything
+      // real. Deliberately NOT bounded on the past side: a reconnect resend
+      // legitimately replays frames from well behind the current tick.
+      if (fk < 0 || fk > tick + 600) return;
       netFrames[p].set(fk, { m: m.m | 0, e: m.e | 0, s: (typeof m.s === 'number') ? m.s | 0 : -1, h: m.h | 0 });
       if (netIsHost) { if (fk > conn.have) conn.have = fk; netRelay(m, conn); }
       else if (netHave && fk > netHave[p]) netHave[p] = fk;
