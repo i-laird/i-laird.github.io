@@ -260,25 +260,61 @@ function initChess(api) {
         wrap.scrollIntoView({ block: 'start' });
       }
 
-      function loadScript(src) {
+      /* ── CDN integrity ──
+         These two files are the only third-party code the site runs, and both
+         come from a CDN we don't control — an unpinned load would put arbitrary
+         JS in this origin (localStorage, the hal-worker base, the room call's
+         typed phone number) if either host or path were ever compromised.
+         Version-pinning the URL is not enough; the CONTENT is pinned too.
+         To bump either dependency, recompute with:
+           curl -sS <url> | openssl dgst -sha384 -binary | openssl base64 -A  */
+      const CHESS_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js';
+      const CHESS_SRI = 'sha384-aH7F59TKSh8OEAivbclch9UUnWn/Uy8AQlYYKzpVaQkAp8W6IF2VocW/knEeRwT0';
+      const SF_SRC    = 'https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js';
+      const SF_SRI    = 'sha384-VtbI9eXlyH0iLETxBo+yJZD0egEZcin9R4ntQlcrrKjRYSTQmdhoiY/jGV9SGw4Q';
+
+      // chess.js goes in as a <script>, so the browser enforces the hash for us
+      // (a mismatch fires onerror → the existing "failed to load" path).
+      function loadScript(src, integrity) {
         return new Promise((res, rej) => {
           if (window.Chess) { res(); return; }
           const s = document.createElement('script');
           s.src = src; s.onload = res; s.onerror = rej;
+          s.integrity = integrity;
+          s.crossOrigin = 'anonymous';   // required for the browser to check integrity
           document.head.appendChild(s);
         });
+      }
+
+      // Stockfish is fetched as bytes and run through a blob Worker, which the
+      // browser cannot SRI-check — so verify it by hand before it ever executes.
+      // Hash the ArrayBuffer (not r.text()) so no decode/re-encode can shift a byte.
+      function fetchVerified(src, integrity) {
+        return fetch(src)
+          .then(r => { if (!r.ok) throw new Error('fetch ' + r.status); return r.arrayBuffer(); })
+          .then(buf => {
+            const subtle = window.crypto && window.crypto.subtle;
+            // No SubtleCrypto means a non-secure origin — i.e. local dev, never
+            // production (the live site is https). Nothing to protect there.
+            if (!subtle) return buf;
+            return subtle.digest('SHA-384', buf).then(digest => {
+              let bin = '';
+              for (const b of new Uint8Array(digest)) bin += String.fromCharCode(b);
+              if ('sha384-' + window.btoa(bin) !== integrity) throw new Error('integrity mismatch');
+              return buf;
+            });
+          });
       }
 
       boardEl.textContent = '\n  Loading chess engine...\n';
       // claim typed input for the whole load window: without this a second
       // `chess` (or a `hal` setup flow) could clobber awaitingInput mid-load
       api.awaitingInput = inp => { if (inp.toLowerCase() === 'q') { loadCancelled = true; endGame(); } };
-      loadScript('https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js')
-        .then(() => fetch('https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js'))
-        .then(r => { if (!r.ok) throw new Error('stockfish fetch ' + r.status); return r.text(); })
-        .then(code => {
+      loadScript(CHESS_SRC, CHESS_SRI)
+        .then(() => fetchVerified(SF_SRC, SF_SRI))
+        .then(buf => {
           if (loadCancelled) return;
-          const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+          const url = URL.createObjectURL(new Blob([buf], { type: 'application/javascript' }));
           sfWorker = new Worker(url);
           URL.revokeObjectURL(url);
           sfWorker.onmessage = onSFMsg;

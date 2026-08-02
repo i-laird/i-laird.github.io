@@ -52,6 +52,21 @@ test('globToRe compiles glob segments with regex metacharacters escaped', () => 
   assert.ok(!globToRe('a.txt').test('axtxt'));
 });
 
+test('globToRe collapses star runs so a non-match cannot backtrack forever', () => {
+  // Semantics are unchanged: a run of stars matches exactly what one star does.
+  assert.ok(globToRe('***.txt').test('notes.txt'));
+  assert.ok(globToRe('a***b').test('axxxb'));
+  assert.ok(!globToRe('a***b').test('axxxc'));
+  assert.equal(globToRe('****').source, globToRe('*').source);
+
+  // The ReDoS guard: uncollapsed this compiles to [^/]*×24 and a failing match
+  // backtracks exponentially. Collapsed, it returns immediately.
+  const started = process.hrtime.bigint();
+  assert.ok(!globToRe('*'.repeat(24) + 'x').test('a'.repeat(40)));
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(elapsedMs < 100, `star-run match took ${elapsedMs}ms — the collapse regressed`);
+});
+
 test('numFlag reads -n N and -N forms with a default', () => {
   assert.equal(numFlag(['-n', '5'], 10), 5);
   assert.equal(numFlag(['-3'], 10), 3);

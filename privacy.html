@@ -3,7 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="robots" content="noindex">
+    <!-- Deliberately indexable: A2P/carrier review expects this policy to be
+         publicly reachable, and it is linked from the landing page as part of
+         that compliance. Do not add a noindex here. -->
     <title>Privacy Policy — ianclaird.com</title>
     <style>
       body {
@@ -86,7 +88,10 @@
         <dt>AI conversations</dt>
         <dd>held server-side for at most ~30 minutes, then deleted; nothing you type is kept</dd>
         <dt>Phone numbers</dt>
-        <dd>never stored in readable form · never shared · verified status expires in 48h</dd>
+        <dd>
+          never stored in readable form · never shared · verified status expires in 48h · a
+          hashed record that you consented is kept for 4 years
+        </dd>
         <dt>Opt out</dt>
         <dd>reply <strong>STOP</strong> to any text and that number is never contacted again</dd>
       </dl>
@@ -131,6 +136,15 @@
           <strong>Never stored in readable form:</strong> verified status, call limits, and
           opt-out records exist only as salted one-way hashes. Verified status expires after
           48 hours; the number itself is used once and discarded.
+        </li>
+        <li>
+          <strong>The one thing kept long-term — proof of consent:</strong> when you tick the
+          box, a record is written of <em>when</em> you consented and the <em>exact wording</em>
+          you agreed to, keyed to the same salted one-way hash of the number. It's kept for
+          4 years, because a consent record is only worth anything if it outlives the period in
+          which someone could dispute it. It contains no readable phone number, and nothing in
+          it can be used to contact you or to recover the number — answering "did this number
+          consent, and to what?" needs the number to be supplied in the first place.
         </li>
         <li>
           <strong>Message frequency:</strong> one SMS verification code per request you

@@ -12,15 +12,55 @@ Email **secure@ilaird.com** with:
 - steps to reproduce (a proof of concept if you have one), and
 - any affected URL or component.
 
+`ilaird.com` and `ianclaird.com` are both mine — the reporting address is not a
+typo, and mail to it reaches the person who runs this site.
+
 You can expect an acknowledgement within a few days. Please give a reasonable
 window to address the issue before any public disclosure.
 
-## Scope
+## Attack surface
 
-The site is static and ships no runtime dependencies, so its attack surface is
-small. The notable exception is the **opt-in** experimental LLM-HAL mode, which
-talks to a separate backend service (Cloudflare Turnstile bot-gate + an API
-Gateway endpoint). Reports touching that flow are especially welcome.
+The page itself is static and has no framework or bundler, but it is not
+dependency-free at runtime and it does talk to backend services. The surface,
+in rough order of interest:
 
-Out of scope: findings that require a compromised client/browser, social
-engineering, or denial-of-service via traffic volume.
+**Outbound SMS and telephone calls.** The `room` easter egg can place one real
+Twilio voice call to a visitor, and first sends one SMS verification code to
+confirm the number. This is the most sensitive thing the site does. It is gated
+by an explicit never-prechecked consent box, a Twilio Lookup line-type check, a
+number allowlist that expires after 48 hours, a permanent STOP/do-not-contact
+list, per-IP / per-number / global daily caps, and a neutral self-identifying
+consent gate when the call is answered. Findings here are the most welcome of
+all — especially anything that would let one visitor cause a call or a text to
+a number that is not their own.
+
+**The experimental LLM-HAL mode** (opt-in, behind a CONFIRM gate). A Cloudflare
+Turnstile bot-gate plus a signed, short-lived session token front an API Gateway
+backend that holds the model key. Game state is server-authoritative. Every
+model reply passes an independent second-opinion content judge before it is
+returned, and that judge fails closed. Prompt-injection findings that get
+inappropriate text onto the page, or that extract the system prompt, are in
+scope.
+
+**Third-party code executed in the page.** The chess game loads `chess.js` and
+`stockfish.js` from public CDNs at runtime. Both are pinned by SHA-384 —
+`chess.js` through a `<script integrity>` attribute, `stockfish.js` through an
+explicit SubtleCrypto digest check before its bytes reach a blob `Worker`.
+Anything that gets unpinned or mismatched code to execute is in scope.
+Cloudflare Turnstile is also loaded from Cloudflare on demand.
+
+**The online leaderboard and WebRTC netplay** in Stick Fighter. Scores carry a
+server-issued run token; replays are client-supplied data that is stored and
+served back to other visitors. Peer-to-peer game traffic arrives straight from
+another visitor's browser.
+
+**Client-side storage.** Achievements, settings and game progress live in
+`localStorage`. Nothing kept there is a credential.
+
+## Out of scope
+
+- Findings that require an already-compromised client or browser.
+- Social engineering.
+- Denial of service through traffic volume.
+- Reports that the site features recognisable characters from film and games.
+  It is a fan project; that is a licensing question, not a security one.

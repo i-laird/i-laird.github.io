@@ -80,3 +80,14 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # Prove the LIVE site is actually serving dist/ and not the clean source.
+      # Without this the whole workflow can run green while Pages keeps serving
+      # the branch (see the one-time setup note at the top of this file), and
+      # the easter-egg secrets would be readable with nothing to flag it.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify the live site is obfuscated
+        run: node scripts/verify-deployed.js https://ianclaird.com

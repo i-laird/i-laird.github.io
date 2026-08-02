@@ -72,7 +72,23 @@
   const fsHome = () => ['home', 'ian'];
   // experimental LLM HAL ("escape the terminal") — opt-in second mode; the scripted HAL is unchanged
   const HAL_WORKER_BASE = 'https://nlflqwapol.execute-api.us-east-1.amazonaws.com';   // AWS API Gateway backend
-  const HAL_WORKER_URL = (() => { try { return localStorage.getItem('ilaird_hal_worker') || HAL_WORKER_BASE; } catch (e) { return HAL_WORKER_BASE; } })();
+  // The override exists so a local worker can be pointed at during development.
+  // It is honoured ONLY for a loopback host: everything sensitive on this site
+  // crosses this base URL (the LLM conversation, the room call's typed phone
+  // number, the SMS verification code), so an attacker who ever landed script
+  // execution here could otherwise persist a silent exfiltration endpoint in
+  // localStorage that survives every later visit.
+  const HAL_WORKER_URL = (() => {
+    try {
+      const override = localStorage.getItem('ilaird_hal_worker');
+      if (!override) return HAL_WORKER_BASE;
+      const u = new URL(override, location.href);
+      const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+      if (local) return override;
+      localStorage.removeItem('ilaird_hal_worker');   // drop a planted one rather than leave it armed
+    } catch (e) { /* unreadable storage or an unparseable URL — fall through */ }
+    return HAL_WORKER_BASE;
+  })();
   const TURNSTILE_SITE_KEY = '0x4AAAAAADn5dDkcE9exLUeE';                              // public Turnstile site key
   // HAL's real telephone number — a Twilio number whose Voice webhook points at
   // the hal-worker's POST {base}/voice (see ~/hal-worker README, "HAL on the
@@ -2080,6 +2096,8 @@
   }
 
   async function boot() {
+    wireChrome();   // titlebar + terminal click handlers (formerly inline on* attributes)
+
     // Fast path: the home screen (banner + connect cards + help line) is pre-rendered as static
     // HTML in index.html, so it paints instantly — before this (large, obfuscated) bundle finishes
     // downloading/parsing. When it's present, don't re-render; just bring the terminal to life and
@@ -2120,6 +2138,27 @@
       proj.dataset.wired = '1';
       proj.addEventListener('click', e => { e.preventDefault(); COMMANDS.projects(); });
     }
+  }
+
+  /* ── Chrome wiring (titlebar + terminal) ──
+     These were inline on* attributes in index.html. They moved here so the page
+     can ship a Content-Security-Policy without `script-src 'unsafe-inline'` —
+     an inline handler is inline script, and allowing it would have re-opened
+     the exact injection path the policy exists to close. Behaviour is identical:
+     the old attributes were all `window.fn && fn()` guards, so they did nothing
+     until this bundle had loaded anyway. Idempotent — boot() can run twice. */
+  function wireChrome() {
+    const bind = (sel, fn) => {
+      const el = document.querySelector(sel);
+      if (!el || el.dataset.wired) return;
+      el.dataset.wired = '1';
+      el.addEventListener('click', fn);
+    };
+    bind('#linkedin-btn', () => unlockAchievement('networker'));
+    bind('#home-cards a[href*="linkedin.com"]', () => unlockAchievement('networker'));
+    bind('#ach-badge', () => toggleAchievements());
+    bind('#sound-toggle', () => toggleSound());
+    bind('#terminal', () => focusCmd());
   }
 
   /* ── Prompt echo ── */
@@ -4256,9 +4295,12 @@ Of a bicycle built for two.`;
     });
   }
 
-  // ── Public API for index.html's inline on* handlers ──
-  // These are the only app.js names referenced from outside the file (the inline
-  // onclick handlers in index.html). As a classic script they're already window
+  // ── Public API ──
+  // index.html no longer carries inline on* handlers (they moved to wireChrome()
+  // so the page can ship a CSP without 'unsafe-inline'), but these four stay
+  // window-exported: they are the documented external entry points, the boot
+  // smoke test pins them, and unlockAchievement is called by name from elsewhere.
+  // As a classic script they're already window
   // globals; making the exports explicit means they survive the obfuscated build,
   // where this file is wrapped in an IIFE and top-level names no longer auto-attach
   // to window. These survive obfuscation because they are PROPERTY assignments and

@@ -177,3 +177,47 @@ test('keyboard charset and escape-to-decline', (t) => {
   hook.key('Escape');
   assert.equal(hook.pop, null, 'escape declines and closes the popup');
 });
+
+test('the verify-start request carries the consent record', async (t) => {
+  // The consent the visitor gives on the `num` stage has to survive the move to
+  // the `offer` stage (which replaces the pop object) and reach the worker: the
+  // worker refuses to text without it, and stores the wording as the record of
+  // what was agreed to. If this regresses, the SMS silently stops working —
+  // and, worse, a text could go out with no record behind it.
+  const { hook, fetches, close } = setup();
+  t.after(close);
+
+  hook.open('num');
+  for (const d of '5551234567') hook.key(d);
+  hook.key(' ');
+  hook.submit();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(hook.pop.stage, 'offer');
+
+  hook.key('1'); // [1] yes — text me a code
+  await new Promise((r) => setTimeout(r, 20));
+
+  const verify = fetches.find((f) => /\/room-verify-start$/.test(f.url));
+  assert.ok(verify, 'pressing 1 must POST /room-verify-start');
+  assert.equal(verify.body.consent, true, 'consent must be sent explicitly');
+  assert.equal(verify.body.phone, '5551234567');
+  assert.ok(verify.body.consentVersion, 'a consent version must be sent');
+
+  // The stored record must be the literal disclosure the user saw, so the text
+  // sent has to be the text rendered on the form.
+  hook.open('num');
+  const shown = hook.el.textContent;
+  const sent = verify.body.consentText;
+  assert.ok(sent && sent.length > 40, 'the consent wording must be sent verbatim');
+  for (const phrase of [
+    'one-time SMS verification code',
+    'message & data rates may apply',
+    'reply HELP for help, STOP to opt out',
+  ]) {
+    assert.ok(sent.includes(phrase), `consentText must contain "${phrase}"`);
+    assert.ok(
+      shown.includes(phrase),
+      `the rendered form must show "${phrase}" — the record must match what was displayed`
+    );
+  }
+});

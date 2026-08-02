@@ -5,4 +5,16 @@
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
   </url>
+  <!-- The legal pages are listed on purpose: A2P/carrier review expects the
+       privacy policy and terms to be publicly reachable and discoverable. -->
+  <url>
+    <loc>https://ianclaird.com/privacy.html</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://ianclaird.com/terms.html</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
 </urlset>

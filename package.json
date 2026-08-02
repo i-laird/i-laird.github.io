@@ -22,6 +22,7 @@
     "serve": "node scripts/assemble-sf.js && python3 -m http.server 8000",
     "build": "node scripts/build.js",
     "verify-build": "node scripts/verify-build.js",
+    "verify-deployed": "node scripts/verify-deployed.js",
     "check": "npm run lint && npm run lint:html && npm run format:check && npm test"
   },
   "devDependencies": {

@@ -795,6 +795,19 @@ function initRoom(api) {
   function escPop(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  /* The exact A2P/SMS opt-in disclosure the visitor ticks. It is rendered in
+     the consent checkbox AND sent verbatim to the worker on verify-start, so
+     the stored consent record holds the literal wording that was agreed to
+     rather than a version number pointing at wording that may since have
+     changed. If you edit this string, bump SMS_CONSENT_VERSION with it — and
+     note that the campaign's Message Flow screenshot (assets/sms_opt_in.png)
+     shows this exact text, so it would need regenerating too. The wording here
+     is byte-for-byte what the form has always rendered. */
+  const SMS_CONSENT_TEXT =
+    'I agree to receive a one-time SMS verification code from ianclaird.com at the' +
+    ' number above. message & data rates may apply. reply HELP for help, STOP to opt out.';
+  const SMS_CONSENT_VERSION = '2026-08-02';
+
   function renderPop() {
     if (!call || !call.pop) return;
     ensurePop();
@@ -810,8 +823,7 @@ function initRoom(api) {
         '<div class="rm-pop-chk' + (p.agree ? ' on' : '') + '" data-act="agree" role="checkbox"' +
         ' aria-checked="' + (p.agree ? 'true' : 'false') + '">' +
         '<span class="rm-pop-box">' + (p.agree ? '✓' : '') + '</span>' +
-        '<span>I agree to receive a one-time SMS verification code from ianclaird.com at the' +
-        ' number above. message &amp; data rates may apply. reply HELP for help, STOP to opt out.</span></div>' +
+        '<span>' + escPop(SMS_CONSENT_TEXT) + '</span></div>' +
         '<div class="rm-pop-btn' + (p.agree ? '' : ' off') + '" data-act="submit">yes — text my code, then call me</div>' +
         '<div class="rm-pop-note">' +
         (p.note || 'US numbers only · used once to place his call · never stored') +
@@ -878,6 +890,10 @@ function initRoom(api) {
     if (p.stage === 'num') {
       if (p.input.replace(/[^0-9]/g, '').length < 10) { popNote('that is not a telephone number.'); return; }
       if (!p.agree) { popNote('he needs your consent first — tick the box (space, or click it).'); return; }
+      // Remember it on the CALL, not the pop: the pop object is replaced when
+      // the flow moves to the offer/code stages, and the consent granted here
+      // is what /room-verify-start has to record.
+      call.consent = { text: SMS_CONSENT_TEXT, version: SMS_CONSENT_VERSION };
       p.num = p.input;
       dialFlow(p.num);
     } else if (p.stage === 'code') {
@@ -905,7 +921,16 @@ function initRoom(api) {
   function startVerify() {
     call.busy = true;
     popNote('…');
-    workerPost('/room-verify-start', { token: call.token, phone: call.pop.num }, true).then((d) => {
+    // The consent payload is not decoration: the worker refuses to text a code
+    // without it, and stores it as the record of what was agreed to and when.
+    const consent = call.consent || {};
+    workerPost('/room-verify-start', {
+      token: call.token,
+      phone: call.pop.num,
+      consent: true,
+      consentText: consent.text || SMS_CONSENT_TEXT,
+      consentVersion: consent.version || SMS_CONSENT_VERSION,
+    }, true).then((d) => {
       if (!call) return;
       call.busy = false;
       if (!call.pop) return;
@@ -922,6 +947,12 @@ function initRoom(api) {
         return;
       }
       if (d && d.error === 'daily_cap') { popNote('no more texts today' + (api.halPhone ? ' — call him instead.' : '.')); return; }
+      if (d && d.error === 'consent_required') {
+        // Server-side consent gate refused — send the visitor back to the box.
+        call.pop = { stage: 'num', num: '', input: '', agree: false, note: 'he needs your consent first — tick the box.' };
+        renderPop();
+        return;
+      }
       popNote('the text could not be sent.');
     });
   }
