@@ -5060,7 +5060,15 @@ function netHandle(m, conn) {
       }
       break;
     case 'restart':   // host rematch: same band & cfg, a fresh shared seed
-      if (netplay && !netIsHost && netCfg && typeof m.seed === 'number') { netCfg.seed = m.seed >>> 0; netBeginRun(); }
+      if (netplay && !netIsHost && netCfg && typeof m.seed === 'number') {
+        netCfg.seed = m.seed >>> 0;
+        netBeginRun();
+        // ask the host to refill anything it sent before this restart reached us —
+        // covers the drop-during-rematch path, where the host's opening frames for
+        // the new run went into a dead link (without this both gates stall forever).
+        // On a clean rematch this is a no-op: identical frame overwrites, deduped events.
+        netSend({ t: 'resume', r: netRunId, k: tick, have: netHave || [] });
+      }
       break;
     case 'bye':
       if (netplay) {
