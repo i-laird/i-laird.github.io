@@ -74,8 +74,8 @@ test('both pages are reachable from the landing page titlebar', () => {
 
 test('the opt-in form itself links both pages', () => {
   // the num-stage popup markup in room.js must keep its terms + privacy links
-  assert.match(room, /href="terms\.html"[^>]*>terms of service<\/a>/);
-  assert.match(room, /href="privacy\.html"[^>]*>privacy policy<\/a>/);
+  assert.match(room, /href="terms\.html"[^>]*>terms of service<\/a>/i);
+  assert.match(room, /href="privacy\.html"[^>]*>privacy policy<\/a>/i);
 });
 
 test('every pop object starts with consent unticked (static guard)', () => {

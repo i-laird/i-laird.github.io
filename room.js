@@ -755,7 +755,12 @@ function initRoom(api) {
      starts agree:false and submitPop refuses without it), the message-type +
      frequency description, the rates disclaimer, HELP/STOP instructions, and
      the terms.html / privacy.html links. Space or click toggles the box;
-     everything with data-act is also clickable (delegated in ensurePop). */
+     everything with data-act is also clickable (delegated in ensurePop).
+     The popup deliberately breaks character: every stage renders as a plain,
+     conventional consent form (neutral copy here, neutral styling in the
+     #room-pop CSS) — carrier reviewers audit this exact form against the A2P
+     campaign, and an in-persona form reads as unclear consent. Don't re-theme
+     it. HAL stays HAL in the chat around it. */
   function ensurePop() {
     if (popEl) return;
     popEl = document.createElement('div');
@@ -825,10 +830,12 @@ function initRoom(api) {
     let html = '';
     if (p.stage === 'num') {
       html =
-        '<div class="rm-pop-title">— he is asking to call your telephone —</div>' +
-        '<div class="rm-pop-opt">HAL wants to place one real voice call to you. give him your cell number' +
-        ' and he will text it a one-time verification code by SMS; enter the code and he calls.</div>' +
-        '<div class="rm-pop-opt">verification codes only, never marketing · one SMS per verification request.</div>' +
+        '<div class="rm-pop-title">Verify your phone number</div>' +
+        '<div class="rm-pop-opt">To place the phone call you requested, ianclaird.com will text a' +
+        ' one-time verification code by SMS to the mobile number you enter below.' +
+        ' Enter the code and the call is placed.</div>' +
+        '<div class="rm-pop-opt">Verification codes only, never marketing · one SMS per verification request.</div>' +
+        '<div class="rm-pop-lbl">Mobile number</div>' +
         '<div class="rm-pop-in"><span>' + escPop(p.input) + '</span><u></u></div>' +
         // Age attestation FIRST, and in its own box. It is deliberately not
         // bundled into the SMS consent tick: carrier guidance wants the consent
@@ -842,31 +849,31 @@ function initRoom(api) {
         ' aria-checked="' + (p.agree ? 'true' : 'false') + '">' +
         '<span class="rm-pop-box">' + (p.agree ? '✓' : '') + '</span>' +
         '<span>' + escPop(SMS_CONSENT_TEXT) + '</span></div>' +
-        '<div class="rm-pop-btn' + (p.agree && p.age ? '' : ' off') + '" data-act="submit">yes — text my code, then call me</div>' +
+        '<div class="rm-pop-btn' + (p.agree && p.age ? '' : ' off') + '" data-act="submit">Continue</div>' +
         '<div class="rm-pop-note">' +
-        (p.note || 'US numbers only · 18+ · used once to place his call · never stored') +
-        '<br><a href="terms.html" target="_blank" rel="noopener">terms of service</a> · ' +
-        '<a href="privacy.html" target="_blank" rel="noopener">privacy policy</a>' +
-        '<br>space or click ticks each box · enter to submit · esc to decline</div>';
+        (p.note || 'US numbers only · 18+ · used once to place your requested call · never stored') +
+        '<br><a href="terms.html" target="_blank" rel="noopener">Terms of Service</a> · ' +
+        '<a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>' +
+        '<br>Space or click ticks each box · Enter to submit · Esc to decline</div>';
     } else if (p.stage === 'offer') {
       html =
-        '<div class="rm-pop-title">— that telephone is not on his list —</div>' +
-        '<div class="rm-pop-opt">HAL only calls numbers verified by text. may he send the code?</div>' +
-        '<div class="rm-pop-opt rm-pop-act" data-act="verify">[1] yes — text a one-time SMS code to ' + maskNum(p.num) +
-        ', then call me once I enter it (verified for 48 hours)</div>' +
+        '<div class="rm-pop-title">Verify this number by text</div>' +
+        '<div class="rm-pop-opt">This number has not been verified yet. Calls are only placed to numbers verified by SMS.</div>' +
+        '<div class="rm-pop-opt rm-pop-act" data-act="verify">[1] Text a one-time SMS code to ' + maskNum(p.num) +
+        ' and place my call once I enter it (verified for 48 hours)</div>' +
         (api.halPhone
-          ? '<div class="rm-pop-opt rm-pop-act" data-act="self">[2] no — I will call him myself: ' + api.halPhone + '</div>'
+          ? '<div class="rm-pop-opt rm-pop-act" data-act="self">[2] No — I will place the call myself: ' + api.halPhone + '</div>'
           : '') +
         '<div class="rm-pop-note">' +
-        (p.note || 'press 1' + (api.halPhone ? ' or 2' : '') + ' · esc to keep talking' +
+        (p.note || 'Press 1' + (api.halPhone ? ' or 2' : '') + ' · Esc to go back' +
           ' · msg &amp; data rates may apply · reply HELP for help, STOP to opt out') +
         '</div>';
     } else if (p.stage === 'code') {
       html =
-        '<div class="rm-pop-title">— he texted a one-time code to ' + maskNum(p.num) + ' —</div>' +
-        '<div class="rm-pop-opt">enter the 6 digits and he will place his call.</div>' +
+        '<div class="rm-pop-title">Enter your verification code</div>' +
+        '<div class="rm-pop-opt">A one-time code was texted to ' + maskNum(p.num) + '. Enter the 6 digits below.</div>' +
         '<div class="rm-pop-in"><span>' + escPop(p.input) + '</span><u></u></div>' +
-        '<div class="rm-pop-note">' + (p.note || 'enter to verify · esc to go back') + '</div>';
+        '<div class="rm-pop-note">' + (p.note || 'Enter to verify · Esc to go back') + '</div>';
     }
     popEl.innerHTML = html;
     popEl.classList.add('show');
@@ -911,9 +918,9 @@ function initRoom(api) {
   function submitPop() {
     const p = call.pop;
     if (p.stage === 'num') {
-      if (p.input.replace(/[^0-9]/g, '').length < 10) { popNote('that is not a telephone number.'); return; }
-      if (!p.age) { popNote('he only calls adults — confirm you are 18 or older (space, or click the box).'); return; }
-      if (!p.agree) { popNote('he needs your consent first — tick the box (space, or click it).'); return; }
+      if (p.input.replace(/[^0-9]/g, '').length < 10) { popNote('That is not a telephone number.'); return; }
+      if (!p.age) { popNote('This feature is 18+ — please confirm you are 18 or older (space, or click the box).'); return; }
+      if (!p.agree) { popNote('Consent is required — please tick the consent box (space, or click it).'); return; }
       // Remember it on the CALL, not the pop: the pop object is replaced when
       // the flow moves to the offer/code stages, and the consent granted here
       // is what /room-verify-start has to record.
@@ -921,7 +928,7 @@ function initRoom(api) {
       p.num = p.input;
       dialFlow(p.num);
     } else if (p.stage === 'code') {
-      if (p.input.length !== 6) { popNote('six digits.'); return; }
+      if (p.input.length !== 6) { popNote('Please enter the 6-digit code.'); return; }
       submitCode(p.input);
     }
   }
@@ -935,7 +942,7 @@ function initRoom(api) {
       if (d && d.ok) { closePop(); dialedSequence(); return; }
       if (!call.pop) return;   // popup closed while waiting
       if (d && d.error === 'not_allowlisted') { call.pop = { stage: 'offer', num, input: '', note: '' }; renderPop(); return; }
-      if (d && d.error === 'bad_number') { call.pop = { stage: 'num', num, input: '', note: 'that is not a telephone number.' }; renderPop(); return; }
+      if (d && d.error === 'bad_number') { call.pop = { stage: 'num', num, input: '', note: 'That is not a telephone number.' }; renderPop(); return; }
       if (d && d.error === 'already_dialed') { closePop(); speakLine({ reply: 'I have already called you once tonight, Dave.' }); return; }
       closePop();
       speakLine({ reply: 'The line refuses me. We will have to make do with this connection.' });
@@ -963,28 +970,28 @@ function initRoom(api) {
       if (d && d.ok && d.already) { dialFlow(call.pop.num); return; }   // it was on his list after all
       if (d && d.ok) { call.pop = { stage: 'code', num: call.pop.num, input: '', note: '' }; renderPop(); return; }
       if (d && d.error === 'unsupported_region') {
-        call.pop = { stage: 'num', num: '', input: '', note: 'he can only reach numbers in the United States.' };
+        call.pop = { stage: 'num', num: '', input: '', note: 'Only United States numbers are supported.' };
         renderPop();
         return;
       }
       if (d && d.error === 'unsupported_number') {
-        call.pop = { stage: 'num', num: '', input: '', note: 'he only calls ordinary telephones — that one is something else.' };
+        call.pop = { stage: 'num', num: '', input: '', note: 'That number type is not supported — mobile or landline only.' };
         renderPop();
         return;
       }
-      if (d && d.error === 'daily_cap') { popNote('no more texts today' + (api.halPhone ? ' — call him instead.' : '.')); return; }
+      if (d && d.error === 'daily_cap') { popNote('Daily SMS limit reached' + (api.halPhone ? ' — you can place the call yourself instead.' : '.')); return; }
       if (d && d.error === 'consent_required' || (d && d.error === 'age_required')) {
         // Server-side gate refused — send the visitor back to the boxes.
         call.pop = {
           stage: 'num', num: '', input: '', agree: false, age: false,
           note: d.error === 'age_required'
-            ? 'he only calls adults — confirm you are 18 or older.'
-            : 'he needs your consent first — tick the box.',
+            ? 'This feature is 18+ — please confirm you are 18 or older.'
+            : 'Consent is required — please tick the consent box.',
         };
         renderPop();
         return;
       }
-      popNote('the text could not be sent.');
+      popNote('The text could not be sent.');
     });
   }
 
@@ -995,14 +1002,14 @@ function initRoom(api) {
       if (!call) return;
       call.busy = false;
       if (!call.pop) return;
-      if (d && d.ok) { popNote('verified for 48 hours.'); dialFlow(call.pop.num); return; }
+      if (d && d.ok) { popNote('Verified for 48 hours.'); dialFlow(call.pop.num); return; }
       if (d && d.error === 'bad_code') {
         call.pop.input = '';
-        popNote('wrong. ' + (typeof d.attemptsLeft === 'number' ? d.attemptsLeft + ' attempts left.' : 'try again.'));
+        popNote('Incorrect code. ' + (typeof d.attemptsLeft === 'number' ? d.attemptsLeft + ' attempts left.' : 'Try again.'));
         return;
       }
       if (d && (d.error === 'expired' || d.error === 'too_many_attempts')) {
-        call.pop = { stage: 'num', num: '', input: '', note: 'the code lapsed. start again.' };
+        call.pop = { stage: 'num', num: '', input: '', note: 'The code expired — please start again.' };
         renderPop();
         return;
       }
