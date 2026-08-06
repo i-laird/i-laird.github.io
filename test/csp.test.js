@@ -119,6 +119,46 @@ test('the lock-down directives are present', () => {
   assert.equal(directive('base-uri'), "'none'");
 });
 
+/* The secondary pages carry their OWN policy. A <meta> CSP covers only its own
+   document, so index.html's does nothing for them — and privacy.html/terms.html
+   are the pages a carrier reviewer loads, which makes "the two trust-sensitive
+   pages are the two unprotected ones" the wrong shape to ship.
+   They can afford a stricter policy than index.html: no page here has any
+   JavaScript, so script-src is 'none' rather than a hash allowlist. That turns
+   "someone adds a script tag here later" into a visible break instead of a
+   quiet widening of the surface. */
+for (const page of ['privacy.html', 'terms.html', '404.html']) {
+  test(`${page} carries its own strict, script-free CSP`, () => {
+    const src = fs.readFileSync(path.join(ROOT, page), 'utf8');
+    const meta = src.match(
+      /<meta\s+http-equiv="Content-Security-Policy"\s+content="([\s\S]*?)"\s*>/i
+    );
+    assert.ok(meta, `${page} must ship a <meta> CSP`);
+
+    const policy = meta[1];
+    const read = (name) => {
+      const m = policy.match(new RegExp(`(?:^|;)\\s*${name}\\s+([^;]+)`, 'i'));
+      return m ? m[1].trim().replace(/\s+/g, ' ') : null;
+    };
+
+    assert.equal(read('script-src'), "'none'", `${page} must forbid all script`);
+    assert.equal(read('default-src'), "'none'");
+    assert.equal(read('base-uri'), "'none'");
+    assert.equal(read('form-action'), "'none'");
+
+    // The claim above — that these pages have no JS — is the reason script-src
+    // can be 'none'. Assert it directly so the two cannot drift apart.
+    assert.ok(
+      !/<script/i.test(src),
+      `${page} declares script-src 'none' but contains a <script> tag`
+    );
+    assert.ok(
+      !/\son[a-z]+\s*=/i.test(src.replace(/<!--[\s\S]*?-->/g, '')),
+      `${page} must carry no inline event handlers`
+    );
+  });
+}
+
 test('chess.js pins both CDN payloads with a SHA-384 hash', () => {
   // The only third-party code the site executes. chess.js goes in via <script
   // integrity>; stockfish.js is fetched and blob-Worker'd, so chess.js verifies

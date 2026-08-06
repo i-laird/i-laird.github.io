@@ -2278,8 +2278,21 @@
     appendNode(row);
   }
 
+  /* Escape for interpolation into innerHTML. Quotes are escaped too, which
+     matters even though every current call site is in TEXT position (inside an
+     element, never inside an attribute): the day someone writes
+     title="${esc(x)}" — a natural thing to reach for — an &-<->-only escaper
+     hands them attribute injection with no visible mistake at the call site.
+     Escaping all five makes the helper safe in both positions, so the call site
+     never has to be the thing that gets it right. Costs two replaces on output
+     the terminal was building anyway. */
   function esc(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   /* ── HAL mode activation ── */
@@ -2550,6 +2563,28 @@
     return window.innerWidth > 640;
   }
 
+  /* Is this page the top-level document, or is it inside someone else's frame?
+     The CSP ships as a <meta> tag because GitHub Pages cannot set response
+     headers, and `frame-ancestors` is header-only — so it is silently ignored
+     and this origin is embeddable by anyone. For a portfolio that is mostly
+     harmless. It is NOT harmless for the room's phone flow, which collects a
+     real telephone number behind a consent tickbox and can cause a real SMS and
+     a real outbound call: an attacker-controlled overlay on top of a framed
+     copy is exactly the classic clickjack, and the victim's number is the prize.
+     So that one flow refuses to run while framed (see roomBridge/answerPhone).
+     Deliberately NOT a whole-page frame-buster — busting out would break
+     legitimate embeds and archive views for no gain; the fix belongs on the
+     sensitive interaction, not on the site.
+     Cross-origin `window.top` access throws in some browsers; a throw means
+     there IS a cross-origin ancestor, so fail closed. */
+  function isTopLevel() {
+    try {
+      return window.self === window.top;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /* Anything that captures the keyboard AND hides the input row is a trap on a
      phone: with no input row the software keyboard can't even be summoned, so
      there is no way to start, play, or quit — only a page reload. Rather than
@@ -2737,6 +2772,10 @@
       // bot gate. Empty worker URL = the phone falls back to the answering machine.
       halWorkerUrl: HAL_WORKER_URL,
       turnstileKey: TURNSTILE_SITE_KEY,
+      // Clickjacking gate for the phone flow — see isTopLevel(). A getter, not
+      // a plain value, so it is evaluated when the receiver is picked up rather
+      // than cached at bridge-construction time.
+      get topLevel() { return isTopLevel(); },
       get soundEnabled() { return soundEnabled; },
       get reduceMotion() { return reduceMotion; },
       get achOverlayOpen() { return !!achOverlayEl; },

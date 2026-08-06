@@ -1,0 +1,16 @@
+# Security contact for ianclaird.com / ilaird.com — RFC 9116.
+#
+# The full policy, including the scoped attack surface (the outbound SMS and
+# telephone path is the part worth your time) and what is out of scope, is at
+# the Policy URL below.
+#
+# Expires is not decoration: a stale security.txt is worse than none, because
+# it points a reporter at a channel nobody promises to read. It is regenerated
+# by scripts/gen-security-txt.js and test/security-txt.test.js fails the build
+# once it is inside its final 30 days.
+
+Contact: mailto:secure@ilaird.com
+Expires: 2027-07-06T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://ianclaird.com/.well-known/security.txt
+Policy: https://github.com/i-laird/i-laird.github.io/blob/main/SECURITY.md

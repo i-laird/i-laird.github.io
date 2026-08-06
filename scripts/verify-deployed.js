@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-/* Post-deploy assertion: the LIVE site must be serving the obfuscated build.
+/* Post-deploy assertions against the LIVE site:
+ *   1. it must be serving the obfuscated build, not the clean source, and
+ *   2. /.well-known/security.txt must actually be reachable.
  *
  * Why this exists: .github/workflows/deploy.yml only takes effect once GitHub
  * Pages is set to "Source: GitHub Actions". Until that switch is flipped, Pages
@@ -52,6 +54,29 @@ async function checkOnce() {
   if (tags)
     throw new Error(
       `/index.html still references ${tags} lib/ script tag(s) — that is the source layout, not dist/`
+    );
+
+  /* The RFC 9116 policy must actually be reachable. It lives in a DOT-directory,
+     which is the one shape of path a static pipeline drops silently: .gitignore
+     rules, artifact packers and Jekyll have all historically eaten dotfiles. If
+     it 404s, every other check here still passes and the file is simply absent
+     from the internet forever — nothing else in the repo would ever notice.
+     test/security-txt.test.js proves the FILE is right; only this proves it is
+     SERVED. */
+  let sec;
+  try {
+    sec = await get('/.well-known/security.txt');
+  } catch (e) {
+    throw new Error(
+      `${e.message} — the RFC 9116 policy is not being served. Check that ` +
+        `build.js's STATIC list still carries it and that .nojekyll is in dist/ ` +
+        `(without it, dot-directories are stripped).`
+    );
+  }
+  if (!/^\s*Contact:/m.test(sec))
+    throw new Error(
+      '/.well-known/security.txt is reachable but has no Contact: field — ' +
+        'it is being served as something else (a 404 page, most likely)'
     );
 
   return js.length;

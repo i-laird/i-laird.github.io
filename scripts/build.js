@@ -136,6 +136,9 @@ const STATIC = [
   'CNAME',
   '.nojekyll',
   'sw.js',
+  // RFC 9116. Served from a dot-directory, which GitHub Pages only passes
+  // through because .nojekyll is set — Jekyll would drop it silently.
+  '.well-known/security.txt',
 ];
 
 function obfuscate(label, code, options) {
@@ -205,12 +208,39 @@ function build() {
   }
   fs.writeFileSync(path.join(DIST, 'index.html'), html);
 
-  // Static passthrough.
+  // Static passthrough. mkdir first: STATIC carries nested paths now
+  // (.well-known/security.txt), and copyFileSync will not create the parent.
   for (const f of STATIC) {
-    if (fs.existsSync(path.join(ROOT, f)))
-      fs.copyFileSync(path.join(ROOT, f), path.join(DIST, f));
+    if (!fs.existsSync(path.join(ROOT, f))) continue;
+    const dest = path.join(DIST, f);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, f), dest);
   }
-  fs.cpSync(path.join(ROOT, 'assets'), path.join(DIST, 'assets'), { recursive: true });
+  // Assets are copied wholesale, which means a recursive copy of whatever
+  // happens to be sitting in that directory — including OS and editor debris.
+  // .gitignore keeps that junk out of the REPO but has no say over the build,
+  // so a local `npm run build` would publish it. A .DS_Store is a directory
+  // listing: it names every file beside it, including ones that were deleted
+  // or never linked. CI builds from a clean clone and never had the problem,
+  // which is exactly why it would have gone unnoticed.
+  const JUNK = new Set([
+    '.DS_Store',
+    'Thumbs.db',
+    'desktop.ini',
+    '.Spotlight-V100',
+    '.AppleDouble',
+  ]);
+  let skipped = 0;
+  fs.cpSync(path.join(ROOT, 'assets'), path.join(DIST, 'assets'), {
+    recursive: true,
+    filter: (src) => {
+      if (!JUNK.has(path.basename(src))) return true;
+      skipped++;
+      return false;
+    },
+  });
+  if (skipped)
+    console.log(`  (skipped ${skipped} junk file${skipped === 1 ? '' : 's'} in assets/)`);
 
   console.log(`\nBuilt → ${path.relative(ROOT, DIST)}/`);
 }

@@ -60,6 +60,12 @@
        layout viewport instead of overlaying it, so the prompt stays visible. iOS ignores
        it — app.js pins the height via visualViewport for that case. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
+  <!-- Explicit rather than inherited: modern browsers already default to
+       strict-origin-when-cross-origin, but this page hands paths to third
+       parties at runtime (the CDN fetches, Turnstile, the worker API) and the
+       default is a browser policy, not a guarantee. Stating it means the path
+       and query of whatever the visitor is doing never leave this origin. -->
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>Ian Laird</title>
   <meta name="description" content="Ian Laird — Software Engineer">
   <meta property="og:type" content="website">

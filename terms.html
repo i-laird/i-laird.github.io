@@ -3,6 +3,16 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Same strict, script-free policy as privacy.html — see the note there. -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'none';
+      script-src 'none';
+      style-src 'unsafe-inline';
+      img-src 'self' data:;
+      base-uri 'none';
+      form-action 'none';
+    ">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <!-- Deliberately indexable — see the note in privacy.html. -->
     <title>Terms of Service — ianclaird.com</title>
     <style>

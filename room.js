@@ -475,7 +475,15 @@ function initRoom(api) {
     api._chirp(880, 'sine', 0.14, 0.05); // the line opens
     // hal-worker configured → the receiver is LIVE (beginLiveCall); otherwise
     // (or when the live path fails) the old answering machine plays.
-    if (api.halWorkerUrl) beginLiveCall();
+    //
+    // api.topLevel is the clickjacking gate. The live receiver is the only
+    // place on this site that collects a telephone number and can cause a real
+    // SMS and a real outbound call, and `frame-ancestors` is unavailable to a
+    // <meta> CSP (see isTopLevel() in app.js) — so inside somebody else's frame
+    // the consent form and the dial path are unreachable, and the phone drops
+    // to the decorative answering machine instead. The easter egg still plays;
+    // it just cannot be steered into texting a stranger.
+    if (api.halWorkerUrl && api.topLevel) beginLiveCall();
     else answerMachine();
   }
 
@@ -1330,6 +1338,19 @@ function initRoom(api) {
       get pop() { return call && call.pop; },
       get el() { return popEl; },
       reset() { if (popEl) { popEl.remove(); popEl = null; } call = null; },
+      /* Pick up the hallway phone without driving the creep → ring flow, and
+         report which receiver answered: `live` means beginLiveCall ran (it sets
+         `call` synchronously), false means it fell through to the decorative
+         answering machine. test/clickjacking.test.js uses this to pin that a
+         framed page can never reach the number/consent form. */
+      pickUp() {
+        if (!hallPhoneEl) hallPhoneEl = document.createElement('div');
+        if (!callEl) { callEl = document.createElement('div'); document.body.appendChild(callEl); }
+        call = null;
+        answered = false;
+        answerPhone();
+        return { live: !!call };
+      },
     };
   }
 

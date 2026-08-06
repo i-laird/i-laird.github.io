@@ -3,6 +3,21 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- A <meta> CSP only covers its own document, so index.html's policy does
+         nothing for this page. This one is STRICTER than index.html can be:
+         script-src 'none', because this page has no JavaScript and never should.
+         That makes a future edit that adds a script fail loudly instead of
+         quietly widening the surface on the page a carrier reviewer loads.
+         style-src 'unsafe-inline' is for the <style> block below. -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'none';
+      script-src 'none';
+      style-src 'unsafe-inline';
+      img-src 'self' data:;
+      base-uri 'none';
+      form-action 'none';
+    ">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <!-- Deliberately indexable: A2P/carrier review expects this policy to be
          publicly reachable, and it is linked from the landing page as part of
          that compliance. Do not add a noindex here. -->

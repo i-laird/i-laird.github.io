@@ -21,10 +21,16 @@ on:
   workflow_dispatch: {}
 
 # Least privilege + what the Pages deploy needs.
+# attestations: write is for the build-provenance attestation below — it is the
+# only way to prove, after the fact, that the obfuscated JS on the live site was
+# produced by THIS workflow from a specific commit. The served bundle is
+# deliberately unreadable, so "diff it against the repo" is not available as a
+# check; the attestation is what replaces it.
 permissions:
   contents: read
   pages: write
   id-token: write
+  attestations: write
 
 # Don't cancel an in-flight Pages deploy; let it finish before the next runs.
 concurrency:
@@ -36,16 +42,24 @@ jobs:
     name: Check, obfuscate & verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      # The dev dependencies are not "dev-only" in blast radius: javascript-
+      # obfuscator WRITES the bundle every visitor executes, so a compromise or
+      # a known hole anywhere in that tree reaches production. Gate on it.
+      # Kept out of `npm run check` on purpose — check must stay runnable
+      # offline, and this step needs the advisory database.
+      - name: Audit dependencies
+        run: npm run audit
 
       # Gate the deploy on the clean-source checks (lint + html-validate +
       # format + the jsdom/determinism/isolation test suite).
@@ -61,11 +75,22 @@ jobs:
       - name: Verify obfuscated build
         run: npm run verify-build
 
+      # Sign a provenance attestation over the executable surface of the build:
+      # the app bundle, the eight lazy chunks and the service worker. Assets
+      # (audio, images) are deliberately excluded — they are copied through
+      # untransformed and would bury the interesting subjects in 130+ mp3s.
+      # Verify a live file against it with:
+      #   gh attestation verify app.js --repo i-laird/i-laird.github.io
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: 'dist/*.js'
+
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - name: Upload dist artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: dist
 
@@ -79,14 +104,14 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
 
       # Prove the LIVE site is actually serving dist/ and not the clean source.
       # Without this the whole workflow can run green while Pages keeps serving
       # the branch (see the one-time setup note at the top of this file), and
       # the easter-egg secrets would be readable with nothing to flag it.
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Verify the live site is obfuscated
