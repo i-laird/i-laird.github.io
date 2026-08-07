@@ -11,12 +11,31 @@
  * stays the source of truth; tests run against it, not the build.
  *
  * Topology (see CLAUDE.md "Cross-file globals" + the stickfighter api bridge):
- *   - dist/app.js        = (lib/*.js + app.js) concatenated, wrapped in ONE IIFE,
- *                          obfuscated HEAVILY. One IIFE so the shared top-level names
- *                          (the lib helpers + app.js internals) become function-scoped
- *                          and get renamed consistently. app.js isn't perf-critical
- *                          (event-driven), so it takes control-flow flattening + dead
- *                          code + string-array.
+ *   - dist/app.js        = TWO independently-obfuscated IIFEs concatenated:
+ *                          (a) secrets.js, obfuscated HEAVILY — the puzzle ciphers,
+ *                              key hashes and the four scattered key fragments. This
+ *                              is the only code whose plaintext actually spoils
+ *                              anything, so it takes the full treatment.
+ *                          (b) lib/*.js + app.js, obfuscated LIGHTLY. One IIFE so the
+ *                              shared top-level names (lib helpers + app.js internals)
+ *                              become function-scoped and get renamed consistently.
+ *                          (a) comes first: it defines window.initSecrets, which (b)
+ *                          calls at load through app.js's secretsBridge().
+ *
+ *                          WHY THE SPLIT: the heavy config used to run over the whole
+ *                          4,600-line bundle to hide ~60 lines of secret, and it cost
+ *                          ~156 KB GZIPPED (223 KB → 68 KB) on the one script every
+ *                          visitor downloads — control-flow flattening ~88 KB,
+ *                          dead-code injection ~68 KB, split-strings ~36 KB. Measured
+ *                          on the real bundle. The light config is what the lazy chunks
+ *                          already use and lands within a few KB of the clean source.
+ *
+ *                          Both halves of the protection matter, which is why the
+ *                          FRAGMENTS live in secrets.js and not just the ciphers: LIGHT
+ *                          still mangles every identifier (verify-deployed.js relies on
+ *                          exactly that), but it leaves string literals in the clear.
+ *                          Identifiers are covered either way; the *data* is only
+ *                          hidden by HEAVY's encoded string array.
  *   - dist/stickfighter.js = stickfighter.js wrapped in its own IIFE, obfuscated
  *                          LIGHTLY. It's a 60fps game loop, so control-flow flattening
  *                          (the expensive transform) is OFF — just identifier mangling
@@ -40,7 +59,8 @@
  *     property names.
  *   - the chunk entry names (openStickFighter, initGames, initSansMode, initChess)
  *     reserved on both sides — each lazy-load handshake crosses its chunk boundary
- *     by that name (app.js looks it up; the chunk sets it on window).
+ *     by that name (app.js looks it up; the chunk sets it on window). initSecrets is
+ *     on the same list: it crosses an obfuscation-unit boundary inside dist/app.js.
  *   - no source maps (they'd hand back the clean source).
  */
 
@@ -73,10 +93,14 @@ const COMMON = {
     '^initDesktop$',
     '^initAchUI$',
     '^initRoom$',
+    '^initProjects$',
+    '^initSecrets$',
   ],
 };
 
-// HEAVY — the main bundle. Not perf-critical, so throw the book at it.
+// HEAVY — the secret unit (secrets.js) ONLY. Tiny, runs once at load, so the
+// cost of throwing the book at it is a few KB and no measurable runtime.
+// Do NOT widen this back over the main bundle: see the topology note above.
 const HEAVY = {
   ...COMMON,
   compact: true,
@@ -88,15 +112,26 @@ const HEAVY = {
   simplify: true,
   stringArray: true,
   stringArrayEncoding: ['base64'],
-  stringArrayThreshold: 0.75,
+  // 1, NOT the usual 0.75. The threshold is the PROBABILITY each literal gets
+  // moved into the encoded array, and the obfuscator is randomized — at 0.75 a
+  // short fragment like 'DAIS' was left in the clear (control-flow flattening
+  // hoists it into a plain `{'fqSdo':'DAIS'}` map) in 9 of 12 sample builds.
+  // Every string in this unit is a secret, so none of them may roll the dice.
+  // verify-build.js gates the built file on this, since a lucky build proves
+  // nothing about the next one.
+  stringArrayThreshold: 1,
   splitStrings: true,
   splitStringsChunkLength: 8,
   identifierNamesGenerator: 'hexadecimal',
   selfDefending: true,
 };
 
-// LIGHT — the game chunk. Identifier mangling + plain string relocation only.
-// Control-flow flattening / dead code OFF so the 60fps loop keeps its frame budget.
+// LIGHT — the main bundle and every lazy chunk. Identifier mangling + plain
+// string relocation only. Control-flow flattening / dead code OFF: for the game
+// chunks it protects the frame budget, and for the main bundle it protects first
+// paint (the heavy config tripled its gzipped size). Identifiers are still fully
+// mangled here — string literals are not, which is exactly why anything that must
+// stay unreadable belongs in secrets.js instead.
 const LIGHT = {
   ...COMMON,
   compact: true,
@@ -112,8 +147,12 @@ const LIGHT = {
   selfDefending: false,
 };
 
+// The secret unit — obfuscated on its own, heavily. See the topology note.
+const SECRETS = 'secrets.js';
+
 // The page-load bundle, in index.html order. lib MUST be bundled with app.js
 // (app.js reads _djb2/_xorDecode/_alignTimings/_halNorm/makeRng from it).
+// secrets.js is deliberately NOT in here — it is a separate obfuscation unit.
 const BUNDLE = [
   'lib/codec.js',
   'lib/timing.js',
@@ -165,9 +204,17 @@ function build() {
   }
 
   console.log('Obfuscating…');
-  // Main bundle: concat in order, join defensively with ;\n, wrap, obfuscate heavy.
-  const bundleSrc = iife(BUNDLE.map(read).join('\n;\n'));
-  fs.writeFileSync(path.join(DIST, 'app.js'), obfuscate('app bundle', bundleSrc, HEAVY));
+  // dist/app.js = the heavy secret unit, then the light main bundle. Separate
+  // obfuscation passes, so nothing may cross between them by free name — the
+  // handshake is window.initSecrets (reserved) + app.js's secretsBridge().
+  // Order matters: secrets.js must define the global before app.js runs.
+  const secretsOut = obfuscate('secrets (heavy)', iife(read(SECRETS)), HEAVY);
+  const bundleOut = obfuscate(
+    'app bundle (light)',
+    iife(BUNDLE.map(read).join('\n;\n')),
+    LIGHT
+  );
+  fs.writeFileSync(path.join(DIST, 'app.js'), secretsOut + '\n' + bundleOut);
 
   // Lazy chunks: wrap each in its own IIFE, obfuscate light (they all run
   // game loops; each exports only its window.<entry> — see reservedNames).
@@ -180,6 +227,7 @@ function build() {
     'desktop.js',
     'achui.js',
     'room.js',
+    'projects.js',
   ]) {
     fs.writeFileSync(
       path.join(DIST, chunk),
@@ -187,8 +235,9 @@ function build() {
     );
   }
 
-  // index.html: the lib scripts are now inside app.js, so drop their tags. (They're loaded
-  // with `defer` in the source, so match that; app.js keeps its own deferred tag.)
+  // index.html: the lib scripts and secrets.js are now inside app.js, so drop their
+  // tags. (They're loaded with `defer` in the source, so match that; app.js keeps its
+  // own deferred tag.)
   let html = read('index.html');
   for (const lib of [
     'lib/codec.js',
@@ -196,6 +245,7 @@ function build() {
     'lib/text.js',
     'lib/rng.js',
     'lib/shell.js',
+    'secrets.js',
   ]) {
     const before = html;
     html = html.replace(new RegExp(`\\s*<script defer src="${lib}"></script>`), '');

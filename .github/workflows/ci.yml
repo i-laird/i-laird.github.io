@@ -43,6 +43,22 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Coverage floors, deliberately a SEPARATE step rather than part of
+      # `npm run check`: it re-runs the whole suite (~15s) and its thresholds
+      # are a ratchet against regression, not a correctness gate — a failure
+      # here means "you added runtime code with no test", which is a different
+      # conversation from "you broke something".
+      #
+      # The floors sit just under the current numbers. They are LOW on purpose:
+      # coverage used to report 97% because the harness loaded app.js and the
+      # chunks as <script> text, which V8 attributes to an anonymous eval, so
+      # ~25k lines of runtime code were simply absent from the report. Once
+      # test/helpers/boot-page.js switched to vm.runInContext with a real
+      # filename, the honest number turned out to be ~50%. Raise these as
+      # coverage genuinely improves; do not lower them to make a build pass.
+      - name: Coverage floors
+        run: npm run test:coverage
+
       # The obfuscation invariants (reserved names, api-bridge keys surviving
       # the IIFE wrap) are otherwise only checked at deploy time — a PR that
       # breaks one would merge green and fail on main. Build + verify here so

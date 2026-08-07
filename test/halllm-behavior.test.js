@@ -14,12 +14,10 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
-const ROOT = path.join(__dirname, '..');
-const HALLLM_SRC = fs.readFileSync(path.join(ROOT, 'halllm.js'), 'utf8');
+// via runScripts, not window.eval: eval hides the chunk from test coverage
+const { runScripts } = require('./helpers/boot-page');
 
 async function startSession() {
   const dom = new JSDOM('<!DOCTYPE html><html><body><div id="out"></div></body></html>', {
@@ -53,7 +51,7 @@ async function startSession() {
     },
   };
 
-  window.eval(HALLLM_SRC);
+  runScripts(dom, ['halllm.js']);
 
   const lines = [];
   const cmd = doc.createElement('input');

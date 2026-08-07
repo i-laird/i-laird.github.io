@@ -12,7 +12,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test",
-    "test:coverage": "node --test --experimental-test-coverage",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=52 --test-coverage-branches=64 --test-coverage-functions=48",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:html": "html-validate index.html 404.html privacy.html terms.html",

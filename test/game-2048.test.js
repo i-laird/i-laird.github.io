@@ -11,12 +11,10 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
-const ROOT = path.join(__dirname, '..');
-const GAMES_SRC = fs.readFileSync(path.join(ROOT, 'games.js'), 'utf8');
+// via runScripts, not window.eval: eval hides the chunk from test coverage
+const { runScripts } = require('./helpers/boot-page');
 
 function setup() {
   const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
@@ -27,7 +25,7 @@ function setup() {
   const { window } = dom;
   window.HTMLElement.prototype.scrollIntoView = () => {}; // jsdom lacks it; the shell calls it
   window.Math.random = () => 0; // deterministic: new tile = 2, first empty cell
-  window.eval(GAMES_SRC);
+  runScripts(dom, ['games.js']);
 
   const inputRow = window.document.createElement('div');
   inputRow.style.display = 'flex';

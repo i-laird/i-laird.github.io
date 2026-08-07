@@ -13,6 +13,10 @@ halllm.js
 desktop.js
 achui.js
 room.js
+projects.js
+# secrets.js carries handleDecrypt at its original app.js indentation, and is a
+# separate obfuscation unit — same reasons as the chunks above.
+secrets.js
 index.html
 404.html
 privacy.html

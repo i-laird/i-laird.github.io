@@ -13,6 +13,12 @@
  *   3. Execute the other lazy chunks (dist/games.js, dist/sans.js) and assert
  *      each still exports its window.<entry> and returns the handler keys app.js
  *      calls — the cross-chunk contract obfuscation must not break.
+ *   4. Assert the easter-egg puzzle is genuinely unreadable in dist/app.js AND
+ *      still round-trips. dist/app.js is two independently-obfuscated units — a
+ *      heavy one for secrets.js, a light one for everything else — so this is
+ *      both the check that the heavy config did its job and the check that the
+ *      cross-unit bridge survived it. Obfuscation is randomized, which is why
+ *      this gates the artifact rather than the config.
  *
  * Run after `npm run build`. Exits non-zero on failure so CI can gate on it.
  */
@@ -219,6 +225,7 @@ function verifyLazyChunks() {
     ['desktop.js', 'initDesktop', ['open']],
     ['achui.js', 'initAchUI', ['toggle']],
     ['room.js', 'initRoom', ['open']],
+    ['projects.js', 'initProjects', ['open']],
   ]) {
     const { dom, window } = makeDom('<!doctype html><html><body></body></html>');
     inject(window, read(path.join(DIST, file)));
@@ -240,7 +247,121 @@ function verifyLazyChunks() {
   }
 }
 
-// ── 4. The service worker ships with the build ────────────────────────────────
+// ── 4. The puzzle secrets are actually unreadable in the built bundle ─────────
+// This is the whole justification for the heavy/light split, and it cannot be
+// checked by reading build.js: the obfuscator is RANDOMIZED, so the same config
+// leaks on some runs and not others. (At the old stringArrayThreshold of 0.75,
+// a four-character fragment survived in the clear in 9 of 12 sample builds —
+// control-flow flattening hoists short literals into a plain lookup map that
+// the string array never touches.) So gate the artifact itself, every build.
+//
+// The expected values are parsed OUT of secrets.js rather than restated here,
+// so this file never becomes a second plaintext copy of the answers.
+function verifySecretsHidden() {
+  const src = read(path.join(ROOT, 'secrets.js'));
+  const built = read(path.join(DIST, 'app.js'));
+
+  const ciphers = (src.match(/'[0-9a-f]{32,}'/g) || []).map((s) => s.slice(1, -1));
+  assert.ok(ciphers.length >= 2, 'secrets.js should hold both encrypted segments');
+
+  const fragBlock = (src.match(/const FRAGMENTS = \[([^\]]*)\]/) || [])[1];
+  assert.ok(fragBlock, 'secrets.js should define the FRAGMENTS array');
+  const frags = (fragBlock.match(/'[^']+'/g) || []).map((s) => s.slice(1, -1));
+  assert.equal(frags.length, 4, 'expected four on-site key fragments');
+
+  const hashes = (src.match(/_KEY_HASH = (\d+)/g) || []).map((s) => s.split('= ')[1]);
+  assert.equal(hashes.length, 2, 'expected both key hashes');
+
+  // Fragments are short and collide with ordinary text ("9000" is in "HAL 9000"),
+  // so match them the way an attacker would find them: quoted, as the obfuscator
+  // emits a leaked literal.
+  const leaked = [
+    ...ciphers.filter((c) => built.includes(c)).map((c) => `segment ${c.slice(0, 12)}…`),
+    ...hashes.filter((h) => built.includes(h)).map((h) => `key hash ${h}`),
+    ...frags
+      .filter((f) => built.includes(`'${f}'`) || built.includes(`"${f}"`))
+      .map((f) => `fragment '${f}'`),
+  ];
+
+  assert.deepEqual(
+    leaked,
+    [],
+    `dist/app.js exposes puzzle secrets in plaintext: ${leaked.join(', ')}.\n` +
+      `  The HEAVY config in build.js must cover secrets.js with stringArrayThreshold: 1.\n` +
+      `  Obfuscation is randomized — rebuild and re-check rather than assuming a fluke.`
+  );
+  console.log(
+    `✓ puzzle secrets hidden in dist/app.js (${ciphers.length} segments, ${frags.length} fragments, ${hashes.length} hashes)`
+  );
+
+  // ...and the puzzle still WORKS across the obfuscation-unit boundary. This is
+  // the silent failure mode of the split: secrets.js gets its identifiers renamed
+  // independently of the main bundle, so if a codec helper ever stopped crossing
+  // secretsBridge() the correct key would simply be rejected forever — the site
+  // would look completely healthy and only the one player who solved it would
+  // ever find out. Drive the REAL obfuscated unit and assert acceptance.
+  //
+  // The key is assembled from the fragments parsed above, so the answer is never
+  // written down here either.
+  const { _djb2, _xorDecode, _hexRows } = require(path.join(ROOT, 'lib', 'codec.js'));
+  const { dom, window } = makeDom(read(path.join(DIST, 'index.html')));
+  inject(window, built);
+  assert.equal(
+    typeof window.initSecrets,
+    'function',
+    'dist/app.js must export window.initSecrets (reserved name — app.js calls it across the unit boundary)'
+  );
+
+  const printed = [];
+  const puzzle = window.initSecrets({
+    line: (s) => printed.push(String(s)),
+    blank: () => {},
+    esc: (s) => s,
+    djb2: _djb2,
+    xorDecode: _xorDecode,
+    hexRows: _hexRows,
+    endingSeen: true,
+  });
+
+  for (const k of ['frag', 'lastEggFile', 'handleDecrypt']) {
+    assert.equal(
+      typeof puzzle[k],
+      'function',
+      `initSecrets() must return a '${k}' handler (literal key — renameProperties must stay off)`
+    );
+  }
+
+  puzzle.handleDecrypt(frags.join(''));
+  assert.ok(
+    printed.some((l) => l.includes('key accepted')),
+    'the obfuscated puzzle rejected the correct segment-1 key — the codec helpers are ' +
+      'no longer reaching secrets.js through secretsBridge()'
+  );
+
+  printed.length = 0;
+  puzzle.handleDecrypt('NOTTHEKEY0000000');
+  assert.ok(
+    printed.some((l) => l.includes('integrity check failed')),
+    'the obfuscated puzzle accepted a wrong key'
+  );
+
+  // The fragments must survive the round trip too — they are what app.js prints
+  // into the filesystem, and a mangled one would break the hunt invisibly.
+  assert.deepEqual(
+    [1, 2, 3, 4].map((n) => puzzle.frag(n)),
+    frags,
+    'frag() must return the fragments unchanged through the obfuscated unit'
+  );
+  assert.ok(
+    (puzzle.lastEggFile().f || []).some((l) => l.includes('ENCRYPTED')),
+    'lastEggFile() must still render the encrypted segments'
+  );
+
+  dom.window.close();
+  console.log('✓ obfuscated puzzle round-trips: correct key accepted, wrong key rejected');
+}
+
+// ── 5. The service worker ships with the build ────────────────────────────────
 function verifyServiceWorker() {
   assert.ok(
     fs.existsSync(path.join(DIST, 'sw.js')),
@@ -253,6 +374,7 @@ function verifyServiceWorker() {
   await verifyBoot();
   verifyGamePerf();
   verifyLazyChunks();
+  verifySecretsHidden();
   verifyServiceWorker();
   console.log('\nBuild verified.');
 })().catch((e) => {

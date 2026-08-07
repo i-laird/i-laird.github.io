@@ -79,7 +79,9 @@ module.exports = [
     },
   },
 
-  // The browser runtime — app.js and the eight lazy chunks.
+  // The browser runtime — app.js, the eight lazy chunks, and secrets.js (not
+  // lazily fetched, but a separate obfuscation unit with the same bridge
+  // contract, so it belongs to the same family).
   //
   // These files used to opt out of the recommended ruleset wholesale, which
   // meant the LARGEST files in the repo (~25k lines) got the weakest checking:
@@ -101,6 +103,8 @@ module.exports = [
       'desktop.js',
       'achui.js',
       'room.js',
+      'projects.js',
+      'secrets.js',
     ],
     ...js.configs.recommended,
     languageOptions: {

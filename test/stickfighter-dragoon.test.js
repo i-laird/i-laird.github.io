@@ -13,6 +13,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM, VirtualConsole } = require('jsdom');
+// vm-based script runner — keeps app.js/stickfighter.js visible to test coverage
+// (a <script> element attributes them to an anonymous eval). See boot-page.js.
+const { runScripts } = require('./helpers/boot-page');
 
 const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -22,6 +25,7 @@ const SCRIPTS = [
   'lib/text.js',
   'lib/rng.js',
   'lib/shell.js',
+  'secrets.js', // defines window.initSecrets, which app.js calls at load
   'app.js',
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,16 +52,10 @@ async function bootGame() {
   };
   window.fetch = () => Promise.reject(new Error('offline (dragoon test)'));
 
-  for (const src of SCRIPTS) {
-    const el = window.document.createElement('script');
-    el.textContent = read(src);
-    window.document.body.appendChild(el);
-  }
+  runScripts(dom, SCRIPTS);
   await window.boot();
 
-  const sf = window.document.createElement('script');
-  sf.textContent = read('stickfighter.js');
-  window.document.body.appendChild(sf);
+  runScripts(dom, ['stickfighter.js']);
 
   // pin the entropy draws — the run becomes a pure function of the key pattern
   window.Math.random = () => 0.5;

@@ -41,6 +41,7 @@ function referencedIds() {
     'desktop.js',
     'achui.js',
     'room.js',
+    'projects.js',
     'index.html',
   ];
   const ids = [];
