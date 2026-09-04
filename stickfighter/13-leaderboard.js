@@ -24,7 +24,7 @@ function lbBegin() {
   lbScore = score; lbWave = wave; lbRank = -1; lbName = ''; lbScores = null; lbDaily = null;
   watchSel = null; watchErr = '';
   const base = lbBase();
-  if (cheated) { lbState = 'off'; return; }   // warp/grant cheats: a fine playground, not a ranked run
+  if (cheated || mutated) { lbState = 'off'; return; }   // warp/grant cheats and mutated runs: a fine playground, not a ranked run
   if (!base || score <= 0) { lbState = 'off'; return; }
   lbState = 'loading';
   const day = (dailyRun && dailyDay) ? dailyDay : dailyDayStr();   // the run's own day, even past UTC midnight

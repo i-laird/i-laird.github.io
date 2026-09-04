@@ -310,13 +310,20 @@ try {
   if (typeof so.kick === 'number') sfOpts.kick = clamp(so.kick, 0, 1);
   if (typeof so.flash === 'number') sfOpts.flash = clamp(so.flash, 0, 1);
   sfOpts.hiVis = !!so.hiVis;
+  if (so.binds && typeof so.binds === 'object') sfOpts.binds = so.binds;   // validated in 22-binds (sanitizeBinds)
 } catch (_) { /* private mode */ }
 function saveOpts() { try { localStorage.setItem('ilaird_sf_opts', JSON.stringify(sfOpts)); } catch (_) {} }
 // the PAUSE/settings overlay: solo & couch runs truly pause (recorded as opcode
 // 13, so replays hold the same beats); online it is an overlay over a live sim
 let shellMenu = false, shellSel = 0;
-function shellToggle() { shellMenu = !shellMenu; if (!netplay) paused = shellMenu; }  // sim state (v4): per-type kill tally — feeds the results ceremony
+const SHELL_ROWS = 5;   // shake · kicks · flashes · hi-vis · controls ›
+function shellToggle() {
+  shellMenu = !shellMenu;
+  if (!netplay && started) paused = shellMenu;   // on the intro nothing is running to pause
+  shellPage = 'main'; bindCapture = null;
+}  // sim state (v4): per-type kill tally — feeds the results ceremony
 let hurtFlash = null;  // { dx, dy, t } — a red edge flash from the DIRECTION of the last blow (render-only)
+let lastBlow = null;   // { type, elite, via, wave, seat } — what landed the last blow (bookkeeping for the death recap; never sim-read)
 function addDecal(x, y, kind) {
   decals.push({ x, y, kind, t0: tick });
   if (decals.length > DECAL_MAX) decals.shift();
@@ -461,6 +468,8 @@ const SF_ACH = [
   { id: 'trampler',    name: 'TRAMPLER',               desc: 'trample fifteen foes in one ride' },
   { id: 'dragonfire',  name: 'DRAGONFIRE',             desc: 'burn four foes with a single breath' },
   { id: 'pair_bond',   name: 'BEAST AND BRAVE',        desc: 'carry the pair to wave 4' },
+  { id: 'lorekeeper',  name: 'LOREKEEPER',             desc: 'meet every piece of the horde — the bestiary knows them all' },
+  { id: 'adapted',     name: 'ADAPTED',                desc: 'reach wave 8 under three mutators' },
 ];
 const SF_ACH_KEY = 'ilaird_sf_trophies';
 const sfTrophies = (() => {
@@ -717,6 +726,47 @@ function drawBoonPanel() {
   ctx.restore(); ctx.textAlign = 'left';
 }
 
+// ── mutators — the ⚗ MUTATED solo mode: three seeded run modifiers on top of the normal game ──
+/* A fourth pill on the SINGLEPLAYER row. A mutated run is a NORMAL run (boons and
+   all) with THREE modifiers drawn from MUTATORS by the seed — rolled inside init()
+   as the seed's first draws, so an R-restart rolls a fresh set and a replay of a
+   mutated run (header `mu`) re-rolls the identical one. Effects ride the same
+   per-run `bn`/`up` fields the banes use, so every hook is a flag read at an
+   existing site (wave quota, rollElite, the Aegis refresh, the powerup spawn,
+   hero/horde speed) or render-only (the fog). Unranked by design: they change
+   the difficulty in both directions, so lbBegin() skips the board like a cheat
+   run — which also means the worker never sees a mutated replay and needs no new
+   validation surface. Solo only (daily stays one fair sim; online is pinned by
+   the cfg header). NOTHING here runs unless `mutated` is set, so an unmutated
+   sim is byte-identical to before and no sim-version bump is needed. */
+const MUTATORS = [
+  { id: 'swarm',      name: 'SWARM',        icon: '🐜', desc: 'war bands run 30% larger',                      apply: () => { bn.quotaMul = 1.3; } },
+  { id: 'blood_moon', name: 'BLOOD MOON',   icon: '🌑', desc: 'elites stalk from the first wave',              apply: () => { bn.eliteEarly = true; } },
+  { id: 'fog',        name: 'FOG OF WAR',   icon: '🌫️', desc: 'the dark leans in — you see less of the field', apply: () => { bn.fog = true; } },
+  { id: 'glass',      name: 'GLASS AEGIS',  icon: '🫧', desc: 'the Aegis never recharges between waves',       apply: () => { bn.noRefresh = true; } },
+  { id: 'leaden',     name: 'LEADEN DASH',  icon: '⛓️', desc: 'dashes recharge 80% slower',                    apply: () => { up.dashCd = Math.round(up.dashCd * 1.8); } },
+  { id: 'drought',    name: 'DROUGHT',      icon: '🏜️', desc: 'no powerups ever spawn',                        apply: () => { bn.noPowerups = true; } },
+  { id: 'thin_air',   name: 'THIN AIR',     icon: '🌬️', desc: 'you run 10% slower',                            apply: () => { bn.spd *= 0.9; } },
+  { id: 'hunted',     name: 'HUNTED',       icon: '👁️', desc: 'the horde walks 10% faster',                    apply: () => { bn.foeSpd *= 1.1; } },
+  { id: 'feast',      name: 'FEAST',        icon: '🍖', desc: 'a gift: coins pay double meter and +25 score',  apply: () => { bn.gold = true; } },
+];
+let mutSel = false;      // the intro's pick (SINGLEPLAYER → ⚗ MUTATED)
+let mutated = false;     // this RUN is mutated (set per run in init — daily/replay/online aware)
+let activeMuts = [];     // the three rolled ids, in roll order
+// called at the END of init() — the seed's first draws, before the boon offer
+function rollMutators() {
+  activeMuts = [];
+  if (!mutated) return;
+  const pool = MUTATORS.slice();
+  while (activeMuts.length < 3 && pool.length) {
+    const m = pool.splice(Math.floor(rnd() * pool.length), 1)[0];
+    activeMuts.push(m.id);
+    m.apply();
+  }
+  if (bn.quotaMul !== 1) waveQuota = Math.round(waveQuota * bn.quotaMul);   // the opening band too
+}
+function mutatorNames() { return activeMuts.map(id => { const m = MUTATORS.find(x => x.id === id); return m ? m.icon + ' ' + m.name : id; }); }
+
 // ── init — init()/setupCoop(), daily seed, pend, hero/target helpers (hordeTarget, bossTarget) ──
 const SHAMAN_R  = 120;   // the goblin shaman's ritual circle — haste + troll-mending reach
 const KEG_R     = 42;    // the bombardier's powder-keg blast radius
@@ -811,11 +861,12 @@ function init() {
   ianCue = 0; ianActive = false; ianChoice = null; ianFinale = null; mournful = false; endless = false; ianBg = [];
   wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
   lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
-  cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true;
+  cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true; lastBlow = null;
   // the GLOBAL bn holds only bane + party-economy effects; each hero's personal
   // boon effects live on h.bn (resetHeroBn — co-op picks are per player)
   bn = { spd: 1, gold: false, tithe: false, bounty: 0,
-         toll: 0, foeSpd: 1, miser: false };
+         toll: 0, foeSpd: 1, miser: false,
+         quotaMul: 1, eliteEarly: false, fog: false, noRefresh: false, noPowerups: false };   // mutator flags (04-mutators)
   resetHeroBn(player);
   boonMenu = null;
   up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
@@ -841,6 +892,7 @@ function init() {
     tokens = replay.d.tk0 | 0;
     runMaxwave = replay.d.mw0 | 0;
     hardMode = !!replay.d.hd;        // the recording's difficulty, not the watcher's unlock
+    mutated = !!replay.d.mu;         // and its mutators (re-rolled from the seed below)
     const owned = new Set(replay.d.up0 || []);
     for (const u of UPGRADES) if (owned.has(u.id)) { up.owned.add(u.id); u.apply(); }
   } else if (netplay && netCfg) {
@@ -851,12 +903,14 @@ function init() {
     tokens = netCfg.tk0 | 0;
     runMaxwave = netCfg.mw0 | 0;
     hardMode = !!netCfg.hd;
+    mutated = false;                 // online is pinned normal by the cfg header
     const owned = new Set(netCfg.up0 || []);
     for (const u of UPGRADES) if (owned.has(u.id)) { up.owned.add(u.id); u.apply(); }
     recHdr = null; recEv = []; recOverflow = false;
   } else {
     // the intro's difficulty pick — daily stays one fair shared sim
     hardMode = hardSel && hardUnlocked && !dailyRun;
+    mutated = mutSel && !dailyRun && !hardMode;   // solo only — daily stays one fair sim
     tokens = parseInt(loadProfileItem('ilaird_sf_tokens') || '0', 10) || 0;   // this class's own credits
     // no legacy seed here: each profile climbs its own token ladder from wave 1
     // (seeding the old global record would starve a fresh class of income)
@@ -868,7 +922,7 @@ function init() {
     // rules and silently diverge from their recorded scores.
     recEv = []; recLastM = -1; recOverflow = false;
     recHdr = { v: 6, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
-               up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
+               up0: [...up.owned], tk0: tokens, mw0: runMaxwave, ...(mutated ? { mu: 1 } : {}) };
   }
   player.dashCharges = up.dashMax; player.rechargeT = 0;
   player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
@@ -879,6 +933,7 @@ function init() {
     p3 = makeAllyHero(netCfg.cs[2], GW / 2, GH / 2 - 48, 1);
     if (netCfg.cs.length > 3) p4 = makeAllyHero(netCfg.cs[3], GW / 2, GH / 2 + 48, -1);
   }
+  rollMutators();   // no-op unless `mutated` — the seed's first draws, before the boon offer
 }
 
 /* ── couch co-op helpers ── */
@@ -1391,6 +1446,207 @@ const sfSfx = {
   shieldBreak: () => { _chirp(1320, 'square', 0.07, 0.07); setTimeout(() => _chirp(560, 'sawtooth', 0.18, 0.08), 50); setTimeout(() => _chirp(320, 'square', 0.22, 0.07), 120); },  // the Aegis shatters
   charge: () => { _chirp(120, 'sawtooth', 0.2, 0.1); setTimeout(() => _chirp(90, 'sawtooth', 0.3, 0.12), 90); },  // the war-ogre's bull rush
 };
+
+// ── bestiary — the lore ledger: every foe's tell and counter, seen/kill counts, the B-panel ──
+/* Six horde pieces, two elite tiers, and seven named foes — and until now the only
+   place any of their rules were written down was this directory's CLAUDE.md.
+   The bestiary is the trophy case's second tab (B on the title screen): one row
+   per foe, masked ??? until first sighted, and a detail card with the foe's LIVE
+   sprite, its tell (what it does before it hurts you), the counter, its elite
+   forms, and lifetime seen / slain counts. Persisted account-wide in
+   `ilaird_sf_bestiary` ({ type: { seen, kills } }), written at the end of a run
+   (and on desktop shutdown), never per spawn — and noPersist()-gated at the
+   increment, so a watched replay or an online run teaches the ledger nothing.
+   The preview sprite is built with makeEnemy() under a CONSTANT rng (the title
+   screen must stay rnd()-free — see drawIntroScreen), and the draw is wrapped:
+   a render-only failure must never take the title screen down with it. */
+const BESTIARY = [
+  { type: 'goblin', name: 'GOBLIN', horde: true, wave: 'wave 1',
+    tell: 'steers with momentum — it commits to a line and skids past a sidestep',
+    counter: 'cut sideways at the last moment; it overshoots, then swing',
+    elite: 'shield-bearer (bronze) blocks the first blow · warlord (gold) blocks two and runs faster' },
+  { type: 'wolf', name: 'WOLF', horde: true, wave: 'wave 2',
+    tell: 'stalks, then FLASHES with a dashed sight line before a straight lunge',
+    counter: 'step OFF the line during the flash — never run along it',
+    elite: 'frost wolf chills you on a brush (dash still works) · dire wolf carries a 90px chill aura' },
+  { type: 'archer', name: 'SKELETON ARCHER', horde: true, wave: 'wave 3',
+    tell: 'keeps its range, visibly nocks, then looses along the aim',
+    counter: 'strafe, or bat the arrow with a swing; close the gap between volleys',
+    elite: 'volley archer fans three arrows · deadeye fans five, faster' },
+  { type: 'troll', name: 'TROLL', horde: true, wave: 'wave 4',
+    tell: 'slow, wide club, three hearts — you can see every one it has left',
+    counter: 'hit and run; never trade in its reach',
+    elite: 'bull troll (five hearts) enrages below two · dread troll (eight) ROARS as it turns' },
+  { type: 'shaman', name: 'GOBLIN SHAMAN', horde: true, wave: 'endless · wave 8',
+    tell: 'channels a green ring that hastens and mends the pack; shrieks it into a frenzy',
+    counter: 'freeze it or chase it with a dash — it blinks when you close; the ring dies with it',
+    elite: 'never an elite — an empowered empowerer would be a spiral' },
+  { type: 'bomber', name: 'BOMBARDIER', horde: true, wave: 'endless · wave 10',
+    tell: 'hoists a keg with a lit fuse, then lobs it where you WERE standing',
+    counter: 'keep moving after the throw; bait the pack into the blast — kegs hurt them too',
+    elite: 'never an elite' },
+  { type: 'ogre', name: 'THE WAR-OGRE', wave: 'wave 3, once',
+    tell: 'winds up with a red flash and a charge line, then bull-rushes a straight line that bounces off walls',
+    counter: 'leave the line before the flash ends; punish the recovery — eight hearts, no flinch' },
+  { type: 'wraith', name: 'RINGWRAITH · THE NINE', wave: 'wave 5', secret: true,
+    tell: 'nine orbit in a tightening ring; they flash TOGETHER, then lunge as one',
+    counter: 'dash THROUGH the ring on the flash, never away from it; no champion can save you here' },
+  { type: 'witchking', name: 'THE WITCH-KING', wave: 'after the Nine', secret: true,
+    tell: 'mounted: dives along a purple sight line · on foot: whips a flail in a wide arc',
+    counter: 'sidestep the dive; the flail reaches PAST his body — stay behind him' },
+  { type: 'trooper', name: 'STORMTROOPER', wave: 'the corridor', secret: true,
+    tell: 'forms up in column and holds fire until every trooper has arrived',
+    counter: 'close before they form; a swing deflects the red bolts' },
+  { type: 'vader', name: 'DARTH VADER', wave: 'the corridor', secret: true,
+    tell: 'a grey flash and a raised saber, then a Force lunge with a lethal arc out front',
+    counter: 'dash THROUGH him during the lunge — never backpedal; nine hearts, no flinch' },
+  { type: 'guard', name: 'ROYAL GUARD', wave: "the Emperor's side", secret: true,
+    tell: 'a telegraphed pike lunge',
+    counter: 'step aside and take the two hits it has' },
+  { type: 'sidious', name: 'DARTH SIDIOUS', wave: 'after Vader', secret: true,
+    tell: 'a saber spin, a long-building lightning corridor, leaps to reposition; at half health, lightning only — and it RAKES',
+    counter: 'leave the corridor sideways; dash i-frames beat the bolt; you can outrun the rake by circling' },
+  { type: 'dio', name: 'DIO', wave: 'the night room', secret: true,
+    tell: 'knife fans, a MUDA ring, ZA WARUDO barrages that fly when time resumes — the ROAD ROLLER at low health',
+    counter: 'weave the knife gaps after the snap; the roller lands only inside its telegraphed zone' },
+  { type: 'ian', name: 'THE CREATOR', wave: 'the end', secret: true,
+    tell: 'kneels, unarmed, and weeps',
+    counter: "it's your call" },
+];
+const BEST_KEY = 'ilaird_sf_bestiary';
+let sfBestiary = {};
+try {
+  const raw = JSON.parse(localStorage.getItem(BEST_KEY) || '{}');
+  if (raw && typeof raw === 'object') {
+    for (const b of BESTIARY) {
+      const r = raw[b.type];
+      if (r && typeof r === 'object') sfBestiary[b.type] = { seen: Math.max(0, r.seen | 0), kills: Math.max(0, r.kills | 0) };
+    }
+  }
+} catch (_) { /* a fresh ledger */ }
+let bestiaryDirty = false;
+let showBestiary = false;   // the intro's B-panel
+let bestSel = 0;
+function bestEntry(type) { return sfBestiary[type] || (sfBestiary[type] = { seen: 0, kills: 0 }); }
+// called from makeEnemy: a sighting (nothing is read back by the sim)
+function bestiarySeen(type) {
+  if (noPersist() || !BESTIARY.some(b => b.type === type)) return;
+  bestEntry(type).seen++;
+  bestiaryDirty = true;
+  if (BESTIARY.filter(b => b.horde).every(b => (sfBestiary[b.type] || {}).seen > 0)) sfUnlock('lorekeeper');
+}
+// called from killEnemy
+function bestiaryKill(type) {
+  if (noPersist() || !BESTIARY.some(b => b.type === type)) return;
+  bestEntry(type).kills++;
+  bestiaryDirty = true;
+}
+function saveBestiary() {
+  if (!bestiaryDirty) return;
+  bestiaryDirty = false;
+  try { localStorage.setItem(BEST_KEY, JSON.stringify(sfBestiary)); } catch (_) { /* private mode */ }
+}
+function bestiaryKnown() { return BESTIARY.filter(b => (sfBestiary[b.type] || {}).seen > 0).length; }
+// a preview sprite: the real makeEnemy under a constant rng (title frames stay
+// rnd()-free), animated off `frame` so the wolf paces and the king's beast flaps
+function bestiaryPreview(type, x, y) {
+  const save = sfRng;
+  let e = null;
+  try {
+    sfRng = () => 0.37;
+    e = makeEnemy(type, x, y, 0);
+  } catch (_) { e = null; }
+  sfRng = save;
+  if (!e) return;
+  e.phase = frame * 0.06; e.fx = -1; e.frozen = 0; e.flashT = 0; e.dead = false;
+  if (e.type === 'witchking') e.flapT = frame * 0.2;
+  if (e.type === 'dio') { e.mode = 'idle'; e.cape = 0.5 + 0.5 * Math.sin(frame * 0.05); }
+  if (e.type === 'sidious') e.lit = 1;
+  try { drawEnemy(e); } catch (_) { /* render-only: never take the title down */ }
+}
+function drawBestiary() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(2,4,8,0.9)'; ctx.fillRect(0, 0, GW, GH);
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 22px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
+  ctx.fillText('📖 BESTIARY', GW / 2, 46);
+  ctx.font = 'bold 12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+  ctx.fillText(bestiaryKnown() + ' / ' + BESTIARY.length + ' catalogued', GW / 2, 66);
+  ctx.shadowBlur = 0;
+  const listX = Math.max(24, GW / 2 - 330), listW = 220;
+  const rowH = Math.max(20, Math.min(26, Math.floor((GH - 130) / BESTIARY.length)));
+  ctx.textAlign = 'left';
+  for (let i = 0; i < BESTIARY.length; i++) {
+    const b = BESTIARY[i];
+    const r = sfBestiary[b.type];
+    const known = r && r.seen > 0;
+    const hot = i === bestSel;
+    const y = 96 + i * rowH;
+    if (hot) { ctx.fillStyle = 'rgba(255,210,77,0.12)'; ctx.fillRect(listX - 8, y - 14, listW, rowH - 2); }
+    ctx.font = (hot ? 'bold ' : '') + '12px Tahoma,Arial';
+    ctx.fillStyle = known ? (hot ? '#ffe9ad' : '#c8d2da') : (hot ? '#8a949a' : '#4d5860');
+    ctx.fillText((known ? '' : '🔒 ') + (known || !b.secret ? b.name : '? ? ?'), listX, y);
+  }
+  // the detail card
+  const b = BESTIARY[bestSel];
+  const r = sfBestiary[b.type] || { seen: 0, kills: 0 };
+  const known = r.seen > 0;
+  const cx = listX + listW + 30, cw = Math.min(400, GW - cx - 24);
+  const cy = 88, ch = Math.min(GH - 120, 330);
+  ctx.fillStyle = 'rgba(12,16,22,0.92)';
+  roundRectPath(cx, cy, cw, ch, 10); ctx.fill();
+  ctx.strokeStyle = known ? 'rgba(255,210,77,0.5)' : 'rgba(120,140,160,0.35)'; ctx.lineWidth = 1.5;
+  roundRectPath(cx, cy, cw, ch, 10); ctx.stroke();
+  // the sprite stands on a spotlight in the card's top-left
+  const sx = cx + 70, sy = cy + 96;
+  ctx.fillStyle = 'rgba(255,210,77,0.08)';
+  ctx.beginPath(); ctx.ellipse(sx, sy + 6, 46, 13, 0, 0, Math.PI * 2); ctx.fill();
+  if (known) {
+    ctx.save(); ctx.translate(sx, sy); ctx.scale(1.5, 1.5); ctx.translate(-sx, -sy);
+    bestiaryPreview(b.type, sx, sy);
+    ctx.restore();
+  } else {
+    ctx.font = 'bold 34px Tahoma,Arial'; ctx.fillStyle = '#3a444c'; ctx.textAlign = 'center';
+    ctx.fillText('?', sx, sy);
+  }
+  const tx = cx + 140, tw = cw - 156;
+  const wrap = (text, x, y, font, color, lh) => {
+    ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'left';
+    const words = String(text).split(' ');
+    let line = '', yy = y;
+    for (const w of words) {
+      const t = line ? line + ' ' + w : w;
+      if (ctx.measureText(t).width > tw && line) { ctx.fillText(line, x, yy); yy += lh; line = w; }
+      else line = t;
+    }
+    if (line) ctx.fillText(line, x, yy);
+    return yy + lh;
+  };
+  let y = cy + 30;
+  ctx.font = 'bold 16px Tahoma,Arial'; ctx.fillStyle = known ? '#ffd24d' : '#5c6773'; ctx.textAlign = 'left';
+  ctx.fillText(known || !b.secret ? b.name : '? ? ?', tx, y); y += 16;
+  ctx.font = '10px Tahoma,Arial'; ctx.fillStyle = '#8494a4';
+  ctx.fillText(known || !b.secret ? b.wave : 'not yet met', tx, y); y += 20;
+  if (known) {
+    ctx.font = 'bold 10px Tahoma,Arial'; ctx.fillStyle = '#ff8a80'; ctx.fillText('THE TELL', tx, y); y += 13;
+    y = wrap(b.tell, tx, y, '11px Tahoma,Arial', '#d8e0e8', 13) + 4;
+    ctx.font = 'bold 10px Tahoma,Arial'; ctx.fillStyle = '#7CFC8A'; ctx.fillText('THE COUNTER', tx, y); y += 13;
+    y = wrap(b.counter, tx, y, '11px Tahoma,Arial', '#d8e0e8', 13) + 4;
+    if (b.elite) {
+      ctx.font = 'bold 10px Tahoma,Arial'; ctx.fillStyle = '#c9a227'; ctx.fillText('ELITE FORMS', tx, y); y += 13;
+      y = wrap(b.elite, tx, y, '10px Tahoma,Arial', '#aeb9c4', 12) + 4;
+    }
+    ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+    ctx.fillText('seen ' + r.seen + '   ·   slain ' + r.kills, cx + 20, cy + ch - 16);
+  } else {
+    wrap('meet it on the field and its page fills in', tx, y, 'italic 11px Tahoma,Arial', '#6c7780', 13);
+  }
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+  ctx.fillText('↑ ↓ — browse   ·   B / Q — close   ·   T — trophy case', GW / 2, GH - 22);
+  ctx.restore(); ctx.textAlign = 'left';
+}
 
 // ── render-horde — stick/hero figures + horde sprites: goblin, shaman, bomber, wolf, archer, troll, ogre, wraith ──
 /* ── drawing ── */
@@ -3698,8 +3954,10 @@ function drawBattlefield() {
     if (++w.t >= w.T) fieldWash = null;
   }
   // 7) the dark leans in from the edges — and leans in HARDER under dread
-  const v = ctx.createRadialGradient(GW / 2, GH * 0.52, Math.min(GW, GH) * (0.36 - dread * 0.09), GW / 2, GH * 0.52, Math.max(GW, GH) * 0.75);
-  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (0.4 + dread * 0.18).toFixed(3) + ')');
+  //    (FOG OF WAR — the mutator — pulls the rim in hard: render-only, seeded choice)
+  const fog = bn && bn.fog ? 1 : 0;
+  const v = ctx.createRadialGradient(GW / 2, GH * 0.52, Math.min(GW, GH) * (0.36 - dread * 0.09 - fog * 0.16), GW / 2, GH * 0.52, Math.max(GW, GH) * (0.75 - fog * 0.25));
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (0.4 + dread * 0.18 + fog * 0.45).toFixed(3) + ')');
   ctx.fillStyle = v; ctx.fillRect(-30, -30, GW + 60, GH + 60);
   // 8) EYES IN THE DARK: during the breather, red glints blink open in the
   //    vignette darkness — the next wave, already watching (steady under RM);
@@ -3940,12 +4198,12 @@ function drawIntroScreen() {
   const tx0 = GW / 2 - (tw2 * 2 + mgap) / 2;
   for (let i = 0; i < 2; i++) pill(tx0 + i * (tw2 + mgap), 128, tw2, mh, tops[i], menuTop === i, introRow === 0, topCol[i]);
   const subs = menuTop === 0
-    ? [['NORMAL', '#ffd24d'], [hardUnlocked ? '☠ HARD' : '🔒 HARD', '#ff6e6e'], ['☀ DAILY', '#ffb300']]
+    ? [['NORMAL', '#ffd24d'], [hardUnlocked ? '☠ HARD' : '🔒 HARD', '#ff6e6e'], ['☀ DAILY', '#ffb300'], ['⚗ MUTATED', '#ce93d8']]
     : [['LOCAL', P2_COL], ['🌐 HOST', '#7fd8ff'], ['🌐 JOIN', '#7fd8ff']];
   const subSel = menuTop === 0 ? subSingle : subMulti;
-  const mw = 108;
-  const mx0 = GW / 2 - (mw * 3 + mgap * 2) / 2;
-  for (let i = 0; i < 3; i++) {
+  const mw = subs.length > 3 ? 96 : 108;
+  const mx0 = GW / 2 - (mw * subs.length + mgap * (subs.length - 1)) / 2;
+  for (let i = 0; i < subs.length; i++) {
     const locked = menuTop === 0 && i === 1 && !hardUnlocked;
     pill(mx0 + i * (mw + mgap), 160, mw, mh, subs[i][0], subSel === i, introRow === 1 && !locked, locked ? '#49525c' : subs[i][1]);
   }
@@ -3957,6 +4215,9 @@ function drawIntroScreen() {
   } else if (menuTop === 0 && subSingle === 1 && hardUnlocked) {
     ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ff6e6e';
     ctx.fillText('☠ HARD MODE — earned by mercy · elites from the first wave, everything comes early', GW / 2, 200);
+  } else if (menuTop === 0 && subSingle === 3) {
+    ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ce93d8';
+    ctx.fillText('⚗ MUTATED — the seed deals three modifiers from ' + MUTATORS.length + ' · boons as normal · unranked, but the trophies still count', GW / 2, 200);
   } else if (menuTop === 1 && subMulti === 1) {
     ctx.fillStyle = '#7fd8ff';
     ctx.fillText('🌐 HOST — you get a room code to share · pick YOUR class below (your friend picks theirs)', GW / 2, 200);
@@ -4043,7 +4304,8 @@ function drawIntroScreen() {
     hints.push(['move: WASD / arrows   ·   dash: Space / Shift   ·   attack: X / F', '#c8d2da']);
   }
   hints.push(['◀ ▶ choose   ·   ↑ ↓ switch row   ·   1 / 2 / 3 jump to a mode', '#9fb0c0']);
-  hints.push(['🏆 trophy case ' + sfTrophies.size + ' / ' + SF_ACH.length + '   ·   press T', sfTrophies.size === SF_ACH.length ? '#7CFC8A' : '#c9a227']);
+  hints.push(['🏆 trophy case ' + sfTrophies.size + ' / ' + SF_ACH.length + '   ·   press T        📖 bestiary ' + bestiaryKnown() + ' / ' + BESTIARY.length + '   ·   press B        ⚙ settings & controls   ·   press P', sfTrophies.size === SF_ACH.length ? '#7CFC8A' : '#c9a227']);
+  if (padCount()) hints.push(['🎮 gamepad connected — stick moves · A confirms · X attacks · Start pauses', '#7fd8ff']);
   hints.push(['coins raise your multiplier  ·  graze foes for bonus  ·  clear waves for tokens', '#8494a4']);
   const barH = hints.length * 17 + 14;
   ctx.fillStyle = 'rgba(5,8,12,0.55)'; ctx.fillRect(0, GH - barH, GW, barH);
@@ -4065,6 +4327,7 @@ function drawIntroScreen() {
 
   if (introConfirm) drawIntroConfirm(); // the couch co-op party sheet (confirm gate)
   if (showTrophies) drawTrophyCase();   // the case sits over the whole intro
+  else if (showBestiary) drawBestiary();   // the lore ledger — the case's second tab
   ctx.restore(); ctx.textAlign = 'left';
 }
 
@@ -4249,6 +4512,7 @@ function killEnemy(e) {
   e.dead = true;
   kills++;
   killsByType[e.type] = (killsByType[e.type] || 0) + 1;
+  bestiaryKill(e.type);   // the lore ledger (bookkeeping only)
   // HIT-STOP: every kill lands with weight — a beat for a grunt, a held breath
   // for a troll or an elite, the world stopping for a boss
   hitStopFor(e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' ? 12
@@ -4339,8 +4603,12 @@ function killEnemy(e) {
 // a blow lands on hero h: the Aegis eats it if charged, otherwise the hero falls.
 // In single-player a fall ends the run outright; in co-op the hero is DOWN and the
 // run only ends once both heroes are down (see downHero/endRun).
-function strike(h) {
+// `src` names what landed the blow — the enemy object, or a { type, via } tag for
+// projectiles/hazards — and `via` the manner (flail, saber, keg…). Bookkeeping only:
+// it feeds the death recap (lastBlow), nothing in the sim reads it.
+function strike(h, src, via) {
   if (!h || h.down || h.dashT > 0 || h.iframe > 0) return;  // mid-dash i-frames / just-shielded
+  if (src) lastBlow = { type: src.type || 'unknown', elite: src.elite | 0, via: via || (src.via || ''), wave, seat: heroSeat(h) };
   // (render-only) the living camera lurches WITH the blow — away from the likely striker
   let kdx = 0, kdy = 1, kbest = Infinity;
   for (const e of enemies) {
@@ -4408,6 +4676,7 @@ function endRun() {
     return;
   }
   alive = false;
+  saveBestiary();                    // the run's sightings and kills land in the ledger
   if (dailyRun) sfUnlock('daily');   // seeing a daily through counts, win or lose
   lbTicks = tick; lbKills = kills;   // the run's proof stats, frozen at death
   if (score > best) { best = score; newBest = true; try { localStorage.setItem('ilaird_sf_best', String(best)); } catch (_) { /* private mode */ } }
@@ -4422,7 +4691,7 @@ function reviveHero(h) {
   banner = (h === player ? 'PLAYER 1' : 'PLAYER 2') + ' REVIVED'; bannerSub = ''; bannerT = 70;
 }
 // legacy name kept for the Force-choke death path (a guaranteed kill of P1)
-function slayPlayer() { strike(player); }
+function slayPlayer() { strike(player, { type: 'vader' }, 'choke'); }
 
 // ── leaderboard — hall of legends: run proof, fetch/submit, replay watch entry points ──
 /* ── online leaderboard (the "hall of legends") ──
@@ -4450,7 +4719,7 @@ function lbBegin() {
   lbScore = score; lbWave = wave; lbRank = -1; lbName = ''; lbScores = null; lbDaily = null;
   watchSel = null; watchErr = '';
   const base = lbBase();
-  if (cheated) { lbState = 'off'; return; }   // warp/grant cheats: a fine playground, not a ranked run
+  if (cheated || mutated) { lbState = 'off'; return; }   // warp/grant cheats and mutated runs: a fine playground, not a ranked run
   if (!base || score <= 0) { lbState = 'off'; return; }
   lbState = 'loading';
   const day = (dailyRun && dailyDay) ? dailyDay : dailyDayStr();   // the run's own day, even past UTC midnight
@@ -5639,17 +5908,20 @@ function drawShellMenu() {
   ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 0, GW, GH);
   ctx.textAlign = 'center';
   ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
-  const y0 = Math.round(GH * 0.24);
+  const y0 = Math.round(GH * (shellPage === 'binds' ? 0.14 : 0.24));
+  if (shellPage === 'binds') { drawBindsPage(y0); ctx.restore(); ctx.textAlign = 'left'; return; }
   ctx.font = 'bold 26px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
-  ctx.fillText(netplay ? 'SETTINGS' : 'PAUSED', GW / 2, y0);
+  ctx.fillText(netplay ? 'SETTINGS' : started ? 'PAUSED' : 'SETTINGS', GW / 2, y0);
   ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
-  ctx.fillText(netplay ? 'the war band fights on — settings are yours alone' : 'the horde waits', GW / 2, y0 + 22);
+  ctx.fillText(netplay ? 'the war band fights on — settings are yours alone' : started ? 'the horde waits' : 'what you see, and what you press', GW / 2, y0 + 22);
   ctx.shadowBlur = 0;
+  const nCustom = sfOpts.binds ? Object.keys(sfOpts.binds).length : 0;
   const rows = [
     ['screen shake', sfOpts.shake === 0 ? 'off' : sfOpts.shake < 1 ? 'half' : 'full'],
     ['camera kicks', sfOpts.kick > 0 ? 'on' : 'off'],
     ['impact flashes', sfOpts.flash > 0 ? 'full' : 'reduced'],
     ['high-contrast elites', sfOpts.hiVis ? 'on' : 'off'],
+    ['controls', (nCustom ? nCustom + ' rebound' : 'default') + (padCount() ? ' · 🎮' : '') + '  ›'],
   ];
   for (let i = 0; i < rows.length; i++) {
     const hot = i === shellSel;
@@ -5662,7 +5934,7 @@ function drawShellMenu() {
   }
   ctx.textAlign = 'center';
   ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
-  ctx.fillText('↑ ↓ — choose   ·   ◀ ▶ — change   ·   P — ' + (netplay ? 'close' : 'resume'), GW / 2, y0 + 60 + rows.length * 30 + 16);
+  ctx.fillText('↑ ↓ — choose   ·   ◀ ▶ — change   ·   P — ' + (netplay || !started ? 'close' : 'resume'), GW / 2, y0 + 60 + rows.length * 30 + 16);
   ctx.restore(); ctx.textAlign = 'left';
 }
 
@@ -5786,6 +6058,50 @@ function panel(lines) {
    Before the boards: the run gets a reckoning. Lines land one per beat and the
    score counts up — all deadT-driven (deterministic; any key fast-forwards
    deadT past it, see onKey). Replay watchers skip straight to their ending. */
+/* ── the DEATH RECAP (render-only, off `lastBlow` — see strike) ──
+   "I died" becomes "I know what to try next": what landed the blow, how, and one
+   line of counsel keyed to the killer. Bookkeeping only — nothing here is sim-read. */
+const BLOW_NAMES = { goblin: 'a goblin', wolf: 'a wolf', archer: 'a skeleton archer', troll: 'a troll', shaman: 'a goblin shaman',
+  bomber: 'a bombardier', ogre: 'the War-Ogre', wraith: 'a ringwraith', witchking: 'the Witch-king', trooper: 'a stormtrooper',
+  vader: 'Darth Vader', guard: 'a Royal Guard', sidious: 'Darth Sidious', dio: 'DIO', ian: 'the creator' };
+const ELITE_NAMES = { goblin: ['a shield-bearer goblin', 'a goblin warlord'], wolf: ['a frost wolf', 'a dire frost wolf'],
+  archer: ['a volley archer', 'a deadeye'], troll: ['a bull troll', 'a dread troll'] };
+const BLOW_ADVICE = {
+  goblin: 'goblins steer with momentum — cut sideways at the last moment and they skid past; then swing.',
+  wolf: 'wolves lunge straight along the flashing sight line — step OFF the line, never along it.',
+  archer: 'arrows fly the aimed line — strafe between volleys, or bat them away with a swing.',
+  troll: 'trolls swing wide and take three hearts — hit and run; never trade inside the club.',
+  shaman: 'the shaman never attacks — its pack does, hastened. freeze it, or dash it down before the ring spreads.',
+  bomber: 'the keg lands where you WERE — keep moving after the throw, and let the pack eat the blast.',
+  ogre: 'the charge locks a straight line at the flash — leave the line, then punish the recovery.',
+  wraith: 'the Nine lunge together on the flash — dash THROUGH the ring, never away from it.',
+  witchking: 'the dive follows the purple line; on foot the flail reaches past his body — stay behind him.',
+  trooper: 'blaster bolts are slow and inaccurate — close before the squad forms, and swing to deflect.',
+  vader: 'his lunge follows the grey flash — dash through him, not back; nine hearts, so patience.',
+  guard: "the guard's pike lunge is telegraphed — sidestep it and take the two hits it has.",
+  sidious: 'leave the lightning corridor sideways, dash through the bolt, and circle faster than the rake.',
+  dio: 'weave the knife gaps after time resumes; the roller only lands inside its drawn zone.',
+};
+const VIA_ADVICE = {
+  keg: 'the keg lands where you WERE standing — keep moving after every throw; the blast wounds the horde too.',
+  choke: 'the choke only takes a standing P1 — mash attack and dash to break it, or keep your distance from the flash.',
+  lightning: 'the corridor builds for a long beat — leave it SIDEWAYS; dash i-frames beat the bolt itself.',
+  roller: 'ROAD ROLLER DA — the slam lands only inside the telegraphed zone; walk out of it during stopped time.',
+  arrow: 'arrows fly the aimed line — strafe between volleys, or bat them away with a swing.',
+};
+function blowName(b) {
+  if (!b) return '';
+  const el = b.elite && ELITE_NAMES[b.type] ? ELITE_NAMES[b.type][Math.min(2, b.elite) - 1] : null;
+  return (el || BLOW_NAMES[b.type] || 'the horde') + (b.via ? ' · ' + b.via : '');
+}
+function blowAdvice(b) {
+  if (!b) return '';
+  if (b.elite === 1 && b.type === 'wolf') return 'a frost wolf chills you on a brush — the dash is the escape valve; it ignores the chill.';
+  if (b.elite === 2 && b.type === 'wolf') return 'the dire wolf chills everything inside its ring — kill it at range, or dash clear.';
+  if (b.elite && b.type === 'troll') return 'a wounded elite troll ENRAGES — finish it in one rush, or leave it for the freeze.';
+  return VIA_ADVICE[b.via] || BLOW_ADVICE[b.type] || 'the horde is patient — it only needs you to stop moving once.';
+}
+const RESULTS_END = 262;   // deadT at which the reckoning yields to the boards (any key skips there)
 function drawResults() {
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.66)'; ctx.fillRect(0, 0, GW, GH);
@@ -5797,7 +6113,7 @@ function drawResults() {
   // the fallen, ranked — the horde knows who did the work
   const byN = Object.entries(killsByType).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const row = (i, label, value, col) => {
-    const at = 56 + i * 22;                       // each line lands on its own beat
+    const at = 56 + i * 18;                       // each line lands on its own beat
     if (deadT < at) return;
     const a = Math.min(1, (deadT - at) / 12);
     ctx.globalAlpha = a;
@@ -5811,9 +6127,13 @@ function drawResults() {
   row(i++, 'waves survived', String(wave) + (hardMode ? '  ☠' : '') + (endless ? '  ∞' : ''), '#ffd24d');
   row(i++, 'the fallen', String(kills), '#ff8a80');
   if (byN.length) row(i++, 'mostly', byN.map(([t, n]) => t + ' ×' + n).join(' · '), '#c8d2da');
+  if (lastBlow) row(i++, 'slain by', blowName(lastBlow) + (coop ? '  (P' + (lastBlow.seat + 1) + ')' : ''), '#ff6e6e');
+  const picked = heroesAll().flatMap(h => h.bn.picked).map(id => (BOONS.find(b => b.id === id) || BANES.find(b => b.id === id) || {}).name).filter(Boolean);
+  row(i++, 'you fought as', player.cls.toUpperCase() + (coop && p2 ? ' + ' + p2.cls.toUpperCase() : '') + (picked.length ? '  ·  ' + picked.join(' · ').toLowerCase() : ''), '#c8d2da');
+  if (mutated && activeMuts.length) row(i++, 'mutators', activeMuts.map(id => (MUTATORS.find(m => m.id === id) || {}).name).filter(Boolean).join(' · ').toLowerCase(), '#ce93d8');
   row(i++, 'tokens banked', String(tokens), '#80deea');
   // the score counts up over the last stretch of the ceremony
-  const sAt = 56 + i * 22;
+  const sAt = 56 + i * 18;
   if (deadT >= sAt) {
     const sp = Math.min(1, (deadT - sAt) / 40);
     const shown = Math.round(score * (1 - (1 - sp) * (1 - sp)));
@@ -5823,13 +6143,18 @@ function drawResults() {
       ctx.font = 'bold 14px Tahoma,Arial'; ctx.fillStyle = '#7CFC8A';
       ctx.fillText('★ A NEW LEGEND — your best ★', GW / 2, y0 + 88 + i * 27);
     }
+    // one line of counsel, keyed to the killer — the part of dying that is worth reading
+    if (sp >= 1 && lastBlow) {
+      ctx.font = 'italic 12px Tahoma,Arial'; ctx.fillStyle = '#aeb9c4';
+      ctx.fillText('“' + blowAdvice(lastBlow) + '”', GW / 2, y0 + (newBest ? 108 : 90) + i * 27);
+    }
   }
   ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = 'rgba(200,210,220,0.6)'; ctx.textAlign = 'center';
   ctx.fillText('any key — the hall of legends awaits', GW / 2, GH - 44);
   ctx.restore(); ctx.textAlign = 'left';
 }
 function drawDeathScreen() {
-  if (!replayMode && deadT < 178) { drawResults(); return; }
+  if (!replayMode && deadT < RESULTS_END) { drawResults(); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.62)';
   ctx.fillRect(0, 0, GW, GH);
   ctx.textAlign = 'center';
@@ -5851,7 +6176,8 @@ function drawDeathScreen() {
   ctx.fillText('SCORE ' + score + (newBest ? '   ★ NEW BEST ★' : '   ·   BEST ' + best), cx, y); y += 25;
   ctx.font = '14px Tahoma,Arial'; ctx.fillStyle = '#ccc';
   ctx.fillText('you survived ' + wave + (wave === 1 ? ' wave' : ' waves') +
-               '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes'), cx, y); y += 20;
+               '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes') +
+               (lastBlow && !replayMode ? '  ·  slain by ' + blowName(lastBlow) : ''), cx, y); y += 20;
   if (dailyRun) {
     ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffb300';
     ctx.fillText('☀ daily challenge · ' + dailyDayPretty(), cx, y); y += 20;
@@ -5878,6 +6204,9 @@ function drawDeathScreen() {
     if (cheated) {
       ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#8a949a';
       ctx.fillText('cheats were used — this run is unranked', cx, y); y += 22;
+    } else if (mutated) {
+      ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ce93d8';
+      ctx.fillText('⚗ ' + mutatorNames().join(' · ') + ' — mutated runs are unranked', cx, y); y += 22;
     }
     ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
     ctx.fillText('press R to rise again', cx, y);
@@ -5989,10 +6318,10 @@ function rollType() {
 //           (the chill is a 90px AURA) · deadeye (five faster arrows) · dread
 //           troll (8 HP, roars into a harder enrage)
 function rollElite() {
-  if (!endless && !hardMode) return 0;
-  // hard mode runs the elite math five waves deep: elites stalk from wave 1
-  // (gently), and the dread tier arrives by wave 4 instead of 9
-  const w = wave + (hardMode ? 5 : 0);
+  if (!endless && !hardMode && !bn.eliteEarly) return 0;
+  // hard mode (and the BLOOD MOON mutator) runs the elite math five waves deep:
+  // elites stalk from wave 1 (gently), and the dread tier arrives by wave 4 instead of 9
+  const w = wave + (hardMode || bn.eliteEarly ? 5 : 0);
   if (rnd() >= Math.min(0.5, 0.06 * (w - 5))) return 0;
   // a rolled elite may ascend to the dread tier — rarer, and only in deep waves
   return w >= 9 && rnd() < Math.min(0.25, 0.04 * (w - 8)) ? 2 : 1;
@@ -6090,6 +6419,7 @@ function makeEnemy(type, x, y, elite) {
     // the creator: unarmed, harmless, never attacks — the fight is a choice, not a duel
     e.kr = 0; e.hp = 99; e.mode = 'idle'; e.phase = 0; e.crumble = 0; e.fade = 1;
   }
+  if (started && alive) bestiarySeen(type);   // the lore ledger (bookkeeping only — never read back; the title's previews don't count)
   return e;
 }
 
@@ -7306,6 +7636,7 @@ function drawBossIntro() {
 let lastFrameTs = null;
 function frameStep(ts) {
   rafId = requestAnimationFrame(frameStep);
+  padPoll();   // gamepads → the same synthetic key events the keyboard sends (see 22-gamepad)
   const now = (typeof ts === 'number') ? ts : performance.now();
   if (lastFrameTs === null) lastFrameTs = now;
   const dt = Math.max(0, Math.min(0.25, (now - lastFrameTs) / 1000));
@@ -7434,10 +7765,11 @@ function loop() {
       return;
     }
     drawIntroScreen();
+    if (shellMenu) drawShellMenu();   // P on the title: settings + controls, nothing to pause
     drawTrophyToasts();
     hud.innerHTML = 'BEST: ' + best + ' · ' +
       (menuTop === 1 ? (subMulti === 0 ? '2-PLAYER' : subMulti === 1 ? '🌐 HOST' : '🌐 JOIN')
-                     : (subSingle === 2 ? '☀ DAILY' : subSingle === 1 ? '☠ HARD' : '1-PLAYER')) +
+                     : (subSingle === 2 ? '☀ DAILY' : subSingle === 1 ? '☠ HARD' : subSingle === 3 ? '⚗ MUTATED' : '1-PLAYER')) +
       '<br>double-click icon to quit';
     frame++;
     return;
@@ -7479,7 +7811,7 @@ function loop() {
     drawTrophyToasts();
     hud.innerHTML = netplay && boonMenu && (boonMenu.who | 0) !== netSeat
       ? '⏳ Player ' + ((boonMenu.who | 0) + 1) + ' is choosing…<br>(everyone picks their OWN boon)'
-      : shellMenu ? 'PAUSED — settings<br>↑↓ rows · ◀ ▶ change · P resumes'
+      : shellMenu ? (shellPage === 'binds' ? 'PAUSED — controls<br>Enter rebinds · Backspace resets · P back' : 'PAUSED — settings<br>↑↓ rows · ◀ ▶ change · P resumes')
       : (boonMenu
         ? (boonMenu.bane ? 'a bane must be borne' : (coop ? 'P' + ((boonMenu.who | 0) + 1) + ' — your boon is offered' : 'a boon is offered')) + '<br>◀ ▶ choose · Z takes it'
         : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left'
@@ -7660,8 +7992,10 @@ function loop() {
       if (hardMode && wave >= 5) sfUnlock('hard_5');
       if (wave >= 6 && runFlawless) sfUnlock('unscathed');       // five waves, not one blow landed
       if (wave >= 5 && tick <= 3 * 60 * SIM_HZ) sfUnlock('swift'); // tick-based, so replays agree
+      if (mutated && wave >= 8) sfUnlock('adapted');
       waveQuota = Math.min(30 + 10 * (partySize() - 1), bandScale(8 + wave * 3));
-      if (up.shield) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave
+      if (bn.quotaMul !== 1) waveQuota = Math.round(waveQuota * bn.quotaMul);   // SWARM (mutator)
+      if (up.shield && !bn.noRefresh) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave (unless GLASS AEGIS)
       banner = 'WAVE ' + wave;
       bannerSub = { 2: 'the wolves are loosed', 3: 'skeleton archers nock their arrows', 4: 'the trolls have come' }[wave] || '';
       bannerT = 90;
@@ -7762,7 +8096,7 @@ function loop() {
     const p = farPoint(50);
     coins.push({ x: p.x, y: p.y, t: 620 });
   }
-  if (frame > 800 && frame % 660 === 0 && powerups.length < 1 && !ianActive && !mournful && !jojoActive) {
+  if (frame > 800 && frame % 660 === 0 && powerups.length < 1 && !ianActive && !mournful && !jojoActive && !bn.noPowerups) {
     const p = farPoint(70);
     powerups.push({ x: p.x, y: p.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(rnd() * 3)], t: 700 });
   }
@@ -8144,7 +8478,7 @@ function loop() {
       const inSaddle = h.cls === 'rider' && h.mounted;
       const d = Math.hypot(h.x - e.x, h.y - e.y);
       const bodyR = e.kr + PLAYER_R + (h.cls === 'wyrm' ? WYRM_R : 0);
-      if (!inSaddle && d < bodyR) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
+      if (!inSaddle && d < bodyR) { strike(h, e); if (!alive) return; continue; }   // bodies overlap → struck
       // the frost wolf chills a hero who brushes close; the DIRE wolf's chill is
       // a full 90px aura (drawn as an icy ring) — no brush needed
       if (!inSaddle && e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
@@ -8162,24 +8496,24 @@ function loop() {
         const fdir = (h.x - e.x) >= 0 ? 1 : -1;
         const fx = e.x + fdir * Math.cos(e.flailAng) * 64;
         const fy = e.y - 32 + Math.sin(e.flailAng) * 64 * 0.7;
-        if (Math.hypot(h.x - fx, (h.y - 18) - fy) < 26) { strike(h); if (!alive) return; continue; }
+        if (Math.hypot(h.x - fx, (h.y - 18) - fy) < 26) { strike(h, e, 'flail'); if (!alive) return; continue; }
       }
       // Vader's saber sweeps a lethal arc out front during the slash
       if (e.type === 'vader' && e.mode === 'slash') {
         const tx = e.x + Math.cos(e.slashAng) * 56;
         const ty = (e.y - 22) + Math.sin(e.slashAng) * 56;
-        if (Math.hypot(h.x - tx, (h.y - 18) - ty) < 24) { strike(h); if (!alive) return; continue; }
+        if (Math.hypot(h.x - tx, (h.y - 18) - ty) < 24) { strike(h, e, 'saber'); if (!alive) return; continue; }
       }
       // DIO's MUDA barrage — The World pummels a lethal ring around him
-      if (e.type === 'dio' && e.mode === 'muda' && d < 54) { strike(h); if (!alive) return; continue; }
+      if (e.type === 'dio' && e.mode === 'muda' && d < 54) { strike(h, e, 'muda'); if (!alive) return; continue; }
       // Sidious' twin sabers carve a lethal ring while he spins
-      if (e.type === 'sidious' && e.mode === 'spin' && d < 46) { strike(h); if (!alive) return; continue; }
+      if (e.type === 'sidious' && e.mode === 'spin' && d < 46) { strike(h, e, 'spin'); if (!alive) return; continue; }
       // Force lightning: a lethal corridor along the aim while it crackles
       if (e.type === 'sidious' && e.mode === 'lightning') {
         const ox = e.x, oy = e.y - 24;
         const px = h.x - ox, py = (h.y - 18) - oy;
         const proj = px * e.lx + py * e.ly;
-        if (proj > 18 && proj < 470 && Math.abs(px * -e.ly + py * e.lx) < (e.lethalW || 18)) { strike(h); if (!alive) return; continue; }
+        if (proj > 18 && proj < 470 && Math.abs(px * -e.ly + py * e.lx) < (e.lethalW || 18)) { strike(h, e, 'lightning'); if (!alive) return; continue; }
       }
     }
   }
@@ -8190,7 +8524,7 @@ function loop() {
     const rr = roadRoller;   // lethal only as it lands (not the whole fall), and only inside the telegraphed ellipse
     if (rr && rr.phase === 'impact' && rr.t < 16) {
       for (const h of heroesLive()) {
-        if (h.dashT <= 0 && ((h.x - rr.zoneX) / 46) ** 2 + ((h.y - rr.zoneY) / 17) ** 2 < 1) { strike(h); if (!alive) return; }
+        if (h.dashT <= 0 && ((h.x - rr.zoneX) / 46) ** 2 + ((h.y - rr.zoneY) / 17) ** 2 < 1) { strike(h, { type: 'dio' }, 'roller'); if (!alive) return; }
       }
     }
   }
@@ -8208,7 +8542,7 @@ function loop() {
     sparks.push({ x: k.tx, y: k.ty - 12, t: 16, color: '#ff8a65', txt: 'BOOM' });
     for (const h of heroesLive()) {
       if (h.dashT > 0) continue;                 // i-frames clear the blast
-      if (Math.hypot(h.x - k.tx, (h.y - 10) - k.ty) < KEG_R) { strike(h); if (!alive) return; }
+      if (Math.hypot(h.x - k.tx, (h.y - 10) - k.ty) < KEG_R) { strike(h, { type: 'bomber' }, 'keg'); if (!alive) return; }
     }
     // the shrapnel reaches the horde well past the core (a pursuer walks ~72px
     // during the keg's flight — a tight radius would never touch a moving pack,
@@ -8290,10 +8624,16 @@ function loop() {
         a.vx = hx / hd * 7.5; a.vy = hy / hd * 7.5;
         if (hd < 18) { arrows.splice(i, 1); continue; }  // caught — Vader re-arms
       }
-      for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 14) { strike(h); if (!alive) return; } }
+      for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 14) { strike(h, { type: 'vader' }, 'thrown saber'); if (!alive) return; } }
       continue;
     }
-    for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 10) { strike(h); if (!alive) return; break; } }
+    for (const h of heroesLive()) {
+      if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 10) {
+        const src = a.kind === 'laser' ? { type: 'trooper' } : a.kind === 'knife' ? { type: 'dio' } : { type: 'archer', elite: a.elite | 0 };
+        strike(h, src, a.kind === 'laser' ? 'blaster bolt' : a.kind === 'knife' ? 'knife' : 'arrow');
+        if (!alive) return; break;
+      }
+    }
   }
 
   /* passive score */
@@ -8832,6 +9172,21 @@ function loop() {
     }
     ctx.shadowBlur = 0; ctx.textAlign = 'left'; ctx.globalAlpha = 1;
   }
+  // ⚗ the mutator card: the three rolled modifiers, pinned top-right for the
+  // run's opening stretch (render-only; the boon pick's banner would otherwise
+  // paint straight over the start banner that named them)
+  if (mutated && activeMuts.length && frame < 900) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (900 - frame) / 60);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ce93d8';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
+    ctx.fillText('⚗ MUTATED', GW - 14, 96);
+    ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = '#e8d6f0';
+    const names = mutatorNames();
+    for (let i = 0; i < names.length; i++) ctx.fillText(names[i], GW - 14, 112 + i * 15);
+    ctx.restore(); ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+  }
   if (meter >= up.summonCost && !champsBanned() && champUnlocked()) {
     // standing offer — stays up top until an ally is summoned
     ctx.save();
@@ -8898,7 +9253,7 @@ function loop() {
     'SCORE ' + score + ' · BEST ' + best + '<br>' +
     (mournful
       ? '<span style="color:#8fd8ff">the world mourns · they will not fight</span> · KILLS ' + kills
-      : 'WAVE ' + wave + (netplay ? ' · <span style="color:#7fd8ff">🌐 ONLINE</span>' : '') + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (hardMode ? ' · <span style="color:#ff6e6e">☠ HARD</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
+      : 'WAVE ' + wave + (netplay ? ' · <span style="color:#7fd8ff">🌐 ONLINE</span>' : '') + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (hardMode ? ' · <span style="color:#ff6e6e">☠ HARD</span>' : '') + (mutated ? ' · <span style="color:#ce93d8">⚗ MUTATED</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
     (up.dashMax === 0
       ? '<span style="color:#666">DASH 🔒 locked</span>'
       : '<span style="color:#80deea">DASH ' + '◆'.repeat(player.dashCharges) +
@@ -9557,6 +9912,191 @@ function summonTheNine() {
   }
 }
 
+// ── key bindings — the shell's CONTROLS page, and the physical→canonical key translation ──
+/* Rebinding never touches the sim. Every handler and sampler in the game keys off
+   the CLASSIC names (keys['ArrowLeft'], e.key === 'x', e.code === 'ShiftRight' …),
+   so a custom binding is applied by TRANSLATING the physical key event into the
+   canonical event at the top of onKey/offKey (remapKey below). The recorder, the
+   lockstep frames, the replay feeder and every menu see only the classic keys —
+   a rebound run records and replays bit-exact, and a rebound peer lockstops with
+   a default-keys peer. Only NON-default bindings are stored (sfOpts.binds, so the
+   `forget` command's ilaird* sweep covers them); a physical key whose classic
+   role has been rebound away goes dead (it must not ALSO keep its old meaning, or
+   "move up on I" would still move up on ↑ and the rebinding would be a lie).
+   Typing contexts (the leaderboard name, the room code, a capture in progress)
+   read the raw key, never the translation. The default table IS the classic
+   layout, so a player who never opens the page gets byte-identical input. */
+const BIND_ACTIONS = [
+  // seat 1 — the classic solo/P1 keys (solo also accepts WASD/Space/X/F by passthrough)
+  { id: 'p1_up',    seat: 1, label: 'up',         key: 'ArrowUp',    code: 'ArrowUp',    def: 'ArrowUp' },
+  { id: 'p1_down',  seat: 1, label: 'down',       key: 'ArrowDown',  code: 'ArrowDown',  def: 'ArrowDown' },
+  { id: 'p1_left',  seat: 1, label: 'left',       key: 'ArrowLeft',  code: 'ArrowLeft',  def: 'ArrowLeft' },
+  { id: 'p1_right', seat: 1, label: 'right',      key: 'ArrowRight', code: 'ArrowRight', def: 'ArrowRight' },
+  { id: 'p1_dash',  seat: 1, label: 'dash',       key: 'Shift',      code: 'ShiftRight', def: 'ShiftRight' },
+  { id: 'p1_atk',   seat: 1, label: 'attack',     key: 'x',          code: 'Slash',      def: 'Slash' },
+  { id: 'p1_cycle', seat: 1, label: 'spell page', key: 'c',          code: 'Period',     def: 'Period' },
+  // seat 2 — couch co-op's green hero (WASD · Left-Shift · F · E)
+  { id: 'p2_up',    seat: 2, label: 'up',         key: 'w',     code: 'KeyW',      def: 'KeyW' },
+  { id: 'p2_down',  seat: 2, label: 'down',       key: 's',     code: 'KeyS',      def: 'KeyS' },
+  { id: 'p2_left',  seat: 2, label: 'left',       key: 'a',     code: 'KeyA',      def: 'KeyA' },
+  { id: 'p2_right', seat: 2, label: 'right',      key: 'd',     code: 'KeyD',      def: 'KeyD' },
+  { id: 'p2_dash',  seat: 2, label: 'dash',       key: 'Shift', code: 'ShiftLeft', def: 'ShiftLeft' },
+  { id: 'p2_atk',   seat: 2, label: 'attack',     key: 'f',     code: 'KeyF',      def: 'KeyF' },
+  { id: 'p2_cycle', seat: 2, label: 'spell page', key: 'e',     code: 'KeyE',      def: 'KeyE' },
+];
+// keys with a fixed global meaning can't be taken: the desktop's Escape, the
+// menu confirms, pause/quit/restart, the summon digits and the 8/9 cheat keys
+const BIND_BLOCKED = new Set(['Escape', 'Enter', 'NumpadEnter', 'Tab', 'KeyP', 'KeyQ', 'KeyR', 'KeyG', 'KeyZ',
+  'Digit1', 'Digit2', 'Digit3', 'Digit8', 'Digit9', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight',
+  'ControlLeft', 'ControlRight', 'CapsLock', 'ContextMenu']);
+const BIND_CODE_RE = /^[A-Za-z0-9]{1,24}$/;
+let bindMap = null;      // physical code → action (only built while custom binds exist)
+let bindDead = null;     // canonical codes whose action was rebound elsewhere → the physical key is dead
+let bindCapture = null;  // the action id awaiting a key press on the CONTROLS page
+let bindSel = 0;         // the CONTROLS page cursor
+let shellPage = 'main';  // 'main' | 'binds'
+// what the player has actually bound for an action (its default unless overridden)
+function bindOf(a) { return (sfOpts.binds && sfOpts.binds[a.id]) || a.def; }
+// rebuild the translation tables from sfOpts.binds (called at load + after every change)
+function rebuildBinds() {
+  const custom = sfOpts.binds && Object.keys(sfOpts.binds).length > 0;
+  if (!custom) { bindMap = null; bindDead = null; return; }
+  bindMap = new Map(); bindDead = new Set();
+  for (const a of BIND_ACTIONS) {
+    const code = bindOf(a);
+    bindMap.set(code, a);
+    if (code !== a.code) bindDead.add(a.code);
+  }
+  // a canonical code that is still someone's live binding is not dead
+  for (const code of bindMap.keys()) bindDead.delete(code);
+}
+// validate a persisted binds object: real codes, nothing blocked, no double booking
+function sanitizeBinds(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  const used = new Set();
+  for (const a of BIND_ACTIONS) {
+    const v = raw[a.id];
+    if (typeof v !== 'string' || !BIND_CODE_RE.test(v) || BIND_BLOCKED.has(v) || v === a.def) continue;
+    if (used.has(v)) continue;
+    used.add(v); out[a.id] = v;
+  }
+  return out;   // a default another action stole simply goes dead (bindDead) until re-bound
+}
+function setBind(id, code) {
+  const a = BIND_ACTIONS.find(x => x.id === id);
+  if (!a || BIND_BLOCKED.has(code) || !BIND_CODE_RE.test(code)) return false;
+  if (!sfOpts.binds) sfOpts.binds = {};
+  // one key, one job: whoever else held this physical key loses it (back to their default,
+  // unless that default is the key just taken — then it is simply dead until re-bound)
+  for (const o of BIND_ACTIONS) if (o.id !== id && bindOf(o) === code) delete sfOpts.binds[o.id];
+  if (code === a.def) delete sfOpts.binds[a.id]; else sfOpts.binds[a.id] = code;
+  if (!Object.keys(sfOpts.binds).length) delete sfOpts.binds;
+  saveOpts(); rebuildBinds();
+  return true;
+}
+function resetBind(id) {
+  if (sfOpts.binds && sfOpts.binds[id]) { delete sfOpts.binds[id]; if (!Object.keys(sfOpts.binds).length) delete sfOpts.binds; }
+  saveOpts(); rebuildBinds();
+}
+function resetAllBinds() { delete sfOpts.binds; saveOpts(); rebuildBinds(); }
+// the raw event is translated only OUTSIDE the typing contexts (name entry, the
+// room code, an in-progress capture) and never for synthetic gamepad events,
+// which are minted canonical already
+function bindsBypass() {
+  return (!alive && lbState === 'enter') || (netUi && netUi.phase === 'code') || bindCapture !== null;
+}
+const BIND_DEAD_EV = { key: 'Dead', code: 'Dead' };
+function remapKey(raw) {
+  if (!bindMap || raw.pad || bindsBypass()) return raw;
+  const a = bindMap.get(raw.code);
+  if (a) return { key: a.key, code: a.code, repeat: raw.repeat, preventDefault: () => raw.preventDefault() };
+  if (bindDead.has(raw.code)) return { key: BIND_DEAD_EV.key, code: BIND_DEAD_EV.code, repeat: raw.repeat, preventDefault: () => raw.preventDefault() };
+  return raw;
+}
+// a capture in progress: the next real key press becomes the binding (Escape is
+// the desktop's, so it is not even offered — Backspace cancels instead)
+function captureBind(raw) {
+  if (raw.repeat) return;
+  if (raw.code === 'Backspace') { bindCapture = null; if (sfSfx.killE) sfSfx.killE(); return; }
+  if (raw.code === 'Escape') return;
+  if (setBind(bindCapture, raw.code)) { bindCapture = null; sfSfx.coin(); }
+  else if (sfSfx.thud) sfSfx.thud();
+}
+// human labels for KeyboardEvent.code values
+function codeLabel(code) {
+  if (!code) return '—';
+  const m = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', ShiftLeft: 'L-Shift', ShiftRight: 'R-Shift',
+              Space: 'Space', Slash: '/', Period: '.', Comma: ',', Semicolon: ';', Quote: "'", Backslash: '\\', Backquote: '`',
+              BracketLeft: '[', BracketRight: ']', Minus: '-', Equal: '=', Backspace: 'Backspace', Dead: '—' };
+  if (m[code]) return m[code];
+  if (/^Key[A-Z]$/.test(code)) return code[3];
+  if (/^Digit\d$/.test(code)) return code[5];
+  if (/^Numpad/.test(code)) return 'num ' + code.slice(6).toLowerCase();
+  return code;
+}
+// the CONTROLS page (drawn by drawShellMenu when shellPage === 'binds'): two
+// columns of actions, the bound key beside each; Enter captures, Backspace resets
+function drawBindsPage(y0) {
+  ctx.font = 'bold 26px Tahoma,Arial'; ctx.fillStyle = '#ffd24d'; ctx.textAlign = 'center';
+  ctx.fillText('CONTROLS', GW / 2, y0);
+  ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+  ctx.fillText(padCount() ? '🎮 ' + padCount() + ' gamepad' + (padCount() > 1 ? 's' : '') + ' connected — see the pad card below' : 'keyboard — rebind any action; the game, replays and co-op never notice', GW / 2, y0 + 22);
+  ctx.shadowBlur = 0;
+  const perCol = BIND_ACTIONS.filter(a => a.seat === 1).length;
+  const colW = Math.min(300, (GW - 60) / 2);
+  const rowH = 24;
+  const heads = ['PLAYER 1  (solo)', 'PLAYER 2  (couch co-op)'];
+  const headCol = ['#ffffff', P2_COL];
+  for (let c = 0; c < 2; c++) {
+    const x = GW / 2 - colW + 12 + c * colW;
+    ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = headCol[c]; ctx.textAlign = 'left';
+    ctx.fillText(heads[c], x, y0 + 52);
+  }
+  for (let i = 0; i < BIND_ACTIONS.length; i++) {
+    const a = BIND_ACTIONS[i];
+    const c = a.seat - 1, r = i % perCol;
+    const x = GW / 2 - colW + 12 + c * colW;
+    const y = y0 + 72 + r * rowH;
+    const hot = i === bindSel;
+    const capturing = hot && bindCapture === a.id;
+    const custom = !!(sfOpts.binds && sfOpts.binds[a.id]);
+    if (hot) { ctx.fillStyle = 'rgba(255,210,77,0.10)'; ctx.fillRect(x - 6, y - 15, colW - 12, rowH - 2); }
+    ctx.font = (hot ? 'bold ' : '') + '13px Tahoma,Arial'; ctx.fillStyle = hot ? '#ffe9ad' : '#9aa3a8'; ctx.textAlign = 'left';
+    ctx.fillText(a.label, x, y);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = capturing ? '#ff8a80' : custom ? '#7fd8ff' : hot ? '#e8eef4' : '#77828c';
+    ctx.font = (capturing ? 'italic ' : 'bold ') + '13px Tahoma,Arial';
+    ctx.fillText(capturing ? 'press a key…' : codeLabel(bindOf(a)), x + colW - 30, y);
+  }
+  const yb = y0 + 72 + perCol * rowH + 6;
+  ctx.textAlign = 'center';
+  // the pad card — the fixed standard-gamepad layout (not rebindable; see 22-gamepad)
+  ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = '#8494a4';
+  ctx.fillText('🎮 pad: stick / d-pad move · A confirm · X attack · Y spell page · LB RB LT RT dash · Start pause · L3 R3 Back summon 1·2·3', GW / 2, yb);
+  ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
+  ctx.fillText('↑ ↓ ← → — choose   ·   Enter / Z — rebind   ·   Backspace — default   ·   Delete — reset all   ·   P / Q — back', GW / 2, yb + 22);
+}
+// key handling for the CONTROLS page (called from onKey's shell block; returns
+// true when it consumed the key)
+function bindsPageKey(e) {
+  const n = BIND_ACTIONS.length, perCol = n / 2;
+  if (e.key === 'ArrowUp')        { bindSel = (bindSel + n - 1) % n; if (sfSfx.killE) sfSfx.killE(); }
+  else if (e.key === 'ArrowDown') { bindSel = (bindSel + 1) % n; if (sfSfx.killE) sfSfx.killE(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { bindSel = (bindSel + perCol) % n; if (sfSfx.killE) sfSfx.killE(); }
+  else if (!e.repeat && ['Enter', 'z', 'Z'].includes(e.key)) { bindCapture = BIND_ACTIONS[bindSel].id; if (sfSfx.charge) sfSfx.charge(); }
+  else if (!e.repeat && e.key === 'Backspace') { resetBind(BIND_ACTIONS[bindSel].id); if (sfSfx.killE) sfSfx.killE(); }
+  else if (!e.repeat && e.key === 'Delete') { resetAllBinds(); if (sfSfx.thud) sfSfx.thud(); }   // not a letter: a bound attack key must not wipe the page
+  else if (!e.repeat && ['p', 'P', 'q', 'Q'].includes(e.key)) { shellPage = 'main'; if (sfSfx.killE) sfSfx.killE(); }
+  else return false;
+  return true;
+}
+// the persisted binds arrive raw from the options loader (02-state runs before this
+// table exists); validate them here, then build the translation tables
+sfOpts.binds = sanitizeBinds(sfOpts.binds);
+if (!Object.keys(sfOpts.binds).length) delete sfOpts.binds;
+rebuildBinds();
+
 // ── flow — startStarWars, stopGame, the 9-spam warp cheats ──
 // the Star Wars interlude: a corridor where a squad of stormtroopers forms up, then opens fire
 function startStarWars() {
@@ -9605,6 +10145,8 @@ function stopGame() {
   if (netplay || netUi) netSend({ t: 'bye' });   // the desktop is shutting down — tell the partner
   netTeardown();
   alive = false;
+  saveBestiary();          // a run cut short by the desktop still teaches the ledger
+  padRelease();            // every synthetic pad key goes up with the keyboard's
   stopSfMusic();
   wraithSfx.pause();
   if (rafId) cancelAnimationFrame(rafId);
@@ -9696,6 +10238,97 @@ function skipToIan() {
   beginBossIntro('ian', startIan);
 }
 
+// ── gamepad — standard-mapping pads, translated into the keyboard's own synthetic key events ──
+/* A pad never talks to the sim. padPoll() runs once per rAF (frameStep, before the
+   sim steps) and diffs each pad's buttons/sticks against the last poll; every edge
+   becomes a synthetic {key, code} event fed to onKey/offKey — the SAME canonical
+   names the keyboard produces (pad 0 = seat 1's arrows / R-Shift / Slash / Period,
+   pad 1 = seat 2's WASD / L-Shift / F / E in couch co-op). So `keys[...]`, the pend
+   edges, the recorder, the replay feeder and the lockstep frames see nothing new:
+   a pad run records, replays and lockstops exactly like a keyboard run. Synthetic
+   events carry `pad: true` so remapKey leaves them alone (they are minted
+   canonical; a rebound keyboard must not "kill" the pad's arrows). Fixed layout,
+   not rebindable: stick / d-pad move · A confirm (Z) · B back (Backspace) ·
+   X attack · Y spell page · LB RB LT RT dash · Start pause (P) · L3 R3 Back = the
+   summon digits 1 · 2 · 3. Held directions auto-repeat in menus (keyboards do
+   that for free). Solo and online runs read pad 0 only; a second pad is only
+   ever seat 2, and only when the intro (LOCAL) or the run (coop) says so. */
+const PAD_DEAD = 0.5;
+const PAD_REPEAT_FIRST = 320, PAD_REPEAT_NEXT = 110;   // ms — menu auto-repeat for held directions
+let padStates = [];   // per pad index → { held: Map<code, { ev, next }> }
+let padsSeen = 0;     // connected pads at the last poll (hints + the shell's controls row)
+function padCount() { return padsSeen; }
+// the canonical events for a seat (1 or 2) — read off BIND_ACTIONS' canonical
+// columns, never the player's physical bindings
+function padSeatKeys(seat) {
+  const pick = (suffix) => { const a = BIND_ACTIONS.find(x => x.id === 'p' + seat + '_' + suffix); return { key: a.key, code: a.code }; };
+  return { up: pick('up'), down: pick('down'), left: pick('left'), right: pick('right'),
+           dash: pick('dash'), atk: pick('atk'), cycle: pick('cycle') };
+}
+const PAD_FIXED = {
+  confirm: { key: 'z', code: 'KeyZ' }, back: { key: 'Backspace', code: 'Backspace' },
+  pause: { key: 'p', code: 'KeyP' }, s1: { key: '1', code: 'Digit1' }, s2: { key: '2', code: 'Digit2' }, s3: { key: '3', code: 'Digit3' },
+};
+function padEvent(k, repeat) { return { key: k.key, code: k.code, repeat: !!repeat, pad: true, preventDefault() {} }; }
+// is the second pad a seat right now? (couch co-op on the intro, or a couch run)
+function padSeatFor(i) {
+  if (i === 0) return 1;
+  if (i === 1 && !netplay && (started ? coop : isLocalMulti())) return 2;
+  return 0;   // no seat — ignored
+}
+function padPoll() {
+  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return;
+  let pads;
+  try { pads = navigator.getGamepads() || []; } catch (_) { return; }
+  const now = performance.now();
+  const menuish = !started || paused || !alive || shellMenu || !!bossIntro;
+  let seen = 0;
+  for (let i = 0; i < pads.length && i < 2; i++) {
+    const gp = pads[i];
+    if (!padStates[i]) padStates[i] = { held: new Map() };
+    const st = padStates[i];
+    const want = new Map();   // code → canonical event for everything pressed this poll
+    const seat = gp && gp.connected !== false ? padSeatFor(i) : 0;
+    if (gp && gp.connected !== false) seen++;
+    if (seat) {
+      const K = padSeatKeys(seat);
+      const b = (n) => !!(gp.buttons[n] && (gp.buttons[n].pressed || gp.buttons[n].value > 0.5));
+      const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+      const add = (k) => { if (!want.has(k.code)) want.set(k.code, k); };
+      if (b(12) || ay < -PAD_DEAD) add(K.up);
+      if (b(13) || ay > PAD_DEAD)  add(K.down);
+      if (b(14) || ax < -PAD_DEAD) add(K.left);
+      if (b(15) || ax > PAD_DEAD)  add(K.right);
+      if (b(0)) add(PAD_FIXED.confirm);
+      if (b(1)) add(PAD_FIXED.back);
+      if (b(2)) add(K.atk);
+      if (b(3)) add(K.cycle);
+      if (b(4) || b(5) || b(6) || b(7)) add(K.dash);
+      if (b(9)) add(PAD_FIXED.pause);
+      if (b(10)) add(PAD_FIXED.s1);
+      if (b(11)) add(PAD_FIXED.s2);
+      if (b(8)) add(PAD_FIXED.s3);
+    }
+    // releases first (a code that moved from one button to another stays held)
+    for (const [code, h] of st.held) {
+      if (!want.has(code)) { st.held.delete(code); offKey(padEvent(h.ev)); }
+    }
+    // presses + menu auto-repeat for the four directions
+    for (const [code, k] of want) {
+      const h = st.held.get(code);
+      if (!h) { st.held.set(code, { ev: k, next: now + PAD_REPEAT_FIRST }); onKey(padEvent(k)); continue; }
+      const dir = k.key === 'ArrowUp' || k.key === 'ArrowDown' || k.key === 'ArrowLeft' || k.key === 'ArrowRight'
+               || k.key === 'w' || k.key === 'a' || k.key === 's' || k.key === 'd';
+      if (menuish && dir && now >= h.next) { h.next = now + PAD_REPEAT_NEXT; onKey(padEvent(k, true)); }
+    }
+  }
+  padsSeen = seen;
+}
+// every synthetic key goes up when the game stops (mirrors dropKeys for the keyboard)
+function padRelease() {
+  for (const st of padStates) if (st) { for (const h of st.held.values()) offKey(padEvent(h.ev)); st.held.clear(); }
+}
+
 // ── input — onKey (~300 lines), key-name normalization, listener wiring, boot ──
 // The key map is keyed by a Shift-invariant name: single characters are lowercased so a
 // letter released while Shift is held (keyup fires as 'D', not 'd') still clears the same
@@ -9703,7 +10336,11 @@ function skipToIan() {
 // e.g. holding 'd' to run right + tapping Shift leaves keys['d'] true forever. (Arrow keys
 // aren't case-sensitive, which is why only P2's letter movement was affected.)
 const keyName = (k) => (k.length === 1 ? k.toLowerCase() : k);
-function onKey(e) {
+function onKey(raw) {
+  // a rebind capture reads the RAW key; everything else sees the canonical
+  // translation (remapKey — identity unless custom bindings exist, see 22-binds)
+  if (bindCapture !== null && shellMenu) { captureBind(raw); raw.preventDefault(); return; }
+  const e = remapKey(raw);
   keys[keyName(e.key)] = true;
   // watching a replay: Q leaves; every other key belongs to the legend, not you
   if (replayMode) {
@@ -9715,17 +10352,21 @@ function onKey(e) {
   // online the sim runs underneath, and menu arrows must not steer your hero)
   if (shellMenu) {
     keys[keyName(e.key)] = false;
-    if (e.key === 'ArrowUp') shellSel = (shellSel + 3) % 4;
-    else if (e.key === 'ArrowDown') shellSel = (shellSel + 1) % 4;
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    if (shellPage === 'binds') { bindsPageKey(e); e.preventDefault(); return; }   // the CONTROLS page owns its keys
+    if (e.key === 'ArrowUp') shellSel = (shellSel + SHELL_ROWS - 1) % SHELL_ROWS;
+    else if (e.key === 'ArrowDown') shellSel = (shellSel + 1) % SHELL_ROWS;
+    else if (shellSel === 4 && !e.repeat && ['ArrowRight', 'Enter', 'z', 'Z', ' '].includes(e.key)) {
+      shellPage = 'binds'; bindSel = 0;   // controls › — the rebinding page
+      if (sfSfx.killE) sfSfx.killE();
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       if (shellSel === 0) sfOpts.shake = sfOpts.shake === 1 ? 0.5 : sfOpts.shake === 0.5 ? 0 : 1;
       else if (shellSel === 1) sfOpts.kick = sfOpts.kick > 0 ? 0 : 1;
       else if (shellSel === 2) sfOpts.flash = sfOpts.flash > 0 ? 0 : 1;
-      else sfOpts.hiVis = !sfOpts.hiVis;
+      else if (shellSel === 3) sfOpts.hiVis = !sfOpts.hiVis;
       saveOpts();
       if (sfSfx.killE) sfSfx.killE();
     } else if (!e.repeat && ['p', 'P', 'q', 'Q', 'Enter', 'z', 'Z'].includes(e.key)) {
-      if (!netplay) recPush([tick + 1, 13, 0]);   // the unpause is a sim beat too
+      if (!netplay && started) recPush([tick + 1, 13, 0]);   // the unpause is a sim beat too
       shellToggle();
     }
     e.preventDefault();
@@ -9735,6 +10376,13 @@ function onKey(e) {
   // replays hold the beats; online it overlays a live sim and records nothing)
   if ((e.key === 'p' || e.key === 'P') && !e.repeat && started && alive && !bossIntro && !killCam && !paused) {
     if (!netplay) recPush([tick + 1, 13, 0]);
+    shellToggle();
+    e.preventDefault();
+    return;
+  }
+  // P on the title screen opens the same shell (settings + the CONTROLS page)
+  // with nothing running to pause — rebind before the first run, not mid-horde
+  if ((e.key === 'p' || e.key === 'P') && !e.repeat && !started && !netUi && !introConfirm && !showTrophies && !showBestiary) {
     shellToggle();
     e.preventDefault();
     return;
@@ -9753,8 +10401,8 @@ function onKey(e) {
     return;
   }
   // the results ceremony: any key fast-forwards to the hall of legends
-  if (!alive && !killCam && !replayMode && deadT > 34 && deadT < 176) {
-    if (!e.repeat) deadT = 176;
+  if (!alive && !killCam && !replayMode && deadT > 34 && deadT < RESULTS_END - 2) {
+    if (!e.repeat) deadT = RESULTS_END - 2;
     e.preventDefault();
     return;
   }
@@ -9869,8 +10517,17 @@ function onKey(e) {
       e.preventDefault();
       return;
     }
-    if (e.key === 't' || e.key === 'T') { showTrophies = !showTrophies; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+    if (e.key === 't' || e.key === 'T') { showTrophies = !showTrophies; showBestiary = false; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
     if (showTrophies) { e.preventDefault(); return; }
+    // the bestiary: B toggles it; ↑↓ browse the foes while it is up
+    if (e.key === 'b' || e.key === 'B') { showBestiary = !showBestiary; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+    if (showBestiary) {
+      const n = BESTIARY.length;
+      if (e.key === 'ArrowUp')        { bestSel = (bestSel + n - 1) % n; if (sfSfx.killE) sfSfx.killE(); }
+      else if (e.key === 'ArrowDown') { bestSel = (bestSel + 1) % n; if (sfSfx.killE) sfSfx.killE(); }
+      else if (!e.repeat && ['q', 'Q', 'Backspace'].includes(e.key)) { showBestiary = false; if (sfSfx.killE) sfSfx.killE(); }
+      e.preventDefault(); return;
+    }
     const nRows = isLocalMulti() ? 4 : 3;   // top · sub · class (· P2 class in LOCAL)
     if (e.key === 'ArrowUp')   { introRow = (introRow + nRows - 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
     if (e.key === 'ArrowDown') { introRow = (introRow + 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
@@ -9884,7 +10541,7 @@ function onKey(e) {
       if (introRow === 0) menuTop = (menuTop + 1) % 2;
       else if (introRow === 1) {
         if (menuTop === 0) {
-          do { subSingle = (subSingle + d + 3) % 3; } while (subSingle === 1 && !hardUnlocked);   // HARD is skipped until earned
+          do { subSingle = (subSingle + d + 4) % 4; } while (subSingle === 1 && !hardUnlocked);   // HARD is skipped until earned
         } else {
           subMulti = (subMulti + d + 3) % 3;
         }
@@ -9926,6 +10583,7 @@ function onKey(e) {
       coop = menuTop === 1;                                  // LOCAL couch co-op
       dailyRun = menuTop === 0 && subSingle === 2;
       hardSel = menuTop === 0 && subSingle === 1;            // only reachable once hardUnlocked
+      mutSel = menuTop === 0 && subSingle === 3;             // ⚗ MUTATED (three seeded modifiers — see 04-mutators)
       // daily pins the shared per-day seed through the existing MP/replay hook;
       // a normal run clears it back to fresh entropy. The day is snapshotted with
       // the seed so a run crossing UTC midnight still submits to its own board.
@@ -9934,8 +10592,8 @@ function onKey(e) {
       init();                     // fresh state on the chosen seed (init reads classSel/coop/hardSel)
       beginRunProof();            // stamp the start time for the leaderboard's proof check
       started = true; frame = 0;
-      banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
-      bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
+      banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '') + (mutated ? ' · ⚗ MUTATED' : '');
+      bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : mutated ? mutatorNames().join('  ·  ') : '';
       // synchronous: the seed's first draws, live and in replay alike.
       // Hard mode gets no gifts — the run opens on a BANE instead.
       hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
@@ -10120,14 +10778,14 @@ function onKey(e) {
     init();
     beginRunProof();
     started = true;
-    banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
-    bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
+    banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '') + (mutated ? ' · ⚗ MUTATED' : '');
+    bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : mutated ? mutatorNames().join('  ·  ') : '';
     bannerT = 90; startSfMusic();
     hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
   }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
 }
-function offKey(e) { keys[keyName(e.key)] = false; }
+function offKey(raw) { keys[keyName(remapKey(raw).key)] = false; }
 function dropKeys() { keys = {}; }   // release everything (focus loss → missed keyups)
 // ⌘/Ctrl+V fills the JOIN code entry (the paste event carries the clipboard without
 // any permission prompt; only listened to on the code screen)

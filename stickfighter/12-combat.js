@@ -46,6 +46,7 @@ function killEnemy(e) {
   e.dead = true;
   kills++;
   killsByType[e.type] = (killsByType[e.type] || 0) + 1;
+  bestiaryKill(e.type);   // the lore ledger (bookkeeping only)
   // HIT-STOP: every kill lands with weight — a beat for a grunt, a held breath
   // for a troll or an elite, the world stopping for a boss
   hitStopFor(e.type === 'witchking' || e.type === 'vader' || e.type === 'sidious' ? 12
@@ -136,8 +137,12 @@ function killEnemy(e) {
 // a blow lands on hero h: the Aegis eats it if charged, otherwise the hero falls.
 // In single-player a fall ends the run outright; in co-op the hero is DOWN and the
 // run only ends once both heroes are down (see downHero/endRun).
-function strike(h) {
+// `src` names what landed the blow — the enemy object, or a { type, via } tag for
+// projectiles/hazards — and `via` the manner (flail, saber, keg…). Bookkeeping only:
+// it feeds the death recap (lastBlow), nothing in the sim reads it.
+function strike(h, src, via) {
   if (!h || h.down || h.dashT > 0 || h.iframe > 0) return;  // mid-dash i-frames / just-shielded
+  if (src) lastBlow = { type: src.type || 'unknown', elite: src.elite | 0, via: via || (src.via || ''), wave, seat: heroSeat(h) };
   // (render-only) the living camera lurches WITH the blow — away from the likely striker
   let kdx = 0, kdy = 1, kbest = Infinity;
   for (const e of enemies) {
@@ -205,6 +210,7 @@ function endRun() {
     return;
   }
   alive = false;
+  saveBestiary();                    // the run's sightings and kills land in the ledger
   if (dailyRun) sfUnlock('daily');   // seeing a daily through counts, win or lose
   lbTicks = tick; lbKills = kills;   // the run's proof stats, frozen at death
   if (score > best) { best = score; newBest = true; try { localStorage.setItem('ilaird_sf_best', String(best)); } catch (_) { /* private mode */ } }
@@ -219,4 +225,4 @@ function reviveHero(h) {
   banner = (h === player ? 'PLAYER 1' : 'PLAYER 2') + ' REVIVED'; bannerSub = ''; bannerT = 70;
 }
 // legacy name kept for the Force-choke death path (a guaranteed kill of P1)
-function slayPlayer() { strike(player); }
+function slayPlayer() { strike(player, { type: 'vader' }, 'choke'); }

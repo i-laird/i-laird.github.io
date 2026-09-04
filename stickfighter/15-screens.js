@@ -198,17 +198,20 @@ function drawShellMenu() {
   ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 0, GW, GH);
   ctx.textAlign = 'center';
   ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8;
-  const y0 = Math.round(GH * 0.24);
+  const y0 = Math.round(GH * (shellPage === 'binds' ? 0.14 : 0.24));
+  if (shellPage === 'binds') { drawBindsPage(y0); ctx.restore(); ctx.textAlign = 'left'; return; }
   ctx.font = 'bold 26px Tahoma,Arial'; ctx.fillStyle = '#ffd24d';
-  ctx.fillText(netplay ? 'SETTINGS' : 'PAUSED', GW / 2, y0);
+  ctx.fillText(netplay ? 'SETTINGS' : started ? 'PAUSED' : 'SETTINGS', GW / 2, y0);
   ctx.font = '12px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
-  ctx.fillText(netplay ? 'the war band fights on — settings are yours alone' : 'the horde waits', GW / 2, y0 + 22);
+  ctx.fillText(netplay ? 'the war band fights on — settings are yours alone' : started ? 'the horde waits' : 'what you see, and what you press', GW / 2, y0 + 22);
   ctx.shadowBlur = 0;
+  const nCustom = sfOpts.binds ? Object.keys(sfOpts.binds).length : 0;
   const rows = [
     ['screen shake', sfOpts.shake === 0 ? 'off' : sfOpts.shake < 1 ? 'half' : 'full'],
     ['camera kicks', sfOpts.kick > 0 ? 'on' : 'off'],
     ['impact flashes', sfOpts.flash > 0 ? 'full' : 'reduced'],
     ['high-contrast elites', sfOpts.hiVis ? 'on' : 'off'],
+    ['controls', (nCustom ? nCustom + ' rebound' : 'default') + (padCount() ? ' · 🎮' : '') + '  ›'],
   ];
   for (let i = 0; i < rows.length; i++) {
     const hot = i === shellSel;
@@ -221,7 +224,7 @@ function drawShellMenu() {
   }
   ctx.textAlign = 'center';
   ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#9fb0c0';
-  ctx.fillText('↑ ↓ — choose   ·   ◀ ▶ — change   ·   P — ' + (netplay ? 'close' : 'resume'), GW / 2, y0 + 60 + rows.length * 30 + 16);
+  ctx.fillText('↑ ↓ — choose   ·   ◀ ▶ — change   ·   P — ' + (netplay || !started ? 'close' : 'resume'), GW / 2, y0 + 60 + rows.length * 30 + 16);
   ctx.restore(); ctx.textAlign = 'left';
 }
 
@@ -345,6 +348,50 @@ function panel(lines) {
    Before the boards: the run gets a reckoning. Lines land one per beat and the
    score counts up — all deadT-driven (deterministic; any key fast-forwards
    deadT past it, see onKey). Replay watchers skip straight to their ending. */
+/* ── the DEATH RECAP (render-only, off `lastBlow` — see strike) ──
+   "I died" becomes "I know what to try next": what landed the blow, how, and one
+   line of counsel keyed to the killer. Bookkeeping only — nothing here is sim-read. */
+const BLOW_NAMES = { goblin: 'a goblin', wolf: 'a wolf', archer: 'a skeleton archer', troll: 'a troll', shaman: 'a goblin shaman',
+  bomber: 'a bombardier', ogre: 'the War-Ogre', wraith: 'a ringwraith', witchking: 'the Witch-king', trooper: 'a stormtrooper',
+  vader: 'Darth Vader', guard: 'a Royal Guard', sidious: 'Darth Sidious', dio: 'DIO', ian: 'the creator' };
+const ELITE_NAMES = { goblin: ['a shield-bearer goblin', 'a goblin warlord'], wolf: ['a frost wolf', 'a dire frost wolf'],
+  archer: ['a volley archer', 'a deadeye'], troll: ['a bull troll', 'a dread troll'] };
+const BLOW_ADVICE = {
+  goblin: 'goblins steer with momentum — cut sideways at the last moment and they skid past; then swing.',
+  wolf: 'wolves lunge straight along the flashing sight line — step OFF the line, never along it.',
+  archer: 'arrows fly the aimed line — strafe between volleys, or bat them away with a swing.',
+  troll: 'trolls swing wide and take three hearts — hit and run; never trade inside the club.',
+  shaman: 'the shaman never attacks — its pack does, hastened. freeze it, or dash it down before the ring spreads.',
+  bomber: 'the keg lands where you WERE — keep moving after the throw, and let the pack eat the blast.',
+  ogre: 'the charge locks a straight line at the flash — leave the line, then punish the recovery.',
+  wraith: 'the Nine lunge together on the flash — dash THROUGH the ring, never away from it.',
+  witchking: 'the dive follows the purple line; on foot the flail reaches past his body — stay behind him.',
+  trooper: 'blaster bolts are slow and inaccurate — close before the squad forms, and swing to deflect.',
+  vader: 'his lunge follows the grey flash — dash through him, not back; nine hearts, so patience.',
+  guard: "the guard's pike lunge is telegraphed — sidestep it and take the two hits it has.",
+  sidious: 'leave the lightning corridor sideways, dash through the bolt, and circle faster than the rake.',
+  dio: 'weave the knife gaps after time resumes; the roller only lands inside its drawn zone.',
+};
+const VIA_ADVICE = {
+  keg: 'the keg lands where you WERE standing — keep moving after every throw; the blast wounds the horde too.',
+  choke: 'the choke only takes a standing P1 — mash attack and dash to break it, or keep your distance from the flash.',
+  lightning: 'the corridor builds for a long beat — leave it SIDEWAYS; dash i-frames beat the bolt itself.',
+  roller: 'ROAD ROLLER DA — the slam lands only inside the telegraphed zone; walk out of it during stopped time.',
+  arrow: 'arrows fly the aimed line — strafe between volleys, or bat them away with a swing.',
+};
+function blowName(b) {
+  if (!b) return '';
+  const el = b.elite && ELITE_NAMES[b.type] ? ELITE_NAMES[b.type][Math.min(2, b.elite) - 1] : null;
+  return (el || BLOW_NAMES[b.type] || 'the horde') + (b.via ? ' · ' + b.via : '');
+}
+function blowAdvice(b) {
+  if (!b) return '';
+  if (b.elite === 1 && b.type === 'wolf') return 'a frost wolf chills you on a brush — the dash is the escape valve; it ignores the chill.';
+  if (b.elite === 2 && b.type === 'wolf') return 'the dire wolf chills everything inside its ring — kill it at range, or dash clear.';
+  if (b.elite && b.type === 'troll') return 'a wounded elite troll ENRAGES — finish it in one rush, or leave it for the freeze.';
+  return VIA_ADVICE[b.via] || BLOW_ADVICE[b.type] || 'the horde is patient — it only needs you to stop moving once.';
+}
+const RESULTS_END = 262;   // deadT at which the reckoning yields to the boards (any key skips there)
 function drawResults() {
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.66)'; ctx.fillRect(0, 0, GW, GH);
@@ -356,7 +403,7 @@ function drawResults() {
   // the fallen, ranked — the horde knows who did the work
   const byN = Object.entries(killsByType).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const row = (i, label, value, col) => {
-    const at = 56 + i * 22;                       // each line lands on its own beat
+    const at = 56 + i * 18;                       // each line lands on its own beat
     if (deadT < at) return;
     const a = Math.min(1, (deadT - at) / 12);
     ctx.globalAlpha = a;
@@ -370,9 +417,13 @@ function drawResults() {
   row(i++, 'waves survived', String(wave) + (hardMode ? '  ☠' : '') + (endless ? '  ∞' : ''), '#ffd24d');
   row(i++, 'the fallen', String(kills), '#ff8a80');
   if (byN.length) row(i++, 'mostly', byN.map(([t, n]) => t + ' ×' + n).join(' · '), '#c8d2da');
+  if (lastBlow) row(i++, 'slain by', blowName(lastBlow) + (coop ? '  (P' + (lastBlow.seat + 1) + ')' : ''), '#ff6e6e');
+  const picked = heroesAll().flatMap(h => h.bn.picked).map(id => (BOONS.find(b => b.id === id) || BANES.find(b => b.id === id) || {}).name).filter(Boolean);
+  row(i++, 'you fought as', player.cls.toUpperCase() + (coop && p2 ? ' + ' + p2.cls.toUpperCase() : '') + (picked.length ? '  ·  ' + picked.join(' · ').toLowerCase() : ''), '#c8d2da');
+  if (mutated && activeMuts.length) row(i++, 'mutators', activeMuts.map(id => (MUTATORS.find(m => m.id === id) || {}).name).filter(Boolean).join(' · ').toLowerCase(), '#ce93d8');
   row(i++, 'tokens banked', String(tokens), '#80deea');
   // the score counts up over the last stretch of the ceremony
-  const sAt = 56 + i * 22;
+  const sAt = 56 + i * 18;
   if (deadT >= sAt) {
     const sp = Math.min(1, (deadT - sAt) / 40);
     const shown = Math.round(score * (1 - (1 - sp) * (1 - sp)));
@@ -382,13 +433,18 @@ function drawResults() {
       ctx.font = 'bold 14px Tahoma,Arial'; ctx.fillStyle = '#7CFC8A';
       ctx.fillText('★ A NEW LEGEND — your best ★', GW / 2, y0 + 88 + i * 27);
     }
+    // one line of counsel, keyed to the killer — the part of dying that is worth reading
+    if (sp >= 1 && lastBlow) {
+      ctx.font = 'italic 12px Tahoma,Arial'; ctx.fillStyle = '#aeb9c4';
+      ctx.fillText('“' + blowAdvice(lastBlow) + '”', GW / 2, y0 + (newBest ? 108 : 90) + i * 27);
+    }
   }
   ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = 'rgba(200,210,220,0.6)'; ctx.textAlign = 'center';
   ctx.fillText('any key — the hall of legends awaits', GW / 2, GH - 44);
   ctx.restore(); ctx.textAlign = 'left';
 }
 function drawDeathScreen() {
-  if (!replayMode && deadT < 178) { drawResults(); return; }
+  if (!replayMode && deadT < RESULTS_END) { drawResults(); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.62)';
   ctx.fillRect(0, 0, GW, GH);
   ctx.textAlign = 'center';
@@ -410,7 +466,8 @@ function drawDeathScreen() {
   ctx.fillText('SCORE ' + score + (newBest ? '   ★ NEW BEST ★' : '   ·   BEST ' + best), cx, y); y += 25;
   ctx.font = '14px Tahoma,Arial'; ctx.fillStyle = '#ccc';
   ctx.fillText('you survived ' + wave + (wave === 1 ? ' wave' : ' waves') +
-               '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes'), cx, y); y += 20;
+               '  ·  slew ' + kills + (kills === 1 ? ' foe' : ' foes') +
+               (lastBlow && !replayMode ? '  ·  slain by ' + blowName(lastBlow) : ''), cx, y); y += 20;
   if (dailyRun) {
     ctx.font = 'bold 13px Tahoma,Arial'; ctx.fillStyle = '#ffb300';
     ctx.fillText('☀ daily challenge · ' + dailyDayPretty(), cx, y); y += 20;
@@ -437,6 +494,9 @@ function drawDeathScreen() {
     if (cheated) {
       ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#8a949a';
       ctx.fillText('cheats were used — this run is unranked', cx, y); y += 22;
+    } else if (mutated) {
+      ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ce93d8';
+      ctx.fillText('⚗ ' + mutatorNames().join(' · ') + ' — mutated runs are unranked', cx, y); y += 22;
     }
     ctx.font = '13px Tahoma,Arial'; ctx.fillStyle = '#ccc';
     ctx.fillText('press R to rise again', cx, y);

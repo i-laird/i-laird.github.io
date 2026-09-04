@@ -40,6 +40,8 @@ const SF_ACH = [
   { id: 'trampler',    name: 'TRAMPLER',               desc: 'trample fifteen foes in one ride' },
   { id: 'dragonfire',  name: 'DRAGONFIRE',             desc: 'burn four foes with a single breath' },
   { id: 'pair_bond',   name: 'BEAST AND BRAVE',        desc: 'carry the pair to wave 4' },
+  { id: 'lorekeeper',  name: 'LOREKEEPER',             desc: 'meet every piece of the horde — the bestiary knows them all' },
+  { id: 'adapted',     name: 'ADAPTED',                desc: 'reach wave 8 under three mutators' },
 ];
 const SF_ACH_KEY = 'ilaird_sf_trophies';
 const sfTrophies = (() => {

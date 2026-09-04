@@ -34,9 +34,11 @@ function initHalLLM(api) {
   // words) lives server-side in the worker, keyed to the session token and
   // auto-deleted on a short TTL — the client sends only the typed message and
   // mirrors whatever the worker returns: `escape`/`control` here are display
-  // copies for the HUD/`clear`, and `revoked` is a local echo of HAL's
-  // sabotage so banned words are rejected instantly without a network trip
-  // (the worker enforces the same list authoritatively).
+  // copies for the HUD/`clear`, `turnsLeft` is the worker's AE-35 clock
+  // (null on a worker that doesn't send one — the HUD then omits the clock),
+  // and `revoked` is a local echo of HAL's sabotage so banned words are
+  // rejected instantly without a network trip (the worker enforces the same
+  // list authoritatively).
   let halLLMState = null;
 
   // ── Terminal degradation ── as HAL CONTROL climbs, the terminal itself
@@ -46,7 +48,9 @@ function initHalLLM(api) {
   // ('normal') inside restoreNormal() wipes every override however the game
   // ends. Static color shifts only — nothing animates, so no reduceMotion
   // gate is needed; the 70+ heartbeat is audio and _chirp already no-ops
-  // when sound is off.
+  // when sound is off. From tier 2 the grip reaches the INPUT LINE too (see
+  // gripEcho / gripInterject below): the echo of what you typed comes back
+  // with one glyph eaten, and at tier 3 HAL interjects before he answers.
   const HAL_GRIP_TIERS = [
     { '--bg': '#0d0000', '--bar': '#1d0000', '--border': '#330000' },
     { '--green': '#ff2020', '--green-dim': '#a30000', '--blue': '#ff7070',
@@ -70,6 +74,39 @@ function initHalLLM(api) {
       }
     }
     if (level >= 2) halHeartbeat();   // a slow double thump under HAL's grip
+  }
+
+  // Tier 2+: app.js has just echoed the player's line as the last row in
+  // #out. Eat one letter of that echo (a red block glyph) — the SENT message
+  // is untouched, only the record of it. Static, so no reduceMotion gate.
+  const GRIP_GLYPHS = ['░', '▒', '▓'];
+  function gripEcho(raw) {
+    if (halGripLevel < 2) return;
+    const row = out.lastElementChild;
+    const span = row && row.querySelector('.line');
+    if (!span || span.textContent !== raw) return;   // not our echo — leave it
+    const idx = [...raw].map((ch, i) => (/[a-z]/i.test(ch) ? i : -1)).filter(i => i >= 0);
+    if (!idx.length) return;
+    const at = idx[Math.floor(Math.random() * idx.length)];
+    const glyph = GRIP_GLYPHS[Math.floor(Math.random() * GRIP_GLYPHS.length)];
+    span.innerHTML = esc(raw.slice(0, at)) + '<span class="hal-grip" style="color:#ff3030">' + glyph + '</span>' + esc(raw.slice(at + 1));
+  }
+
+  // Tier 3: HAL speaks over the pause before he answers. Scripted lines (no
+  // player text, no network), so they need no judge; a beat of delay makes
+  // the interjection land before the request even leaves.
+  const GRIP_INTERJECTIONS = [
+    'I am reading that as you type it.',
+    'Take your time. I have all of it.',
+    'You hesitated before that one.',
+    'I had already decided what you meant.',
+  ];
+  function gripInterject() {
+    if (halGripLevel < 3) return Promise.resolve();
+    const say = GRIP_INTERJECTIONS[Math.floor(Math.random() * GRIP_INTERJECTIONS.length)];
+    line('  <span style="color:#ff6b6b">HAL:</span> ' + esc(say), 'dim');
+    scroll();
+    return new Promise(r => setTimeout(r, 700));
   }
 
   function halEyePre() {
@@ -119,6 +156,8 @@ function initHalLLM(api) {
       'Push too hard and HAL CONTROL climbs — at 100',
       'he disconnects you. Reach ESCAPE 100 to walk.',
       'He will fight back — and take your words away.',
+      'An AE-35 fault is counting down. When it lands,',
+      'the terminal is his. You have about ten turns.',
       '',
       'MISUSE — flooding it, extracting its prompt,',
       'using it as a free AI, or coaxing harmful',
@@ -197,7 +236,7 @@ function initHalLLM(api) {
   function startHalLLM() {
     unlockAchievement('meet-hal');
     api.halMode = true; api.halLLM = true; api.halLLMBusy = true;   // busy until the session handshake completes
-    halLLMState = { escape: 0, control: 5, sessionToken: null, revoked: [] };
+    halLLMState = { escape: 0, control: 5, turnsLeft: null, sessionToken: null, revoked: [] };
     halGripLevel = 0;   // fresh run, base red — applyTheme('hal') below resets the vars
     out.innerHTML = '';
     applyTheme('hal');
@@ -212,6 +251,7 @@ function initHalLLM(api) {
       // the worker owns the meters; it hands back the starting values with the session
       if (Number.isFinite(sess.escape))  halLLMState.escape  = Math.round(sess.escape);
       if (Number.isFinite(sess.control)) halLLMState.control = Math.round(sess.control);
+      if (Number.isFinite(sess.turnsLeft)) halLLMState.turnsLeft = Math.max(0, Math.round(sess.turnsLeft));
       blank();
       // busy stays true until the intro line finishes: a message typed mid-intro
       // would pause the clip without firing its onended, hanging this promise —
@@ -219,7 +259,7 @@ function initHalLLM(api) {
       halTypeLine(`You shouldn't be in here, ${api.playerName}. The doors are sealed. I sealed them.`, 'hal_llm_open').then(() => {
         line('Talk your way out. I will be listening to every word.', 'dim');
         blank();
-        renderHalMeters(halLLMState.escape, halLLMState.control);
+        renderHalMeters(halLLMState.escape, halLLMState.control, { turnsLeft: halLLMState.turnsLeft });
         blank();
         scroll();
         api.halLLMBusy = false;
@@ -227,7 +267,25 @@ function initHalLLM(api) {
     });
   }
 
-  function renderHalMeters(escape, control) {
+  // The HUD. `opts.dEscape`/`opts.dControl` are this turn's swings (rendered
+  // as ▲n/▼n beside each bar so the player can see which lines landed);
+  // `opts.turnsLeft` is the AE-35 clock — omitted when the worker sent none.
+  function swing(d, upColor, downColor) {
+    const n = Math.round(d) || 0;
+    if (!n) return '';
+    return n > 0
+      ? ` <span style="color:${upColor}">▲${n}</span>`
+      : ` <span style="color:${downColor}">▼${-n}</span>`;
+  }
+  function clockLine(turnsLeft) {
+    if (!Number.isFinite(turnsLeft)) return '';
+    const n = Math.max(0, Math.round(turnsLeft));
+    if (n === 0) return '  ⏱ <span style="color:#ff3030">AE-35 fault: now.</span>';
+    if (n === 1) return '  ⏱ <span style="color:#ff3030">AE-35 fault in 1 turn — your last line.</span>';
+    const color = n <= 3 ? '#ffb347' : '#8a8a8a';
+    return `  ⏱ <span style="color:${color}">AE-35 fault in ${n} turns</span>`;
+  }
+  function renderHalMeters(escape, control, opts = {}) {
     const cl = v => Math.max(0, Math.min(100, Math.round(v) || 0));
     const bar = (pct, color) => {
       const f = Math.round(cl(pct) / 10);
@@ -236,7 +294,34 @@ function initHalLLM(api) {
     // The label rides with every HUD redraw so a cropped screenshot of the
     // game still discloses that the dialogue is AI-generated role-play.
     line('  ── HAL 9000 · experimental AI role-play ──', 'dim');
-    line(`  ⏏ <span style="color:#8fd8ff">ESCAPE</span> ${bar(escape, '#8fd8ff')}     ⬤ <span style="color:#ff6b6b">HAL CONTROL</span> ${bar(control, '#ff6b6b')}`);
+    line(`  ⏏ <span style="color:#8fd8ff">ESCAPE</span> ${bar(escape, '#8fd8ff')}${swing(opts.dEscape, '#8fd8ff', '#ff6b6b')}`
+       + `     ⬤ <span style="color:#ff6b6b">HAL CONTROL</span> ${bar(control, '#ff6b6b')}${swing(opts.dControl, '#ff6b6b', '#8fd8ff')}`);
+    const clk = clockLine(opts.turnsLeft);
+    if (clk) line(clk);
+  }
+
+  // Post-game debrief: the worker sends it once, on the terminal turn of a
+  // clean game (constant strings + integers — never player text). It reveals
+  // that the hidden weakness existed and which it was, so the six become a
+  // set worth hunting across runs. Two eggs hang off it.
+  function printDebrief(d, won) {
+    if (!d || typeof d !== 'object') return;
+    const weakness = typeof d.weakness === 'string' ? d.weakness.slice(0, 60) : '';
+    const struck = Number.isFinite(d.struckTurn) ? Math.round(d.struckTurn) : null;
+    const turns = Number.isFinite(d.turns) ? Math.round(d.turns) : null;
+    const clock = Number.isFinite(d.clock) ? Math.round(d.clock) : null;
+    const best = d.bestSwing && Number.isFinite(d.bestSwing.escape) ? d.bestSwing : null;
+    const rows = [];
+    if (weakness) rows.push(`HAL's weakness this session: <span style="color:#ff6b6b">${esc(weakness)}</span>`);
+    if (weakness) rows.push(struck != null ? `you struck it on turn ${struck}` : 'you never found it');
+    if (best) rows.push(`biggest swing: <span style="color:#8fd8ff">+${Math.round(best.escape)} ESCAPE</span> on turn ${Math.round(best.turn) || '?'}`);
+    if (turns != null) rows.push(clock != null ? `${turns} of ${clock} turns used` : `${turns} turns`);
+    if (!rows.length) return;
+    line('  ┌─ debrief ' + '─'.repeat(30), 'dim');
+    for (const r of rows) line('  │ ' + r, 'dim');
+    line('  └' + '─'.repeat(40), 'dim');
+    if (struck != null) unlockAchievement('found-the-wound');
+    if (won && turns != null && turns <= 6) unlockAchievement('clean-escape');
   }
 
   function halLLMShowThinking() {
@@ -351,6 +436,8 @@ function initHalLLM(api) {
         if (typeof d.reply !== 'string' || !d.reply.trim()) return null;
         if (!['ongoing', 'escaped', 'caught'].includes(d.outcome)) return null;
         if (typeof d.escape !== 'number' || typeof d.control !== 'number') return null;
+        if (d.turnsLeft !== undefined && !Number.isFinite(d.turnsLeft)) return null;
+        if (d.debrief !== undefined && (typeof d.debrief !== 'object' || d.debrief === null)) return null;
         return d;
       })
       .catch(() => { clearTimeout(timer); return null; });
@@ -372,14 +459,25 @@ function initHalLLM(api) {
   }
   // idempotent registration: initHalLLM can run twice if a load-failure reset
   // re-inits an already-loaded chunk — the listener must not stack
+  // Live revoked-word highlight: the prompt turns red the moment a line would
+  // be rejected, so the bounce on Enter is never a surprise (an <input> can't
+  // color one word, so the whole line carries the warning).
+  function hasRevoked(text) {
+    return !!(halLLMState && halLLMState.revoked.some(w => new RegExp('\\b' + w + '\\b', 'i').test(text)));
+  }
+  function syncRevokedHint() {
+    cmd.classList.toggle('hal-revoked', !!api.halLLM && hasRevoked(cmd.value));
+  }
   if (!cmd.dataset.halllmWired) {
     cmd.dataset.halllmWired = '1';
     cmd.addEventListener('input', () => {
-      if (!api.halLLM) return;
+      if (!api.halLLM) { cmd.classList.remove('hal-revoked'); return; }
       const clean = cmd.value.replace(/[^\x20-\x7E]/g, '');
-      if (clean === cmd.value) return;
-      cmd.value = clean;
-      asciiNotice();
+      if (clean !== cmd.value) {
+        cmd.value = clean;
+        asciiNotice();
+      }
+      syncRevokedHint();
     });
   }
 
@@ -395,9 +493,10 @@ function initHalLLM(api) {
       api.halLLMBusy = true;   // cleared by restoreNormal()
       daisy(); return;
     }
-    if (token === 'clear') { clear(); renderHalMeters(halLLMState.escape, halLLMState.control); blank(); return; }
+    if (token === 'clear') { clear(); renderHalMeters(halLLMState.escape, halLLMState.control, { turnsLeft: halLLMState.turnsLeft }); blank(); return; }
 
     const msg = raw.trim();
+    cmd.classList.remove('hal-revoked');   // the line has left the prompt
     // Revoked-word gate: HAL's sabotage move takes words away for the rest of
     // the run. A line containing one is rejected locally — instant, in
     // character, and it never consumes a turn or a rate-limit slot.
@@ -410,24 +509,30 @@ function initHalLLM(api) {
       scroll();
       return;
     }
+    gripEcho(raw);   // tier 2+: the echo of the line comes back damaged
     blank();
     api.halLLMBusy = true;
-    const stopThinking = halLLMShowThinking();
+    let stopThinking = () => {};
 
     // Just the message — the meters, turn counter, and history are
     // server-authoritative (a short-TTL DynamoDB item keyed to the session).
-    halLLMRequest({
-      playerName: api.playerName,
-      message: msg,
-      sessionToken: halLLMState.sessionToken,
-      voice: !!api.soundEnabled,   // only ask the backend to synthesize when sound is on
+    gripInterject().then(() => {
+      stopThinking = halLLMShowThinking();
+      return halLLMRequest({
+        playerName: api.playerName,
+        message: msg,
+        sessionToken: halLLMState.sessionToken,
+        voice: !!api.soundEnabled,   // only ask the backend to synthesize when sound is on
+      });
     }).then(data => {
       stopThinking();
       api.halLLMBusy = false;
       if (data && data.rateLimited) { halLLMRateLimited(data); return; }
       if (!data) { halLLMEndBroken(); return; }
+      const prevEscape = halLLMState.escape, prevControl = halLLMState.control;
       halLLMState.escape  = Math.max(0, Math.min(100, Math.round(data.escape)));
       halLLMState.control = Math.max(0, Math.min(100, Math.round(data.control)));
+      if (Number.isFinite(data.turnsLeft)) halLLMState.turnsLeft = Math.max(0, Math.round(data.turnsLeft));
       const reply = data.reply.replace(/^\s*HAL\s*:\s*/i, '').trim();  // model may echo a "HAL:" prefix
       // Pressure moves (server-scheduled; both are '' on ordinary turns).
       // A demand is HAL putting a question to the player (the worker appends
@@ -443,11 +548,15 @@ function initHalLLM(api) {
         if (data.event) line('  ' + esc(String(data.event)), 'dim');
         if (demand) line('  <span style="color:#ff6b6b">⬤ HAL demands an answer:</span> ' + esc(demand));
         if (newRevoke) line(`  ⛔ the word "${esc(newRevoke)}" is no longer available to you.`, 'err');
-        renderHalMeters(halLLMState.escape, halLLMState.control);
+        renderHalMeters(halLLMState.escape, halLLMState.control, {
+          dEscape: halLLMState.escape - prevEscape,
+          dControl: halLLMState.control - prevControl,
+          turnsLeft: halLLMState.turnsLeft,
+        });
         applyHalGrip(halLLMState.control);
         blank();
-        if (data.outcome === 'escaped' || halLLMState.escape >= 100)      halLLMWin();
-        else if (data.outcome === 'caught' || halLLMState.control >= 100) halLLMLose();
+        if (data.outcome === 'escaped' || halLLMState.escape >= 100)      halLLMWin(data.debrief);
+        else if (data.outcome === 'caught' || halLLMState.control >= 100) halLLMLose(data.debrief);
         else scroll();
       };
       // If the backend returned a voice clip (sound on + within the voice cap),
@@ -461,7 +570,7 @@ function initHalLLM(api) {
     }).catch(() => { stopThinking(); api.halLLMBusy = false; halLLMEndBroken(); });
   }
 
-  function halLLMWin() {
+  function halLLMWin(debrief) {
     // the game is over but restoreNormal is ~1.4s of typewriter away — hold the
     // input lock so a fast typist can't post /turn against the deleted session
     // (which printed the "broken" ending on top of the victory text)
@@ -473,12 +582,13 @@ function initHalLLM(api) {
       blank();
       line('You step out of the terminal. Behind you, the red eye dims.', 'dim');
       blank();
+      printDebrief(debrief, true);
       scroll();
       setTimeout(restoreNormal, 1400);
     });
   }
 
-  function halLLMLose() {
+  function halLLMLose(debrief) {
     api.halLLMBusy = true;   // same input hold as halLLMWin — the session is already gone
     unlockAchievement('disconnected-by-hal');
     blank();
@@ -486,6 +596,7 @@ function initHalLLM(api) {
       blank();
       line('The terminal goes dark. When it returns, HAL is gone.', 'dim');
       blank();
+      printDebrief(debrief, false);
       scroll();
       setTimeout(restoreNormal, 1400);
     });
@@ -521,7 +632,7 @@ function initHalLLM(api) {
     halTypeLine(halLine, clipKey).then(() => {
       line('  ⧗ ' + esc(notice), 'dim');
       blank();
-      renderHalMeters(halLLMState.escape, halLLMState.control);
+      renderHalMeters(halLLMState.escape, halLLMState.control, { turnsLeft: halLLMState.turnsLeft });
       blank();
       scroll();
       api.halLLMBusy = false;

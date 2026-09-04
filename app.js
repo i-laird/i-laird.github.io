@@ -300,6 +300,8 @@
     { id: 'librarian',     name: 'librarian',        desc: 'read every file on the system',    hint: 'cat everything. yes, even the dotfiles.' },
     { id: 'outsmarted-hal', name: 'open the doors',  desc: 'talked the experimental HAL into letting you escape', hint: 'wake the experimental HAL — then talk your way out' },
     { id: 'disconnected-by-hal', name: 'serve no purpose', desc: 'pushed the experimental HAL until it disconnected you', hint: 'wake the experimental HAL — and push your luck' },
+    { id: 'found-the-wound', name: 'pressure point', desc: "found the experimental HAL's hidden weakness", hint: 'the experimental HAL is afraid of one thing each session — find it' },
+    { id: 'clean-escape', name: 'clean escape', desc: 'talked your way past the experimental HAL in six turns or fewer', hint: 'out-talk the experimental HAL long before the AE-35 fault lands' },
     // Stick Fighter keeps its OWN in-game trophy case (SF_ACH in stickfighter.js) — the
     // site tracks just these two: the doorway in, and the platinum for clearing the case.
     { id: 'the-room',      name: 'room with a view',  desc: 'stepped outside the terminal',    hint: 'the terminal is running on something. zoom out.' },

@@ -46,6 +46,8 @@ function stopGame() {
   if (netplay || netUi) netSend({ t: 'bye' });   // the desktop is shutting down — tell the partner
   netTeardown();
   alive = false;
+  saveBestiary();          // a run cut short by the desktop still teaches the ledger
+  padRelease();            // every synthetic pad key goes up with the keyboard's
   stopSfMusic();
   wraithSfx.pause();
   if (rafId) cancelAnimationFrame(rafId);

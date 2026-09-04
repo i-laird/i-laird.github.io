@@ -46,10 +46,10 @@ function rollType() {
 //           (the chill is a 90px AURA) · deadeye (five faster arrows) · dread
 //           troll (8 HP, roars into a harder enrage)
 function rollElite() {
-  if (!endless && !hardMode) return 0;
-  // hard mode runs the elite math five waves deep: elites stalk from wave 1
-  // (gently), and the dread tier arrives by wave 4 instead of 9
-  const w = wave + (hardMode ? 5 : 0);
+  if (!endless && !hardMode && !bn.eliteEarly) return 0;
+  // hard mode (and the BLOOD MOON mutator) runs the elite math five waves deep:
+  // elites stalk from wave 1 (gently), and the dread tier arrives by wave 4 instead of 9
+  const w = wave + (hardMode || bn.eliteEarly ? 5 : 0);
   if (rnd() >= Math.min(0.5, 0.06 * (w - 5))) return 0;
   // a rolled elite may ascend to the dread tier — rarer, and only in deep waves
   return w >= 9 && rnd() < Math.min(0.25, 0.04 * (w - 8)) ? 2 : 1;
@@ -147,5 +147,6 @@ function makeEnemy(type, x, y, elite) {
     // the creator: unarmed, harmless, never attacks — the fight is a choice, not a duel
     e.kr = 0; e.hp = 99; e.mode = 'idle'; e.phase = 0; e.crumble = 0; e.fade = 1;
   }
+  if (started && alive) bestiarySeen(type);   // the lore ledger (bookkeeping only — never read back; the title's previews don't count)
   return e;
 }

@@ -747,8 +747,10 @@ function drawBattlefield() {
     if (++w.t >= w.T) fieldWash = null;
   }
   // 7) the dark leans in from the edges — and leans in HARDER under dread
-  const v = ctx.createRadialGradient(GW / 2, GH * 0.52, Math.min(GW, GH) * (0.36 - dread * 0.09), GW / 2, GH * 0.52, Math.max(GW, GH) * 0.75);
-  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (0.4 + dread * 0.18).toFixed(3) + ')');
+  //    (FOG OF WAR — the mutator — pulls the rim in hard: render-only, seeded choice)
+  const fog = bn && bn.fog ? 1 : 0;
+  const v = ctx.createRadialGradient(GW / 2, GH * 0.52, Math.min(GW, GH) * (0.36 - dread * 0.09 - fog * 0.16), GW / 2, GH * 0.52, Math.max(GW, GH) * (0.75 - fog * 0.25));
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (0.4 + dread * 0.18 + fog * 0.45).toFixed(3) + ')');
   ctx.fillStyle = v; ctx.fillRect(-30, -30, GW + 60, GH + 60);
   // 8) EYES IN THE DARK: during the breather, red glints blink open in the
   //    vignette darkness — the next wave, already watching (steady under RM);

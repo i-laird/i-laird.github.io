@@ -11,6 +11,7 @@
 let lastFrameTs = null;
 function frameStep(ts) {
   rafId = requestAnimationFrame(frameStep);
+  padPoll();   // gamepads → the same synthetic key events the keyboard sends (see 22-gamepad)
   const now = (typeof ts === 'number') ? ts : performance.now();
   if (lastFrameTs === null) lastFrameTs = now;
   const dt = Math.max(0, Math.min(0.25, (now - lastFrameTs) / 1000));
@@ -139,10 +140,11 @@ function loop() {
       return;
     }
     drawIntroScreen();
+    if (shellMenu) drawShellMenu();   // P on the title: settings + controls, nothing to pause
     drawTrophyToasts();
     hud.innerHTML = 'BEST: ' + best + ' · ' +
       (menuTop === 1 ? (subMulti === 0 ? '2-PLAYER' : subMulti === 1 ? '🌐 HOST' : '🌐 JOIN')
-                     : (subSingle === 2 ? '☀ DAILY' : subSingle === 1 ? '☠ HARD' : '1-PLAYER')) +
+                     : (subSingle === 2 ? '☀ DAILY' : subSingle === 1 ? '☠ HARD' : subSingle === 3 ? '⚗ MUTATED' : '1-PLAYER')) +
       '<br>double-click icon to quit';
     frame++;
     return;
@@ -184,7 +186,7 @@ function loop() {
     drawTrophyToasts();
     hud.innerHTML = netplay && boonMenu && (boonMenu.who | 0) !== netSeat
       ? '⏳ Player ' + ((boonMenu.who | 0) + 1) + ' is choosing…<br>(everyone picks their OWN boon)'
-      : shellMenu ? 'PAUSED — settings<br>↑↓ rows · ◀ ▶ change · P resumes'
+      : shellMenu ? (shellPage === 'binds' ? 'PAUSED — controls<br>Enter rebinds · Backspace resets · P back' : 'PAUSED — settings<br>↑↓ rows · ◀ ▶ change · P resumes')
       : (boonMenu
         ? (boonMenu.bane ? 'a bane must be borne' : (coop ? 'P' + ((boonMenu.who | 0) + 1) + ' — your boon is offered' : 'a boon is offered')) + '<br>◀ ▶ choose · Z takes it'
         : ((upMenu && upMenu.title) || ('WAVE ' + wave + ' CLEARED')) + '<br>spend tokens · ' + tokens + ' left'
@@ -365,8 +367,10 @@ function loop() {
       if (hardMode && wave >= 5) sfUnlock('hard_5');
       if (wave >= 6 && runFlawless) sfUnlock('unscathed');       // five waves, not one blow landed
       if (wave >= 5 && tick <= 3 * 60 * SIM_HZ) sfUnlock('swift'); // tick-based, so replays agree
+      if (mutated && wave >= 8) sfUnlock('adapted');
       waveQuota = Math.min(30 + 10 * (partySize() - 1), bandScale(8 + wave * 3));
-      if (up.shield) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave
+      if (bn.quotaMul !== 1) waveQuota = Math.round(waveQuota * bn.quotaMul);   // SWARM (mutator)
+      if (up.shield && !bn.noRefresh) for (const h of heroesAll()) h.shield = true;   // the Aegis recharges for every hero at the dawn of each wave (unless GLASS AEGIS)
       banner = 'WAVE ' + wave;
       bannerSub = { 2: 'the wolves are loosed', 3: 'skeleton archers nock their arrows', 4: 'the trolls have come' }[wave] || '';
       bannerT = 90;
@@ -467,7 +471,7 @@ function loop() {
     const p = farPoint(50);
     coins.push({ x: p.x, y: p.y, t: 620 });
   }
-  if (frame > 800 && frame % 660 === 0 && powerups.length < 1 && !ianActive && !mournful && !jojoActive) {
+  if (frame > 800 && frame % 660 === 0 && powerups.length < 1 && !ianActive && !mournful && !jojoActive && !bn.noPowerups) {
     const p = farPoint(70);
     powerups.push({ x: p.x, y: p.y, kind: ['freeze', 'fire', 'bolt'][Math.floor(rnd() * 3)], t: 700 });
   }
@@ -849,7 +853,7 @@ function loop() {
       const inSaddle = h.cls === 'rider' && h.mounted;
       const d = Math.hypot(h.x - e.x, h.y - e.y);
       const bodyR = e.kr + PLAYER_R + (h.cls === 'wyrm' ? WYRM_R : 0);
-      if (!inSaddle && d < bodyR) { strike(h); if (!alive) return; continue; }   // bodies overlap → struck
+      if (!inSaddle && d < bodyR) { strike(h, e); if (!alive) return; continue; }   // bodies overlap → struck
       // the frost wolf chills a hero who brushes close; the DIRE wolf's chill is
       // a full 90px aura (drawn as an icy ring) — no brush needed
       if (!inSaddle && e.elite && e.type === 'wolf' && d < (e.elite === 2 ? 90 : e.kr + PLAYER_R + 26)) {
@@ -867,24 +871,24 @@ function loop() {
         const fdir = (h.x - e.x) >= 0 ? 1 : -1;
         const fx = e.x + fdir * Math.cos(e.flailAng) * 64;
         const fy = e.y - 32 + Math.sin(e.flailAng) * 64 * 0.7;
-        if (Math.hypot(h.x - fx, (h.y - 18) - fy) < 26) { strike(h); if (!alive) return; continue; }
+        if (Math.hypot(h.x - fx, (h.y - 18) - fy) < 26) { strike(h, e, 'flail'); if (!alive) return; continue; }
       }
       // Vader's saber sweeps a lethal arc out front during the slash
       if (e.type === 'vader' && e.mode === 'slash') {
         const tx = e.x + Math.cos(e.slashAng) * 56;
         const ty = (e.y - 22) + Math.sin(e.slashAng) * 56;
-        if (Math.hypot(h.x - tx, (h.y - 18) - ty) < 24) { strike(h); if (!alive) return; continue; }
+        if (Math.hypot(h.x - tx, (h.y - 18) - ty) < 24) { strike(h, e, 'saber'); if (!alive) return; continue; }
       }
       // DIO's MUDA barrage — The World pummels a lethal ring around him
-      if (e.type === 'dio' && e.mode === 'muda' && d < 54) { strike(h); if (!alive) return; continue; }
+      if (e.type === 'dio' && e.mode === 'muda' && d < 54) { strike(h, e, 'muda'); if (!alive) return; continue; }
       // Sidious' twin sabers carve a lethal ring while he spins
-      if (e.type === 'sidious' && e.mode === 'spin' && d < 46) { strike(h); if (!alive) return; continue; }
+      if (e.type === 'sidious' && e.mode === 'spin' && d < 46) { strike(h, e, 'spin'); if (!alive) return; continue; }
       // Force lightning: a lethal corridor along the aim while it crackles
       if (e.type === 'sidious' && e.mode === 'lightning') {
         const ox = e.x, oy = e.y - 24;
         const px = h.x - ox, py = (h.y - 18) - oy;
         const proj = px * e.lx + py * e.ly;
-        if (proj > 18 && proj < 470 && Math.abs(px * -e.ly + py * e.lx) < (e.lethalW || 18)) { strike(h); if (!alive) return; continue; }
+        if (proj > 18 && proj < 470 && Math.abs(px * -e.ly + py * e.lx) < (e.lethalW || 18)) { strike(h, e, 'lightning'); if (!alive) return; continue; }
       }
     }
   }
@@ -895,7 +899,7 @@ function loop() {
     const rr = roadRoller;   // lethal only as it lands (not the whole fall), and only inside the telegraphed ellipse
     if (rr && rr.phase === 'impact' && rr.t < 16) {
       for (const h of heroesLive()) {
-        if (h.dashT <= 0 && ((h.x - rr.zoneX) / 46) ** 2 + ((h.y - rr.zoneY) / 17) ** 2 < 1) { strike(h); if (!alive) return; }
+        if (h.dashT <= 0 && ((h.x - rr.zoneX) / 46) ** 2 + ((h.y - rr.zoneY) / 17) ** 2 < 1) { strike(h, { type: 'dio' }, 'roller'); if (!alive) return; }
       }
     }
   }
@@ -913,7 +917,7 @@ function loop() {
     sparks.push({ x: k.tx, y: k.ty - 12, t: 16, color: '#ff8a65', txt: 'BOOM' });
     for (const h of heroesLive()) {
       if (h.dashT > 0) continue;                 // i-frames clear the blast
-      if (Math.hypot(h.x - k.tx, (h.y - 10) - k.ty) < KEG_R) { strike(h); if (!alive) return; }
+      if (Math.hypot(h.x - k.tx, (h.y - 10) - k.ty) < KEG_R) { strike(h, { type: 'bomber' }, 'keg'); if (!alive) return; }
     }
     // the shrapnel reaches the horde well past the core (a pursuer walks ~72px
     // during the keg's flight — a tight radius would never touch a moving pack,
@@ -995,10 +999,16 @@ function loop() {
         a.vx = hx / hd * 7.5; a.vy = hy / hd * 7.5;
         if (hd < 18) { arrows.splice(i, 1); continue; }  // caught — Vader re-arms
       }
-      for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 14) { strike(h); if (!alive) return; } }
+      for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 14) { strike(h, { type: 'vader' }, 'thrown saber'); if (!alive) return; } }
       continue;
     }
-    for (const h of heroesLive()) { if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 10) { strike(h); if (!alive) return; break; } }
+    for (const h of heroesLive()) {
+      if (h.dashT <= 0 && Math.hypot(a.x - h.x, a.y - (h.y - 18)) < 10) {
+        const src = a.kind === 'laser' ? { type: 'trooper' } : a.kind === 'knife' ? { type: 'dio' } : { type: 'archer', elite: a.elite | 0 };
+        strike(h, src, a.kind === 'laser' ? 'blaster bolt' : a.kind === 'knife' ? 'knife' : 'arrow');
+        if (!alive) return; break;
+      }
+    }
   }
 
   /* passive score */
@@ -1537,6 +1547,21 @@ function loop() {
     }
     ctx.shadowBlur = 0; ctx.textAlign = 'left'; ctx.globalAlpha = 1;
   }
+  // ⚗ the mutator card: the three rolled modifiers, pinned top-right for the
+  // run's opening stretch (render-only; the boon pick's banner would otherwise
+  // paint straight over the start banner that named them)
+  if (mutated && activeMuts.length && frame < 900) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (900 - frame) / 60);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ce93d8';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
+    ctx.fillText('⚗ MUTATED', GW - 14, 96);
+    ctx.font = '11px Tahoma,Arial'; ctx.fillStyle = '#e8d6f0';
+    const names = mutatorNames();
+    for (let i = 0; i < names.length; i++) ctx.fillText(names[i], GW - 14, 112 + i * 15);
+    ctx.restore(); ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+  }
   if (meter >= up.summonCost && !champsBanned() && champUnlocked()) {
     // standing offer — stays up top until an ally is summoned
     ctx.save();
@@ -1603,7 +1628,7 @@ function loop() {
     'SCORE ' + score + ' · BEST ' + best + '<br>' +
     (mournful
       ? '<span style="color:#8fd8ff">the world mourns · they will not fight</span> · KILLS ' + kills
-      : 'WAVE ' + wave + (netplay ? ' · <span style="color:#7fd8ff">🌐 ONLINE</span>' : '') + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (hardMode ? ' · <span style="color:#ff6e6e">☠ HARD</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
+      : 'WAVE ' + wave + (netplay ? ' · <span style="color:#7fd8ff">🌐 ONLINE</span>' : '') + (dailyRun ? ' · <span style="color:#ffb300">☀ DAILY</span>' : '') + (hardMode ? ' · <span style="color:#ff6e6e">☠ HARD</span>' : '') + (mutated ? ' · <span style="color:#ce93d8">⚗ MUTATED</span>' : '') + (endless ? ' · <span style="color:#ffd24d">∞ ENDLESS</span>' : '') + ' · FOES ' + foesLeft + ' · KILLS ' + kills + ' · x' + mult) + '<br>' +
     (up.dashMax === 0
       ? '<span style="color:#666">DASH 🔒 locked</span>'
       : '<span style="color:#80deea">DASH ' + '◆'.repeat(player.dashCharges) +

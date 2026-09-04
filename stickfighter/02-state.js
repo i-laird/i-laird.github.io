@@ -150,13 +150,20 @@ try {
   if (typeof so.kick === 'number') sfOpts.kick = clamp(so.kick, 0, 1);
   if (typeof so.flash === 'number') sfOpts.flash = clamp(so.flash, 0, 1);
   sfOpts.hiVis = !!so.hiVis;
+  if (so.binds && typeof so.binds === 'object') sfOpts.binds = so.binds;   // validated in 22-binds (sanitizeBinds)
 } catch (_) { /* private mode */ }
 function saveOpts() { try { localStorage.setItem('ilaird_sf_opts', JSON.stringify(sfOpts)); } catch (_) {} }
 // the PAUSE/settings overlay: solo & couch runs truly pause (recorded as opcode
 // 13, so replays hold the same beats); online it is an overlay over a live sim
 let shellMenu = false, shellSel = 0;
-function shellToggle() { shellMenu = !shellMenu; if (!netplay) paused = shellMenu; }  // sim state (v4): per-type kill tally — feeds the results ceremony
+const SHELL_ROWS = 5;   // shake · kicks · flashes · hi-vis · controls ›
+function shellToggle() {
+  shellMenu = !shellMenu;
+  if (!netplay && started) paused = shellMenu;   // on the intro nothing is running to pause
+  shellPage = 'main'; bindCapture = null;
+}  // sim state (v4): per-type kill tally — feeds the results ceremony
 let hurtFlash = null;  // { dx, dy, t } — a red edge flash from the DIRECTION of the last blow (render-only)
+let lastBlow = null;   // { type, elite, via, wave, seat } — what landed the last blow (bookkeeping for the death recap; never sim-read)
 function addDecal(x, y, kind) {
   decals.push({ x, y, kind, t0: tick });
   if (decals.length > DECAL_MAX) decals.shift();

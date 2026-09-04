@@ -157,12 +157,12 @@ function drawIntroScreen() {
   const tx0 = GW / 2 - (tw2 * 2 + mgap) / 2;
   for (let i = 0; i < 2; i++) pill(tx0 + i * (tw2 + mgap), 128, tw2, mh, tops[i], menuTop === i, introRow === 0, topCol[i]);
   const subs = menuTop === 0
-    ? [['NORMAL', '#ffd24d'], [hardUnlocked ? '☠ HARD' : '🔒 HARD', '#ff6e6e'], ['☀ DAILY', '#ffb300']]
+    ? [['NORMAL', '#ffd24d'], [hardUnlocked ? '☠ HARD' : '🔒 HARD', '#ff6e6e'], ['☀ DAILY', '#ffb300'], ['⚗ MUTATED', '#ce93d8']]
     : [['LOCAL', P2_COL], ['🌐 HOST', '#7fd8ff'], ['🌐 JOIN', '#7fd8ff']];
   const subSel = menuTop === 0 ? subSingle : subMulti;
-  const mw = 108;
-  const mx0 = GW / 2 - (mw * 3 + mgap * 2) / 2;
-  for (let i = 0; i < 3; i++) {
+  const mw = subs.length > 3 ? 96 : 108;
+  const mx0 = GW / 2 - (mw * subs.length + mgap * (subs.length - 1)) / 2;
+  for (let i = 0; i < subs.length; i++) {
     const locked = menuTop === 0 && i === 1 && !hardUnlocked;
     pill(mx0 + i * (mw + mgap), 160, mw, mh, subs[i][0], subSel === i, introRow === 1 && !locked, locked ? '#49525c' : subs[i][1]);
   }
@@ -174,6 +174,9 @@ function drawIntroScreen() {
   } else if (menuTop === 0 && subSingle === 1 && hardUnlocked) {
     ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ff6e6e';
     ctx.fillText('☠ HARD MODE — earned by mercy · elites from the first wave, everything comes early', GW / 2, 200);
+  } else if (menuTop === 0 && subSingle === 3) {
+    ctx.font = 'bold 11px Tahoma,Arial'; ctx.fillStyle = '#ce93d8';
+    ctx.fillText('⚗ MUTATED — the seed deals three modifiers from ' + MUTATORS.length + ' · boons as normal · unranked, but the trophies still count', GW / 2, 200);
   } else if (menuTop === 1 && subMulti === 1) {
     ctx.fillStyle = '#7fd8ff';
     ctx.fillText('🌐 HOST — you get a room code to share · pick YOUR class below (your friend picks theirs)', GW / 2, 200);
@@ -260,7 +263,8 @@ function drawIntroScreen() {
     hints.push(['move: WASD / arrows   ·   dash: Space / Shift   ·   attack: X / F', '#c8d2da']);
   }
   hints.push(['◀ ▶ choose   ·   ↑ ↓ switch row   ·   1 / 2 / 3 jump to a mode', '#9fb0c0']);
-  hints.push(['🏆 trophy case ' + sfTrophies.size + ' / ' + SF_ACH.length + '   ·   press T', sfTrophies.size === SF_ACH.length ? '#7CFC8A' : '#c9a227']);
+  hints.push(['🏆 trophy case ' + sfTrophies.size + ' / ' + SF_ACH.length + '   ·   press T        📖 bestiary ' + bestiaryKnown() + ' / ' + BESTIARY.length + '   ·   press B        ⚙ settings & controls   ·   press P', sfTrophies.size === SF_ACH.length ? '#7CFC8A' : '#c9a227']);
+  if (padCount()) hints.push(['🎮 gamepad connected — stick moves · A confirms · X attacks · Start pauses', '#7fd8ff']);
   hints.push(['coins raise your multiplier  ·  graze foes for bonus  ·  clear waves for tokens', '#8494a4']);
   const barH = hints.length * 17 + 14;
   ctx.fillStyle = 'rgba(5,8,12,0.55)'; ctx.fillRect(0, GH - barH, GW, barH);
@@ -282,6 +286,7 @@ function drawIntroScreen() {
 
   if (introConfirm) drawIntroConfirm(); // the couch co-op party sheet (confirm gate)
   if (showTrophies) drawTrophyCase();   // the case sits over the whole intro
+  else if (showBestiary) drawBestiary();   // the lore ledger — the case's second tab
   ctx.restore(); ctx.textAlign = 'left';
 }
 

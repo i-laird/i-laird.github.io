@@ -92,11 +92,12 @@ function init() {
   ianCue = 0; ianActive = false; ianChoice = null; ianFinale = null; mournful = false; endless = false; ianBg = [];
   wraithLunged = false; ogreSpawned = false; eliteSeen = false; dreadSeen = false; shamanSeen = false; bomberSeen = false;
   lbScores = null; lbDaily = null; lbState = 'off'; lbName = ''; lbRank = -1; lbScore = 0; lbWave = 0;
-  cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true;
+  cheated = false; lbTicks = 0; lbKills = 0; runFlawless = true; lastBlow = null;
   // the GLOBAL bn holds only bane + party-economy effects; each hero's personal
   // boon effects live on h.bn (resetHeroBn — co-op picks are per player)
   bn = { spd: 1, gold: false, tithe: false, bounty: 0,
-         toll: 0, foeSpd: 1, miser: false };
+         toll: 0, foeSpd: 1, miser: false,
+         quotaMul: 1, eliteEarly: false, fog: false, noRefresh: false, noPowerups: false };   // mutator flags (04-mutators)
   resetHeroBn(player);
   boonMenu = null;
   up = { owned: new Set(), dashMax: 0, dashLen: 13, dashCd: DASH_CD,
@@ -122,6 +123,7 @@ function init() {
     tokens = replay.d.tk0 | 0;
     runMaxwave = replay.d.mw0 | 0;
     hardMode = !!replay.d.hd;        // the recording's difficulty, not the watcher's unlock
+    mutated = !!replay.d.mu;         // and its mutators (re-rolled from the seed below)
     const owned = new Set(replay.d.up0 || []);
     for (const u of UPGRADES) if (owned.has(u.id)) { up.owned.add(u.id); u.apply(); }
   } else if (netplay && netCfg) {
@@ -132,12 +134,14 @@ function init() {
     tokens = netCfg.tk0 | 0;
     runMaxwave = netCfg.mw0 | 0;
     hardMode = !!netCfg.hd;
+    mutated = false;                 // online is pinned normal by the cfg header
     const owned = new Set(netCfg.up0 || []);
     for (const u of UPGRADES) if (owned.has(u.id)) { up.owned.add(u.id); u.apply(); }
     recHdr = null; recEv = []; recOverflow = false;
   } else {
     // the intro's difficulty pick — daily stays one fair shared sim
     hardMode = hardSel && hardUnlocked && !dailyRun;
+    mutated = mutSel && !dailyRun && !hardMode;   // solo only — daily stays one fair sim
     tokens = parseInt(loadProfileItem('ilaird_sf_tokens') || '0', 10) || 0;   // this class's own credits
     // no legacy seed here: each profile climbs its own token ladder from wave 1
     // (seeding the old global record would starve a fresh class of income)
@@ -149,7 +153,7 @@ function init() {
     // rules and silently diverge from their recorded scores.
     recEv = []; recLastM = -1; recOverflow = false;
     recHdr = { v: 6, seed: sfSeed >>> 0, c1: classSel, c2: classSel2, coop, hd: hardMode ? 1 : 0,
-               up0: [...up.owned], tk0: tokens, mw0: runMaxwave };
+               up0: [...up.owned], tk0: tokens, mw0: runMaxwave, ...(mutated ? { mu: 1 } : {}) };
   }
   player.dashCharges = up.dashMax; player.rechargeT = 0;
   player.shield = up.shield;         // the Aegis starts each run charged, then refreshes per wave
@@ -160,6 +164,7 @@ function init() {
     p3 = makeAllyHero(netCfg.cs[2], GW / 2, GH / 2 - 48, 1);
     if (netCfg.cs.length > 3) p4 = makeAllyHero(netCfg.cs[3], GW / 2, GH / 2 + 48, -1);
   }
+  rollMutators();   // no-op unless `mutated` — the seed's first draws, before the boon offer
 }
 
 /* ── couch co-op helpers ── */

@@ -5,7 +5,11 @@
 // e.g. holding 'd' to run right + tapping Shift leaves keys['d'] true forever. (Arrow keys
 // aren't case-sensitive, which is why only P2's letter movement was affected.)
 const keyName = (k) => (k.length === 1 ? k.toLowerCase() : k);
-function onKey(e) {
+function onKey(raw) {
+  // a rebind capture reads the RAW key; everything else sees the canonical
+  // translation (remapKey — identity unless custom bindings exist, see 22-binds)
+  if (bindCapture !== null && shellMenu) { captureBind(raw); raw.preventDefault(); return; }
+  const e = remapKey(raw);
   keys[keyName(e.key)] = true;
   // watching a replay: Q leaves; every other key belongs to the legend, not you
   if (replayMode) {
@@ -17,17 +21,21 @@ function onKey(e) {
   // online the sim runs underneath, and menu arrows must not steer your hero)
   if (shellMenu) {
     keys[keyName(e.key)] = false;
-    if (e.key === 'ArrowUp') shellSel = (shellSel + 3) % 4;
-    else if (e.key === 'ArrowDown') shellSel = (shellSel + 1) % 4;
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    if (shellPage === 'binds') { bindsPageKey(e); e.preventDefault(); return; }   // the CONTROLS page owns its keys
+    if (e.key === 'ArrowUp') shellSel = (shellSel + SHELL_ROWS - 1) % SHELL_ROWS;
+    else if (e.key === 'ArrowDown') shellSel = (shellSel + 1) % SHELL_ROWS;
+    else if (shellSel === 4 && !e.repeat && ['ArrowRight', 'Enter', 'z', 'Z', ' '].includes(e.key)) {
+      shellPage = 'binds'; bindSel = 0;   // controls › — the rebinding page
+      if (sfSfx.killE) sfSfx.killE();
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       if (shellSel === 0) sfOpts.shake = sfOpts.shake === 1 ? 0.5 : sfOpts.shake === 0.5 ? 0 : 1;
       else if (shellSel === 1) sfOpts.kick = sfOpts.kick > 0 ? 0 : 1;
       else if (shellSel === 2) sfOpts.flash = sfOpts.flash > 0 ? 0 : 1;
-      else sfOpts.hiVis = !sfOpts.hiVis;
+      else if (shellSel === 3) sfOpts.hiVis = !sfOpts.hiVis;
       saveOpts();
       if (sfSfx.killE) sfSfx.killE();
     } else if (!e.repeat && ['p', 'P', 'q', 'Q', 'Enter', 'z', 'Z'].includes(e.key)) {
-      if (!netplay) recPush([tick + 1, 13, 0]);   // the unpause is a sim beat too
+      if (!netplay && started) recPush([tick + 1, 13, 0]);   // the unpause is a sim beat too
       shellToggle();
     }
     e.preventDefault();
@@ -37,6 +45,13 @@ function onKey(e) {
   // replays hold the beats; online it overlays a live sim and records nothing)
   if ((e.key === 'p' || e.key === 'P') && !e.repeat && started && alive && !bossIntro && !killCam && !paused) {
     if (!netplay) recPush([tick + 1, 13, 0]);
+    shellToggle();
+    e.preventDefault();
+    return;
+  }
+  // P on the title screen opens the same shell (settings + the CONTROLS page)
+  // with nothing running to pause — rebind before the first run, not mid-horde
+  if ((e.key === 'p' || e.key === 'P') && !e.repeat && !started && !netUi && !introConfirm && !showTrophies && !showBestiary) {
     shellToggle();
     e.preventDefault();
     return;
@@ -55,8 +70,8 @@ function onKey(e) {
     return;
   }
   // the results ceremony: any key fast-forwards to the hall of legends
-  if (!alive && !killCam && !replayMode && deadT > 34 && deadT < 176) {
-    if (!e.repeat) deadT = 176;
+  if (!alive && !killCam && !replayMode && deadT > 34 && deadT < RESULTS_END - 2) {
+    if (!e.repeat) deadT = RESULTS_END - 2;
     e.preventDefault();
     return;
   }
@@ -171,8 +186,17 @@ function onKey(e) {
       e.preventDefault();
       return;
     }
-    if (e.key === 't' || e.key === 'T') { showTrophies = !showTrophies; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+    if (e.key === 't' || e.key === 'T') { showTrophies = !showTrophies; showBestiary = false; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
     if (showTrophies) { e.preventDefault(); return; }
+    // the bestiary: B toggles it; ↑↓ browse the foes while it is up
+    if (e.key === 'b' || e.key === 'B') { showBestiary = !showBestiary; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
+    if (showBestiary) {
+      const n = BESTIARY.length;
+      if (e.key === 'ArrowUp')        { bestSel = (bestSel + n - 1) % n; if (sfSfx.killE) sfSfx.killE(); }
+      else if (e.key === 'ArrowDown') { bestSel = (bestSel + 1) % n; if (sfSfx.killE) sfSfx.killE(); }
+      else if (!e.repeat && ['q', 'Q', 'Backspace'].includes(e.key)) { showBestiary = false; if (sfSfx.killE) sfSfx.killE(); }
+      e.preventDefault(); return;
+    }
     const nRows = isLocalMulti() ? 4 : 3;   // top · sub · class (· P2 class in LOCAL)
     if (e.key === 'ArrowUp')   { introRow = (introRow + nRows - 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
     if (e.key === 'ArrowDown') { introRow = (introRow + 1) % nRows; if (sfSfx.killE) sfSfx.killE(); e.preventDefault(); return; }
@@ -186,7 +210,7 @@ function onKey(e) {
       if (introRow === 0) menuTop = (menuTop + 1) % 2;
       else if (introRow === 1) {
         if (menuTop === 0) {
-          do { subSingle = (subSingle + d + 3) % 3; } while (subSingle === 1 && !hardUnlocked);   // HARD is skipped until earned
+          do { subSingle = (subSingle + d + 4) % 4; } while (subSingle === 1 && !hardUnlocked);   // HARD is skipped until earned
         } else {
           subMulti = (subMulti + d + 3) % 3;
         }
@@ -228,6 +252,7 @@ function onKey(e) {
       coop = menuTop === 1;                                  // LOCAL couch co-op
       dailyRun = menuTop === 0 && subSingle === 2;
       hardSel = menuTop === 0 && subSingle === 1;            // only reachable once hardUnlocked
+      mutSel = menuTop === 0 && subSingle === 3;             // ⚗ MUTATED (three seeded modifiers — see 04-mutators)
       // daily pins the shared per-day seed through the existing MP/replay hook;
       // a normal run clears it back to fresh entropy. The day is snapshotted with
       // the seed so a run crossing UTC midnight still submits to its own board.
@@ -236,8 +261,8 @@ function onKey(e) {
       init();                     // fresh state on the chosen seed (init reads classSel/coop/hardSel)
       beginRunProof();            // stamp the start time for the leaderboard's proof check
       started = true; frame = 0;
-      banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
-      bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
+      banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '') + (mutated ? ' · ⚗ MUTATED' : '');
+      bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : mutated ? mutatorNames().join('  ·  ') : '';
       // synchronous: the seed's first draws, live and in replay alike.
       // Hard mode gets no gifts — the run opens on a BANE instead.
       hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
@@ -422,14 +447,14 @@ function onKey(e) {
     init();
     beginRunProof();
     started = true;
-    banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '');
-    bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : '';
+    banner = (dailyRun ? '☀ DAILY CHALLENGE' : coop ? 'CO-OP · WAVE 1' : 'WAVE 1') + (hardMode ? ' · ☠ HARD' : '') + (mutated ? ' · ⚗ MUTATED' : '');
+    bannerSub = dailyRun ? dailyDayPretty() + ' — same seed for everyone' : hardMode ? 'the horde remembers your mercy' : mutated ? mutatorNames().join('  ·  ') : '';
     bannerT = 90; startSfMusic();
     hardMode ? openBaneMenu('CHOOSE YOUR BANE') : openBoonMenu('CHOOSE YOUR BOON');
   }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) || e.code === 'Slash') e.preventDefault();
 }
-function offKey(e) { keys[keyName(e.key)] = false; }
+function offKey(raw) { keys[keyName(remapKey(raw).key)] = false; }
 function dropKeys() { keys = {}; }   // release everything (focus loss → missed keyups)
 // ⌘/Ctrl+V fills the JOIN code entry (the paste event carries the clipboard without
 // any permission prompt; only listened to on the code screen)
