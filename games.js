@@ -3,8 +3,9 @@
 // Loaded as a CLASSIC script, it exposes one global, initGames(api), which
 // returns the four command handlers. Everything the games need from app.js
 // arrives through the explicit `api` bridge (app.js's gamesBridge(): the stable
-// output/audio helpers + DOM elements, and live godmodeUnlocked / playerName
-// getters) — this file references NOTHING from app.js by free global name, so
+// output/audio helpers + DOM elements, live godmodeUnlocked / playerName /
+// soundEnabled getters, and an activeMusic accessor the shell writes back
+// through) — this file references NOTHING from app.js by free global name, so
 // it can be bundled & obfuscated as an independent lazy chunk without
 // cross-file name-mangling breaking. The only contract is the initGames name +
 // the api key names (keep both on the obfuscator's reserved list).
@@ -19,12 +20,172 @@ function initGames(api) {
   const { appendNode, blank, scroll, halSpeak, halD, unlockAchievement, _chirp,
           inputRow, cmd } = api;
 
+  /* ── Shell-game music ──
+     One looping track per game, parked on api.activeMusic behind a single
+     { play, pause } handle (the sound toggle in app.js calls nothing else).
+     In godmode HAL gets at the music too — every piece is optional in the spec:
+       dark   a twin of the track (same length and timing, built offline) that
+              plays in step; setCorruption(0..1) crossfades to it, and `drag`
+              sags the tape speed by that fraction at full corruption
+       rev    a few seconds of the track reversed: flashReverse() cuts to it
+              for a beat, rewind() is the record dragged to a halt on death
+       daisy  setDaisy(true) lets a slowed, half-buried Daisy Bell surface
+     setRate(mult, ms) bends the tape speed (pitch follows), springing back
+     after `ms` when given. reset() returns everything to clean for a new run.
+     Plain media elements throughout, so nothing here ever seeks mid-play: a
+     seek is audible, and without Range support (python's http.server) it
+     restarts the file from 0. */
+  const MUSIC_VOL = 0.5, DAISY_VOL = 0.3;
+  const DAISY_SRC = 'assets/audio/daisy_buried.mp3';
+  const MUSIC_OFF = { handle: null, setCorruption() {}, setRate() {}, setDaisy() {},
+                      flashReverse() {}, rewind() {}, reset() {}, stop() {} };
+  function createMusic(spec, { after, every, cancel }) {
+    if (!spec || !spec.src) return MUSIC_OFF;
+    const { src, dark = null, rev = null, drag = 0, daisy = false } = spec;
+    const mk = (path, loop) => {
+      const a = new Audio(path);
+      a.preload = 'none';          // skip buffering when sound is off
+      a.loop = loop;
+      a.preservesPitch = false;    // tape-style: the pitch follows the speed
+      return a;
+    };
+    const mainEl = mk(src, true);
+    const darkEl = dark ? mk(dark, true) : null;
+    const revEl = rev ? mk(rev, false) : null;
+    const daisyEl = daisy ? mk(DAISY_SRC, true) : null;
+
+    let corruption = 0, corruptTo = 0, rate = 1, rateTo = 1, daisyLvl = 0, daisyTo = 0;
+    let halted = false, ducked = false, glideId = null, rateTimer = null, revTimer = null;
+
+    function apply() {
+      const v = ducked ? 0 : MUSIC_VOL;
+      mainEl.volume = v * (1 - corruption);
+      mainEl.playbackRate = (1 - drag * corruption) * rate;
+      if (darkEl) { darkEl.volume = v * corruption; darkEl.playbackRate = mainEl.playbackRate; }
+      if (daisyEl) daisyEl.volume = DAISY_VOL * daisyLvl;
+    }
+
+    // Two elements drift apart by tens of ms (measured in Chrome: ~30ms after
+    // a rate glide, more after a pause/resume), which reads as an echo
+    // mid-crossfade. trimDark() steers the twin back by nudging its speed —
+    // inaudible, and it needs no seek. resyncDark() is the blunt fallback for
+    // a real gap only.
+    function resyncDark() {
+      if (Math.abs(darkEl.currentTime - mainEl.currentTime) > 0.25) darkEl.currentTime = mainEl.currentTime;
+    }
+    function trimDark() {
+      if (mainEl.paused || darkEl.paused) return;
+      const drift = Math.max(-0.1, Math.min(0.1, darkEl.currentTime - mainEl.currentTime));
+      darkEl.playbackRate = mainEl.playbackRate * (1 - 0.5 * drift);
+    }
+
+    // one ticker glides every parameter toward its target, then retires
+    const toward = (v, to, step) => (Math.abs(to - v) <= step ? to : v + Math.sign(to - v) * step);
+    function glide() {
+      if (glideId !== null) return;
+      glideId = every(() => {
+        corruption = toward(corruption, corruptTo, 0.07);   // ~1.5s end to end
+        rate = toward(rate, rateTo, 0.02);
+        daisyLvl = toward(daisyLvl, daisyTo, 0.04);         // ~2.5s
+        apply();
+        if (corruption !== corruptTo || rate !== rateTo || daisyLvl !== daisyTo) return;
+        cancel(glideId);
+        glideId = null;
+        if (daisyEl && daisyLvl === 0) daisyEl.pause();
+        if (darkEl) resyncDark();   // once the glide lands, never mid-glide
+      }, 100);
+    }
+
+    const handle = {
+      play() {
+        if (halted) return Promise.resolve();   // the death silence outlasts a sound toggle
+        if (darkEl) resyncDark();
+        const ps = [mainEl.play()];
+        if (darkEl) ps.push(darkEl.play());
+        if (daisyEl && daisyTo > 0) ps.push(daisyEl.play());
+        return Promise.all(ps);
+      },
+      pause() { for (const el of [mainEl, darkEl, daisyEl, revEl]) if (el) el.pause(); },
+    };
+
+    function setCorruption(level) {
+      if (!darkEl) return;
+      corruptTo = Math.max(0, Math.min(1, level));
+      glide();
+    }
+    function setRate(mult, ms) {
+      rateTo = mult;
+      if (rateTimer) cancel(rateTimer);
+      rateTimer = ms ? after(() => { rateTimer = null; rateTo = 1; glide(); }, ms) : null;
+      glide();
+    }
+    function setDaisy(on) {
+      const to = on ? 1 : 0;
+      if (!daisyEl || to === daisyTo) return;
+      daisyTo = to;
+      if (on && !halted && api.soundEnabled) daisyEl.play().catch(() => {});
+      glide();
+    }
+    function playRev(speed) {
+      revEl.currentTime = 0;
+      revEl.volume = MUSIC_VOL;
+      revEl.playbackRate = speed;
+      revEl.play().catch(() => {});
+    }
+    function flashReverse(ms) {
+      if (!revEl || halted || !api.soundEnabled) return;
+      ducked = true;
+      apply();
+      playRev(1);
+      if (revTimer) cancel(revTimer);
+      revTimer = after(() => { revTimer = null; revEl.pause(); ducked = false; apply(); }, ms);
+    }
+    function rewind() {
+      if (halted) return;
+      halted = true;
+      if (revTimer) { cancel(revTimer); revTimer = null; }
+      ducked = false;
+      handle.pause();
+      if (!revEl || !api.soundEnabled) return;
+      playRev(1.8);   // spun backwards fast, dragging down to a stop over ~0.9s
+      let n = 0;
+      const id = every(() => {
+        n++;
+        revEl.playbackRate = Math.max(0.25, revEl.playbackRate * 0.84);
+        revEl.volume = MUSIC_VOL * Math.max(0, 1 - n / 15);
+        if (n >= 15) { cancel(id); revEl.pause(); }
+      }, 60);
+    }
+    function reset() {
+      corruption = corruptTo = 0;
+      rate = rateTo = 1;
+      daisyLvl = daisyTo = 0;
+      ducked = false;
+      if (rateTimer) { cancel(rateTimer); rateTimer = null; }
+      if (daisyEl) daisyEl.pause();
+      apply();
+      if (!halted) return;
+      halted = false;   // after a rewind the track starts over from the top
+      mainEl.currentTime = 0;
+      if (darkEl) darkEl.currentTime = 0;
+      if (api.soundEnabled) handle.play().catch(() => {});
+    }
+
+    apply();
+    if (darkEl) every(trimDark, 500);
+    api.activeMusic = handle;
+    if (api.soundEnabled) handle.play().catch(() => {});
+    return { handle, setCorruption, setRate, setDaisy, flashReverse, rewind, reset, stop: handle.pause };
+  }
+
   /* ── Shared game scaffolding ──
      Builds the standard game DOM — optional auto-spoken HAL message line
      ('top' or 'bottom'), <pre> screen, dim hint — hides the input row, and
      registers key listeners. end() tears all of it down and restores the
-     input row; game-specific teardown (intervals, timers) stays in the game. */
-  function createGameShell({ hint, lineHeight = 1.35, halMsg = false, onKeyDown, onKeyUp }) {
+     input row; game-specific teardown (intervals, timers) stays in the game.
+     Optional `music` — an assets/audio path, or a createMusic() spec — loops
+     for the shell's lifetime; the controls come back as shell.music. */
+  function createGameShell({ hint, lineHeight = 1.35, halMsg = false, music = null, onKeyDown, onKeyUp }) {
     const wrap   = document.createElement('div');
     const screen = document.createElement('pre');
     const hintEl = document.createElement('span');
@@ -70,18 +231,23 @@ function initGames(api) {
       return id;
     }
     function cancel(id) { timers.delete(id); clearTimeout(id); clearInterval(id); }
+    const tunes = createMusic(typeof music === 'string' ? { src: music } : music, { after, every, cancel });
 
     function end() {
       if (observer) observer.disconnect();
       for (const id of timers) { clearTimeout(id); clearInterval(id); }
       timers.clear();
+      if (tunes.handle) {
+        tunes.stop();
+        if (api.activeMusic === tunes.handle) api.activeMusic = null;
+      }
       window.removeEventListener('keydown', onKeyDown);
       if (onKeyUp) window.removeEventListener('keyup', onKeyUp);
       inputRow.style.display = 'flex';
       setTimeout(() => { cmd.value = ''; cmd.focus(); }, 0);
     }
 
-    return { wrap, screen, halMsgEl, end, after, every, cancel };
+    return { wrap, screen, halMsgEl, end, after, every, cancel, music: tunes };
   }
 
   return {
@@ -106,6 +272,9 @@ function initGames(api) {
         hint: '  [↑/↓ or w/s] change lane    grab the $    [q] quit',
         lineHeight: 1.5,
         halMsg: 'top',
+        music: api.godmodeUnlocked
+          ? { src: 'assets/audio/machine_override.mp3', rev: 'assets/audio/machine_override_rev.mp3', daisy: true }
+          : 'assets/audio/grid_sector_horizon.mp3',
         onKeyDown: e => keyHandler(e),
       });
       const { wrap, screen, halMsgEl: halMsg } = shell;
@@ -283,6 +452,7 @@ function initGames(api) {
         lastTickAt = performance.now();
 
         speed = Math.min(MAX_SPEED, BASE_SPEED + dist / 900);
+        if (api.godmodeUnlocked) shell.music.setDaisy(speed >= MAX_SPEED);   // flat out: Daisy surfaces
         if (nitro > 0) nitro--;
         const dx = speed * (inSlowZone ? 0.55 : 1) * (nitro > 0 ? 1.6 : 1);
         dist += dx;
@@ -390,6 +560,7 @@ function initGames(api) {
       function crash() {
         alive = false;
         crashing = true;
+        if (api.godmodeUnlocked) shell.music.rewind();
         if (loopId) { clearInterval(loopId); loopId = null; }
         setTimeout(() => {
           crashing = false;
@@ -401,6 +572,7 @@ function initGames(api) {
       }
 
       function start() {
+        shell.music.reset();
         lane = 1; score = 0; coins = 0; ticks = 0; dist = 0; speed = BASE_SPEED;
         prevDist = 0; carY = null;
         nitro = 0;
@@ -460,9 +632,14 @@ function initGames(api) {
           tickTimer = null;
 
       const phasesSeen = new Set();
+      let halPhaseCount = 0;   // phases entered this run — drives the music's corruption
 
       const shell = createGameShell({
         hint: '  [arrow keys / wasd] move    [q] quit',
+        music: api.godmodeUnlocked
+          ? { src: 'assets/audio/pixel_pressure.mp3', dark: 'assets/audio/pixel_pressure_dark.mp3', drag: 0.06,
+              rev: 'assets/audio/pixel_pressure_rev.mp3', daisy: true }
+          : 'assets/audio/pixel_pressure.mp3',
         onKeyDown: e => keyHandler(e),
       });
       const { wrap, screen } = shell;
@@ -558,6 +735,11 @@ function initGames(api) {
         innerTop = 0; innerBottom = ROWS-1; innerLeft = 0; innerRight = COLS-1;
         phasesSeen.add(m);
         if (phasesSeen.size === 4) unlockAchievement('grand-tour');
+        // the music rots a third further with each phase HAL opens (clean in
+        // the first, wholly his by the fourth) and never recovers mid-run
+        halPhaseCount++;
+        shell.music.setCorruption((halPhaseCount - 1) / 3);
+        shell.music.setDaisy(halPhaseCount >= 4);
         modeTickCount = 0;
         modeScore = 0;
         const msgs = [
@@ -757,7 +939,9 @@ function initGames(api) {
              (head.x < innerLeft || head.x > innerRight || head.y < innerTop || head.y > innerBottom)) ||
             snake.some(s => s.x === head.x && s.y === head.y) ||
             halObs.some(o => o.x === head.x && o.y === head.y)) {
-          alive = false; ded = true; draw(); return;
+          alive = false; ded = true;
+          if (api.godmodeUnlocked) shell.music.rewind();
+          draw(); return;
         }
 
         snake.unshift(head);
@@ -795,6 +979,8 @@ function initGames(api) {
         tickCount    = 0;
         modeTickCount = 0;
         halSnakeMode  = 0;
+        halPhaseCount = 0;
+        shell.music.reset();
         innerTop = 0; innerBottom = ROWS-1; innerLeft = 0; innerRight = COLS-1;
         shrinkTimer = 0; bladeTick = 0; bladeAngle = 0; blade1Orbit = 0; blade2Orbit = Math.PI; modeScore = 0;
         if (halMsgTimeout) { clearTimeout(halMsgTimeout); halMsgTimeout = null; }
@@ -853,6 +1039,10 @@ function initGames(api) {
       const shell = createGameShell({
         hint: '  [w/s or ↑/↓] move    [q] quit    first to 7 wins',
         halMsg: 'top',
+        music: api.godmodeUnlocked
+          ? { src: 'assets/audio/pixel_rally.mp3', dark: 'assets/audio/pixel_rally_swap.mp3',
+              rev: 'assets/audio/pixel_rally_rev.mp3', daisy: true }
+          : 'assets/audio/pixel_rally.mp3',
         onKeyDown: e => onKey(e),
         onKeyUp:   e => offKey(e),
       });
@@ -866,6 +1056,7 @@ function initGames(api) {
         rightY = Math.floor(H/2 - PAD_H/2);
         rightY2 = Math.min(H - PAD_H, rightY + PAD_H + 2);
         lScore = 0; rScore = 0; alive = true; ded = false; keys = {};
+        shell.music.reset();
         sidesSwitched = false; halInterfTick = 0;
         if (switchTimer) { clearTimeout(switchTimer); switchTimer = null; }
         if (halPongMsgTimeout) { clearTimeout(halPongMsgTimeout); halPongMsgTimeout = null; }
@@ -935,20 +1126,25 @@ function initGames(api) {
         };
         if (type === 'switch' && !sidesSwitched) {
           sidesSwitched = true;
+          shell.music.setCorruption(1);   // the music crosses to the other side with you
           halMsgEl.textContent = halD('HAL: Enjoy the other side, Dave.');
           if (halPongMsgTimeout) clearTimeout(halPongMsgTimeout);
           switchTimer = setTimeout(() => {
             sidesSwitched = false; halInterfTick = -60;
+            shell.music.setCorruption(0);
             setMsg('HAL: Controls restored. For now.');
           }, 5000);
         } else if (type === 'speed') {
           ballDX = Math.sign(ballDX) * Math.min(Math.abs(ballDX) * 1.6, 3.5);
           ballDY = Math.max(-1.5, Math.min(1.5, ballDY * 1.3));
+          shell.music.setRate(1.12, 4000);
           setMsg('HAL: Let me speed things up.');
         } else if (type === 'flip') {
           ballDX = -ballDX; setMsg('HAL: Surprise.');
+          shell.music.flashReverse(1400);   // a bar played backwards
         } else if (type === 'slow') {
           ballDX = Math.sign(ballDX) * Math.max(Math.abs(ballDX) * 0.6, 0.8);
+          shell.music.setRate(0.84, 4000);
           setMsg(halD('HAL: Time slows for you, Dave.'));
         }
       }
@@ -1013,6 +1209,8 @@ function initGames(api) {
           }
         }
         ballDY = Math.max(-1.5, Math.min(1.5, ballDY));
+        // HAL one point from the match: Daisy surfaces
+        if (api.godmodeUnlocked) shell.music.setDaisy((sidesSwitched ? lScore : rScore) >= 6);
         if (ballX < 0)  { rScore++; if (rScore >= 7) { haltMatch(); return; } ballX=W/2; ballY=H/2; ballDX= 1.15; ballDY=(Math.random()-0.5)*1.15; }
         if (ballX >= W) { lScore++; if (lScore >= 7) { haltMatch(); return; } ballX=W/2; ballY=H/2; ballDX=-1.15; ballDY=(Math.random()-0.5)*1.15; }
         draw();
@@ -1025,6 +1223,7 @@ function initGames(api) {
       function haltMatch() {
         alive = false; ded = true;
         clearInterval(tickId);
+        if (api.godmodeUnlocked && !(sidesSwitched ? rScore >= 7 : lScore >= 7)) shell.music.rewind();
         if (switchTimer) { clearTimeout(switchTimer); switchTimer = null; }
         if (halPongMsgTimeout) { clearTimeout(halPongMsgTimeout); halPongMsgTimeout = null; }
         draw();
@@ -1058,10 +1257,25 @@ function initGames(api) {
       let grid, score, best = 0, alive, ded, won = false, everWon = false, hal64done = false, hal256done = false,
           hal128done = false, hal512done = false, lockedR = -1, lockedC = -1, lockedMovesLeft = 0;
       let meddleCooldown = 6;
+      // Godmode music: when HAL takes or holds a tile he takes the melody too
+      // (the "stolen" twin is bass + his muttering); each time it comes back
+      // it comes back a little flatter and slower than before.
+      let musicWrong = 1, stealTimer = null;
+      function takeMelody() { shell.music.setCorruption(1); }
+      function giveMelodyBack() {
+        if (stealTimer) { shell.cancel(stealTimer); stealTimer = null; }
+        musicWrong = Math.max(0.9, musicWrong - 0.03);
+        shell.music.setCorruption(0);
+        shell.music.setRate(musicWrong);
+      }
 
       const shell = createGameShell({
         hint: '  [arrow keys] slide tiles    [q] quit',
         halMsg: 'bottom',
+        music: api.godmodeUnlocked
+          ? { src: 'assets/audio/grid_logic.mp3', dark: 'assets/audio/grid_logic_stolen.mp3',
+              rev: 'assets/audio/grid_logic_rev.mp3', daisy: true }
+          : 'assets/audio/grid_logic.mp3',
         onKeyDown: e => onKey(e),
       });
       const { wrap, screen, halMsgEl: halMsg2048 } = shell;
@@ -1179,6 +1393,7 @@ function initGames(api) {
             if (lockedMovesLeft === 0) {
               lockedR = -1; lockedC = -1;
               halMsg2048.textContent = "HAL: I'll let you have that one back.";
+              giveMelodyBack();
               setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
             }
           }
@@ -1223,6 +1438,7 @@ function initGames(api) {
             const t = lockable[Math.floor(Math.random() * lockable.length)];
             lockedR = t.r; lockedC = t.c; lockedMovesLeft = 2;
             say('HAL: I\'m holding this one. Briefly.');
+            takeMelody();
           });
         }
         if (pranks.length) pranks[Math.floor(Math.random() * pranks.length)]();
@@ -1350,6 +1566,9 @@ function initGames(api) {
         grid = Array.from({length:4}, () => Array(4).fill(0));
         score = 0; alive = true; ded = false; won = false; everWon = false;
         hal64done = false; hal128done = false; hal256done = false; hal512done = false;
+        if (stealTimer) { shell.cancel(stealTimer); stealTimer = null; }
+        musicWrong = 1;
+        shell.music.reset();
         lockedR = -1; lockedC = -1; lockedMovesLeft = 0;
         meddleCooldown = 6;
         halMsg2048.textContent = '';
@@ -1376,6 +1595,11 @@ function initGames(api) {
                 grid[r][c] = 0; hal64done = true;
                 unlockAchievement('the-64-tax');
                 halMsg2048.textContent = halD("HAL: I'm sorry Dave. That 64 is mine.");
+                // the 64 never comes back, so the melody returns on a timer —
+                // unless a tile is being held, whose release returns it instead
+                takeMelody();
+                if (stealTimer) shell.cancel(stealTimer);
+                stealTimer = shell.after(() => { stealTimer = null; if (lockedMovesLeft === 0) giveMelodyBack(); }, 8000);
                 setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
                 break outer;
               }
@@ -1387,6 +1611,7 @@ function initGames(api) {
               if (grid[r][c] === 128) {
                 lockedR = r; lockedC = c; lockedMovesLeft = 3;
                 halMsg2048.textContent = "HAL: I'm holding onto that one.";
+            takeMelody();
                 setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
                 break outer128;
               }
@@ -1409,6 +1634,7 @@ function initGames(api) {
               if ((r + c) % 2 === 0 && grid[r][c] >= 4) grid[r][c] = grid[r][c] / 2;
             }
             halMsg2048.textContent = "HAL: Let me take half of that.";
+            shell.music.setDaisy(true);
             setTimeout(() => { halMsg2048.textContent = ''; }, 2500);
           }
           if (api.godmodeUnlocked && !won) {
@@ -1423,7 +1649,7 @@ function initGames(api) {
             unlockAchievement('2048-club');
             if (api.godmodeUnlocked) unlockAchievement('audited');
           }
-          if (!canMove()) { ded=true; alive=false; }
+          if (!canMove()) { ded=true; alive=false; if (api.godmodeUnlocked) shell.music.rewind(); }
           draw();
           e.preventDefault();
         }

@@ -21,6 +21,8 @@
  * LIVE typed call with HAL through the hal-worker that ends with him
  * placing a real Twilio callback to the player's phone (see "the live
  * call" below; falls back to the answering machine without the worker).
+ * The alarm clock is a clock radio: it plays the room's one piece of music,
+ * which corrupts with the creep stages (see "the clock radio" below).
  *
  * Lazily loaded by launchRoom() in app.js the first time `room` runs (same
  * pattern as desktop.js): classic script, one global — initRoom(api) →
@@ -75,6 +77,72 @@ function initRoom(api) {
   const keys = new Set();
   const timers = [];
   const later = (fn, ms) => timers.push(setTimeout(fn, ms));
+
+  /* ── the clock radio ──
+     The alarm clock on the tower is a clock radio, and at 2 AM it gets one
+     station. Two elements play in step: the clean track and a HAL-corrupted
+     twin of identical length (static, warble, his voice coming through the
+     speaker). The creep stage sets how far the mix has slid toward the twin
+     (RADIO_MIX) and how far the tape has sagged (RADIO_DRAG); the volume
+     falls off with distance from the clock, so the hallway leaves it behind,
+     and it ducks under the telephone. One { play, pause } handle is parked on
+     api.activeMusic so the sound toggle reaches it. No seeking, ever: the
+     twin is kept in step by nudging its playback rate (see createMusic() in
+     games.js for why). */
+  const RADIO_SRC = 'assets/audio/two_am_radio_station.mp3';
+  const RADIO_DARK_SRC = 'assets/audio/two_am_radio_station_dark.mp3';
+  const RADIO_POS = { x: -1080, z: 70 };   // .rm-clock in style.css
+  const RADIO_VOL = 0.45, RADIO_DRAG = 0.07;
+  const RADIO_MIX = [0, 0.2, 0.5, 0.85, 1]; // by creep stage
+  let radio = null, radioDark = null, radioHandle = null, radioTimer = null;
+  let radioMix = 0, radioFade = 0, radioDuck = 1, radioCut = 0;
+
+  function radioTick() {
+    const to = RADIO_MIX[creepStage];
+    radioMix = Math.abs(to - radioMix) <= 0.015 ? to : radioMix + Math.sign(to - radioMix) * 0.015;
+    // swells in as the camera pulls back, dies away on the glide home
+    radioFade = Math.max(0, Math.min(1, radioFade + (exiting ? -0.08 : 0.04)));
+    radioDuck += (((call || callTyper) ? 0.3 : 1) - radioDuck) * 0.2;
+    const d = Math.hypot(cam.x - RADIO_POS.x, cam.z - RADIO_POS.z);
+    const near = Math.max(0.1, 1 / (1 + (d / 2600) * (d / 2600)));
+    let v = RADIO_VOL * radioFade * radioDuck * near;
+    if (radioCut > 0) { radioCut--; v = 0; }   // a dropout: dead air
+    radio.volume = v * (1 - radioMix);
+    radioDark.volume = v * radioMix;
+    const rate = 1 - RADIO_DRAG * radioMix;
+    radio.playbackRate = rate;
+    const drift = radio.paused || radioDark.paused ? 0
+      : Math.max(-0.1, Math.min(0.1, radioDark.currentTime - radio.currentTime));
+    radioDark.playbackRate = rate * (1 - 0.5 * drift);
+  }
+  function radioStart() {
+    if (!radio) {
+      const mk = (src) => {
+        const a = new Audio(src);
+        a.preload = 'none';
+        a.loop = true;
+        a.preservesPitch = false;   // the tape sags: pitch follows speed
+        a.volume = 0;
+        return a;
+      };
+      radio = mk(RADIO_SRC);
+      radioDark = mk(RADIO_DARK_SRC);
+      radioHandle = {
+        play() { return active ? Promise.all([radio.play(), radioDark.play()]) : Promise.resolve(); },
+        pause() { for (const a of [radio, radioDark]) if (!a.paused) a.pause(); },
+      };
+    }
+    radioMix = 0; radioFade = 0; radioDuck = 1; radioCut = 0;
+    api.activeMusic = radioHandle;
+    if (api.soundEnabled) radioHandle.play().catch(() => {});
+    radioTimer = setInterval(radioTick, 100);
+  }
+  function radioStop() {
+    if (!radio) return;
+    clearInterval(radioTimer);
+    radioHandle.pause();
+    if (api.activeMusic === radioHandle) api.activeMusic = null;
+  }
 
   /* View matrix: `translateZ(P) rotate… translate3d(-cam)`. The leading
      translateZ(P) is load-bearing — the CSS eye sits at z=P in front of the
@@ -241,7 +309,7 @@ function initRoom(api) {
       '<div class="rp rm-trophy" data-tip="the collection" data-bx="-1080" data-by="-228" data-bz="-455">🏆</div>' +
       '<div class="rp rm-clock-top"></div>' +
       '<div class="rp rm-clock-side"></div>' +
-      '<div class="rp rm-clock" data-tip="it is always late here"><span></span></div>' +
+      '<div class="rp rm-clock" data-tip="the clock radio. one station, this late."><span></span></div>' +
       '<div class="rp rm-lava" data-tip="groovy." data-act="lamp" data-bx="-630" data-by="350" data-bz="-60"><i></i><i></i><i></i></div>' +
       // desk
       '<div class="rp rm-desk-shadow"></div>' +
@@ -412,6 +480,7 @@ function initRoom(api) {
     viewport.classList.add('creep-' + n);
     if (n === 2) {
       clockEl.textContent = '9000';
+      radioCut = 16;   // the station drops out for as long as the clock stutters
       later(() => { if (active) setClock(); }, 1600);
       thump();
     }
@@ -423,6 +492,7 @@ function initRoom(api) {
       duckEl.dataset.tip = 'it saw everything. it says nothing.';
       stickyEl.dataset.tip = 'that is not your handwriting.';
       bedEl.dataset.tip = 'do not check under the blanket.';
+      clockEl.parentNode.dataset.tip = 'that is not a station.';
       api.line('<span class="err">HAL:</span> I can see you standing there.');
       api.scroll();
       // the door sign wants something from you; step() watches for compliance
@@ -442,6 +512,7 @@ function initRoom(api) {
       hallOpen = true; // creep-4 class swings the door; blocked() lets you through
       doorEl.dataset.tip = 'it opened for you.';
       api._chirp(64, 'sine', 0.9, 0.06); // the hinge groans
+      radioCut = 8;    // dead air as the door opens; what comes back is all his
       api.line('<span class="dim">somewhere past the door, a phone begins to ring.</span>');
       api.scroll();
       if (!answered) startRinging();
@@ -1195,6 +1266,7 @@ function initRoom(api) {
     duckEl.dataset.tip = 'the finest debugger money can buy';
     stickyEl.dataset.tip = 'TODO: touch grass';
     bedEl.dataset.tip = 'still made. suspicious.';
+    clockEl.parentNode.dataset.tip = 'the clock radio. one station, this late.';
     updateBills(); // face the start camera before first paint
 
     // black over everything BEFORE the swap; it fades out on the pull-back
@@ -1251,6 +1323,7 @@ function initRoom(api) {
 
     setClock();
     clockTimer = setInterval(setClock, 20000);
+    radioStart();
     api._chirp(58, 'sine', 0.5, 0.07);
     later(() => { if (active && !exiting) hint.classList.add('show'); }, 1600);
   }
@@ -1295,6 +1368,7 @@ function initRoom(api) {
         viewport.removeEventListener('click', clickHandler);
         cancelAnimationFrame(rafId);
         clearInterval(clockTimer);
+        radioStop();
         while (timers.length) clearTimeout(timers.pop());
         active = false;
         exiting = false;

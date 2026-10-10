@@ -2518,6 +2518,9 @@
       cmd,
       get godmodeUnlocked() { return godmodeUnlocked; },
       get playerName() { return playerName; },
+      get soundEnabled() { return soundEnabled; },
+      get activeMusic() { return activeMusic; },
+      set activeMusic(v) { activeMusic = v; },
     };
   }
   /* Is there a physical keyboard? No web API answers this, so use the best
@@ -2752,6 +2755,9 @@
       get achOverlayOpen() { return !!achOverlayEl; },
       get roomActive() { return roomActive; },
       set roomActive(v) { roomActive = v; },
+      // the clock radio parks its { play, pause } handle here for the sound toggle
+      get activeMusic() { return activeMusic; },
+      set activeMusic(v) { activeMusic = v; },
     };
   }
   function launchRoom() {
