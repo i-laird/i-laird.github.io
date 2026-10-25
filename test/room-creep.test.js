@@ -36,6 +36,7 @@ function setup({ visits, hour = 12, schedule = [60000, 60000, 60000, 60000] } = 
   if (visits !== undefined) window.localStorage.setItem('ilaird_room_visits', String(visits));
   runScripts(dom, ['room.js']);
   const lines = [];
+  const unlocked = [];
   const api = {
     halWorkerUrl: '',
     turnstileKey: '',
@@ -51,7 +52,7 @@ function setup({ visits, hour = 12, schedule = [60000, 60000, 60000, 60000] } = 
     line: (h) => lines.push(h),
     blank() {},
     scroll() {},
-    unlockAchievement() {},
+    unlockAchievement: (id) => unlocked.push(id),
     _chirp() {},
     halSpeak() {},
     halD: (s) => s,
@@ -62,7 +63,7 @@ function setup({ visits, hour = 12, schedule = [60000, 60000, 60000, 60000] } = 
     window.document.dispatchEvent(
       new window.KeyboardEvent('keydown', { key: k, bubbles: true })
     );
-  return { window, room, $, key, lines, close: () => window.close() };
+  return { window, room, $, key, lines, unlocked, close: () => window.close() };
 }
 
 const stage = ($) => {
@@ -161,4 +162,78 @@ test('the tab title while you are away, restored when you leave', async (t) => {
   key('Escape');
   await wait(400);
   assert.equal(window.document.title, 'ian laird', 'leaving restores the real title');
+});
+
+test('the room turns one prop at a time, and only the ones you are not looking at', async (t) => {
+  const { window, room, $, close } = setup({ schedule: [50, 100, 150, 600000] });
+  t.after(close);
+  const key = (type, k) =>
+    window.document.dispatchEvent(new window.KeyboardEvent(type, { key: k, bubbles: true }));
+  room.open();
+  await wait(2000); // the fly-out lands; stages 1-3 arrive
+  assert.equal(stage($), 3);
+  // nothing changes at once: a few seconds in, only some of the unwatched props have turned
+  await wait(4500);
+  const turned = window.document.querySelectorAll('.cr1, .cr2, .cr3').length;
+  assert.ok(turned >= 1 && turned <= 4, `one at a time (${turned} so far)`);
+  // the start camera faces the monitor: the poster and the monitor's LED are in view and untouched
+  assert.ok(
+    !$('.rm-hal-eye').classList.contains('cr1'),
+    'the poster you are looking at is unchanged'
+  );
+  assert.ok(!$('.rm-led').classList.contains('cr2'), 'so is the LED');
+  assert.ok(!$('.creep-4'), 'and the door has not opened (stage 4 has not come)');
+
+  // turn your back on them, and they get their turn
+  key('keydown', 'ArrowRight');
+  await wait(1800);
+  key('keyup', 'ArrowRight');
+  await wait(6500);
+  assert.ok($('.rm-hal-eye').classList.contains('cr1'), 'behind you, the poster changed');
+
+  key('keydown', 'Escape');
+  await wait(400);
+  room.open(); // every visit starts clean
+  assert.equal(window.document.querySelectorAll('.cr1, .cr2, .cr3').length, 0);
+  key('keydown', 'Escape');
+  await wait(400);
+});
+
+test('the poster is THE MATRIX until you look away — then it is 2001, and it watches back', async (t) => {
+  const { window, room, $, unlocked, close } = setup({ schedule: [50, 100, 150, 600000] });
+  t.after(close);
+  const key = (type, k) =>
+    window.document.dispatchEvent(new window.KeyboardEvent(type, { key: k, bubbles: true }));
+  const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  room.open();
+  await wait(2500);
+  const poster = $('.rm-poster-hal');
+  assert.ok(poster.classList.contains('rm-poster-matrix'), 'it starts as The Matrix');
+  assert.match(poster.textContent, /THE MATRIX/);
+  click(poster);
+  assert.deepEqual(unlocked, [], 'no egg in a Matrix poster');
+
+  key('keydown', 'ArrowRight'); // turn your back on it
+  await wait(1800);
+  key('keyup', 'ArrowRight');
+  await wait(4500);
+  assert.ok(!poster.classList.contains('rm-poster-matrix'), 'behind you, it became 2001');
+  assert.equal(poster.dataset.egg, 'watched-back');
+  key('keydown', 'ArrowLeft');
+  await wait(1800);
+  key('keyup', 'ArrowLeft');
+  click(poster);
+  assert.deepEqual(unlocked, ['watched-back'], 'and now it watches back');
+
+  for (let i = 0; i < 3; i++) key('keydown', '9'); // the skip applies every remaining turn
+  assert.ok($('.rm-lava').classList.contains('cr2'), "the lamp's blobs are eyes now");
+  assert.match($('.rm-stitch').textContent, /no way out/);
+  key('keydown', 'Escape');
+  await wait(400);
+  room.open(); // a new visit: The Matrix again
+  assert.ok(poster.classList.contains('rm-poster-matrix'));
+  assert.equal(poster.dataset.egg, undefined);
+  assert.match($('.rm-stitch').textContent, /no place/);
+  key('keydown', 'Escape');
+  await wait(400);
 });

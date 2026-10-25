@@ -27,7 +27,8 @@
     "audit": "npm audit --audit-level=high",
     "gen-security-txt": "node scripts/gen-security-txt.js",
     "fuzz-sf": "node scripts/assemble-sf.js && node scripts/fuzz-sf.js",
-    "check": "npm run lint && npm run lint:html && npm run format:check && npm test"
+    "check": "npm run lint && npm run lint:html && npm run format:check && npm test",
+    "render-resume": "./scripts/render-resume.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",

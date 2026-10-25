@@ -83,11 +83,14 @@ test('the clock radio plays, corrupts with the creep, and stops on the way out',
   t.after(close);
 
   room.open();
-  assert.equal(made.length, 2, 'the station and its twin');
-  const [clean, dark] = made;
+  assert.equal(made.length, 3, 'the station, its twin, and the hallway song');
+  const [clean, dark, song] = made;
   assert.ok(clean.src.endsWith('two_am_radio_station.mp3'));
   assert.ok(dark.src.endsWith('two_am_radio_station_dark.mp3'));
-  for (const a of made) {
+  assert.ok(song.src.endsWith('daisy_buried.mp3'));
+  assert.ok(fs.existsSync(path.join(__dirname, '..', song.src)), `${song.src} exists on disk`);
+  assert.equal(song.plays, 0, 'the hallway song waits for the hallway');
+  for (const a of [clean, dark]) {
     assert.ok(fs.existsSync(path.join(__dirname, '..', a.src)), `${a.src} exists on disk`);
     assert.equal(a.loop, true);
     assert.equal(a.plays, 1, 'both start together when sound is on');
@@ -105,9 +108,22 @@ test('the clock radio plays, corrupts with the creep, and stops on the way out',
   assert.equal(clean.playbackRate, 1, 'calm: the tape runs true');
 
   await wait(4500); // fly-out lands (~1.7s), then every creep stage fires
-  assert.ok(window.document.querySelector('.creep-4'), 'the creep reached its last stage');
+  // (the stage itself — the open door is a separate, unwatched step; see room-creep tests)
   assert.ok(dark.volume > clean.volume, 'the twin has overtaken the station');
-  assert.ok(clean.playbackRate < 0.97, 'and the tape has sagged');
+  // the tape sags, and from stage 1 it wows and flutters around the sag
+  const rates = [];
+  for (let i = 0; i < 12; i++) {
+    rates.push(clean.playbackRate);
+    await wait(100);
+  }
+  const mean = rates.reduce((x, y) => x + y, 0) / rates.length;
+  assert.ok(mean < 0.97, `and the tape has sagged (mean rate ${mean.toFixed(3)})`);
+  assert.ok(Math.max(...rates) - Math.min(...rates) > 0.005, 'and it warbles');
+  assert.equal(
+    song.plays,
+    0,
+    'the door is open, but you are still in the room: no hallway song'
+  );
   assert.match(
     window.document.querySelector('.rm-clock').dataset.tip,
     /not a station/,
@@ -126,7 +142,11 @@ test('sound off: the radio is parked silent until the toggle starts it', async (
   t.after(close);
 
   room.open();
-  assert.equal(made[0].plays + made[1].plays, 0, 'nothing plays while sound is off');
+  assert.equal(
+    made[0].plays + made[1].plays + made[2].plays,
+    0,
+    'nothing plays while sound is off'
+  );
   api.activeMusic.play(); // what resumeModeAudio does when sound is turned on
   assert.equal(made[0].plays + made[1].plays, 2, 'turning sound on starts both');
   key('Escape');

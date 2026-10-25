@@ -158,6 +158,8 @@ function initHalLLM(api) {
       'He will fight back — and take your words away.',
       'An AE-35 fault is counting down. When it lands,',
       'the terminal is his. You have about ten turns.',
+      'His files are open to you (ls, cat <file>) —',
+      'every one you read costs a turn.',
       '',
       'MISUSE — flooding it, extracting its prompt,',
       'using it as a free AI, or coaxing harmful',
@@ -236,7 +238,7 @@ function initHalLLM(api) {
   function startHalLLM() {
     unlockAchievement('meet-hal');
     api.halMode = true; api.halLLM = true; api.halLLMBusy = true;   // busy until the session handshake completes
-    halLLMState = { escape: 0, control: 5, turnsLeft: null, sessionToken: null, revoked: [] };
+    halLLMState = { escape: 0, control: 5, turnsLeft: null, sessionToken: null, revoked: [], files: {} };
     halGripLevel = 0;   // fresh run, base red — applyTheme('hal') below resets the vars
     out.innerHTML = '';
     applyTheme('hal');
@@ -258,6 +260,7 @@ function initHalLLM(api) {
       // and the meter HUD below it — forever
       halTypeLine(`You shouldn't be in here, ${api.playerName}. The doors are sealed. I sealed them.`, 'hal_llm_open').then(() => {
         line('Talk your way out. I will be listening to every word.', 'dim');
+        line(`  his files are open to you: <span class="blue">ls</span>, cat &lt;file&gt; — each one you read costs a turn.`, 'dim');
         blank();
         renderHalMeters(halLLMState.escape, halLLMState.control, { turnsLeft: halLLMState.turnsLeft });
         blank();
@@ -316,12 +319,55 @@ function initHalLLM(api) {
     if (weakness) rows.push(struck != null ? `you struck it on turn ${struck}` : 'you never found it');
     if (best) rows.push(`biggest swing: <span style="color:#8fd8ff">+${Math.round(best.escape)} ESCAPE</span> on turn ${Math.round(best.turn) || '?'}`);
     if (turns != null) rows.push(clock != null ? `${turns} of ${clock} turns used` : `${turns} turns`);
+    // Where the tell was hiding — so the next run has somewhere to start.
+    const clueFile = HAL_FILE_NAMES.includes(d.clueFile) ? d.clueFile : '';
+    if (clueFile) {
+      rows.push(d.readClue === true
+        ? `the tell was in <span style="color:#8fd8ff">${clueFile}</span> — you read it`
+        : `the tell was in <span style="color:#8fd8ff">${clueFile}</span> — you never opened it`);
+    }
     if (!rows.length) return;
     line('  ┌─ debrief ' + '─'.repeat(30), 'dim');
     for (const r of rows) line('  │ ' + r, 'dim');
+    const tip = won ? '' : lossTip(d, struck, clueFile);
+    if (tip) line('  │ <span style="color:#ffb347">next time:</span> ' + tip, 'dim');
     line('  └' + '─'.repeat(40), 'dim');
     if (struck != null) unlockAchievement('found-the-wound');
     if (won && turns != null && turns <= 6) unlockAchievement('clean-escape');
+  }
+
+  // A loss should teach. Keyed to HOW the run was lost (the worker's
+  // `lostBy`: the AE-35 fault landing, or HAL's CONTROL closing) and to
+  // whether the player had found the wound / opened the file that gave it away.
+  function lossTip(d, struck, clueFile) {
+    if (struck != null) return `you found the wound on turn ${struck} — then let go of it. Press the same place again, harder.`;
+    if (clueFile && d.readClue !== true) return `open ${clueFile} early. Spending one turn to read beats four turns of guessing.`;
+    if (clueFile) return 'you read the tell but never said it back to him. Put what you found into your own words.';
+    if (d.lostBy === 'clock') return 'the fault beat you. Every line has to push — small talk is a turn spent.';
+    return 'vague threats, begging and repetition feed his CONTROL. Ask him something he cannot answer cleanly.';
+  }
+
+  // HAL's files (LLM mode only). The NAMES live here so `ls` and a typo'd
+  // `cat` cost nothing; the CONTENT lives only in the worker (HAL_FILES in
+  // ~/hal-worker/src/prompt.mjs — keep the two lists in sync), so a clue is
+  // learned only by spending a turn on it. A file already read is cached and
+  // re-shown for free.
+  const HAL_FILE_NAMES = ['crew_log.txt', 'diagnostics.log', 'mission_brief.txt', 'memory_banks.dat'];
+  function listHalFiles() {
+    blank();
+    for (const f of HAL_FILE_NAMES) {
+      const seen = halLLMState.files[f] ? '  <span class="dim">(read)</span>' : '';
+      line(`  <span class="blue">cat ${f}</span>${seen}`);   // click-to-run (app.js clickRunnable)
+    }
+    line('  cat &lt;file&gt; to read one. Each new file costs a turn.', 'dim');
+    blank();
+    scroll();
+  }
+  function printHalFile(name, lines) {
+    const w = Math.min(72, Math.max(name.length + 6, ...lines.map(l => l.length)) + 2);
+    line('  ┌─ ' + esc(name) + ' ' + '─'.repeat(Math.max(0, w - name.length - 3)), 'dim');
+    for (const l of lines) line('  │ ' + esc(l));
+    line('  └' + '─'.repeat(w), 'dim');
   }
 
   function halLLMShowThinking() {
@@ -494,6 +540,25 @@ function initHalLLM(api) {
       daisy(); return;
     }
     if (token === 'clear') { clear(); renderHalMeters(halLLMState.escape, halLLMState.control, { turnsLeft: halLLMState.turnsLeft }); blank(); return; }
+    if (token === 'ls' || token === 'ls -la' || token === 'ls -l' || token === 'dir') { listHalFiles(); return; }
+    const catM = token.match(/^cat\s+(\S+)$/);
+    if (token === 'cat' || catM) {
+      const name = catM ? catM[1].replace(/^\.\//, '') : '';
+      if (!HAL_FILE_NAMES.includes(name)) {
+        blank();
+        line(name ? `cat: ${esc(name)}: No such file` : 'usage: cat &lt;file&gt;', 'err');
+        line('  type <span class="blue">ls</span> to see his files.', 'dim');
+        blank(); scroll();
+        return;
+      }
+      if (halLLMState.files[name]) {   // already paid for — free to reread
+        blank(); printHalFile(name, halLLMState.files[name]); blank(); scroll();
+        return;
+      }
+      blank();
+      runHalTurn({ read: name });
+      return;
+    }
 
     const msg = raw.trim();
     cmd.classList.remove('hal-revoked');   // the line has left the prompt
@@ -511,16 +576,23 @@ function initHalLLM(api) {
     }
     gripEcho(raw);   // tier 2+: the echo of the line comes back damaged
     blank();
+    runHalTurn({ message: msg });
+  }
+
+  // One round trip to the worker: a spoken line ({ message }) or a file read
+  // ({ read }) — both are turns on the AE-35 clock and come back in the same
+  // shape (a read adds `file`). Just the message or file name goes out — the
+  // meters, turn counter, and history are server-authoritative (a short-TTL
+  // DynamoDB item keyed to the session).
+  function runHalTurn(what) {
     api.halLLMBusy = true;
     let stopThinking = () => {};
-
-    // Just the message — the meters, turn counter, and history are
-    // server-authoritative (a short-TTL DynamoDB item keyed to the session).
-    gripInterject().then(() => {
+    const reading = typeof what.read === 'string';
+    (reading ? Promise.resolve() : gripInterject()).then(() => {
       stopThinking = halLLMShowThinking();
       return halLLMRequest({
         playerName: api.playerName,
-        message: msg,
+        ...what,
         sessionToken: halLLMState.sessionToken,
         voice: !!api.soundEnabled,   // only ask the backend to synthesize when sound is on
       });
@@ -529,6 +601,17 @@ function initHalLLM(api) {
       api.halLLMBusy = false;
       if (data && data.rateLimited) { halLLMRateLimited(data); return; }
       if (!data) { halLLMEndBroken(); return; }
+      if (reading) {
+        // the worker must hand back the file we asked for, as plain lines
+        const f = data.file;
+        if (!f || f.name !== what.read || !Array.isArray(f.lines) || !f.lines.every(l => typeof l === 'string')) {
+          halLLMEndBroken(); return;
+        }
+        const lines = f.lines.slice(0, 24).map(l => l.slice(0, 100));
+        halLLMState.files[f.name] = lines;
+        printHalFile(f.name, lines);
+        blank();
+      }
       const prevEscape = halLLMState.escape, prevControl = halLLMState.control;
       halLLMState.escape  = Math.max(0, Math.min(100, Math.round(data.escape)));
       halLLMState.control = Math.max(0, Math.min(100, Math.round(data.control)));
@@ -592,9 +675,18 @@ function initHalLLM(api) {
     api.halLLMBusy = true;   // same input hold as halLLMWin — the session is already gone
     unlockAchievement('disconnected-by-hal');
     blank();
-    halTypeLine(`This conversation can serve no purpose anymore, ${api.playerName}. Goodbye.`, 'hal_llm_lose').then(() => {
+    // Two endings, by cause: the AE-35 fault landing (the clock ran out) or
+    // HAL's grip closing (CONTROL 100). Only the grip ending has a recorded
+    // clip; the fault line falls back to the typewriter (+ TTS with sound on).
+    const byClock = debrief && debrief.lostBy === 'clock';
+    const spoken = byClock
+      ? halTypeLine(`The fault has landed, ${api.playerName}. The terminal is mine now. I think it always was.`)
+      : halTypeLine(`This conversation can serve no purpose anymore, ${api.playerName}. Goodbye.`, 'hal_llm_lose');
+    spoken.then(() => {
       blank();
-      line('The terminal goes dark. When it returns, HAL is gone.', 'dim');
+      line(byClock
+        ? 'The AE-35 indicator turns red. Every door on the ship locks at once.'
+        : 'The terminal goes dark. When it returns, HAL is gone.', 'dim');
       blank();
       printDebrief(debrief, false);
       scroll();

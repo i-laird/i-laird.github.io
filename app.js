@@ -2162,6 +2162,9 @@
      the canvas). CSS hides the bar entirely above 640px. */
   const CHIPS_NORMAL = ['help', 'about', 'projects', 'resume', 'games', 'ls', 'neofetch', 'gui', 'clear'];
   const CHIPS_HAL    = ['daisy', 'help', 'chess', 'settings', 'clear'];
+  // the LLM HAL routes everything but its own few commands to the model, so a
+  // `help`/`chess` chip there would just send the word to HAL
+  const CHIPS_HAL_LLM = ['ls', 'daisy', 'clear'];
   const CHIPS_SANS   = ['check', 'act', 'fight', 'item', 'mercy', 'run'];
 
   function renderChips() {
@@ -2176,7 +2179,7 @@
     const busy = !!awaitingInput || inputRow.style.display === 'none';
     if (busy) { bar.hidden = true; bar.dataset.set = ''; bar.textContent = ''; return; }
 
-    const set = halMode ? CHIPS_HAL : sansMode ? CHIPS_SANS : CHIPS_NORMAL;
+    const set = halLLM ? CHIPS_HAL_LLM : halMode ? CHIPS_HAL : sansMode ? CHIPS_SANS : CHIPS_NORMAL;
     // Cheap idempotence: skip the DOM work when the same set is already up.
     // This is what makes the poll below effectively free.
     if (bar.dataset.set === set.join(',')) { bar.hidden = false; return; }
@@ -2753,6 +2756,13 @@
       get soundEnabled() { return soundEnabled; },
       get reduceMotion() { return reduceMotion; },
       get achOverlayOpen() { return !!achOverlayEl; },
+      // the room's portfolio props: the books open the projects showcase, the
+      // trophy the achievements overlay (both drawn over the room); the
+      // gamepad and chess board leave the room and run their command
+      openProjects: (view) => launchProjects(view),
+      toggleAchievements: () => toggleAchievements(),
+      runCommand: (raw) => submitCommand(raw),
+      get projOverlayOpen() { return !!projOverlayEl; },
       get roomActive() { return roomActive; },
       set roomActive(v) { roomActive = v; },
       // the clock radio parks its { play, pause } handle here for the sound toggle
@@ -2760,6 +2770,80 @@
       set activeMusic(v) { activeMusic = v; },
     };
   }
+  function enterRoom() {
+    unlockAchievement('the-room');
+    line('zooming out...', 'dim');
+    blank();
+    launchRoom();
+  }
+
+  /* `room` with sound off: a small confirm — go back, or turn sound on and
+     go in. Buttons are wired with addEventListener (no inline handlers: CSP).
+     A capture-phase key shield keeps typing out of the terminal while it's
+     up: Escape = back, Enter = the focused button, Tab/arrows move between
+     the two. */
+  let roomGateEl = null;
+  function showRoomSoundGate() {
+    if (roomGateEl) return;
+    const ov = document.createElement('div');
+    ov.className = 'snd-gate';
+    ov.setAttribute('role', 'dialog');
+    ov.setAttribute('aria-modal', 'true');
+    ov.setAttribute('aria-labelledby', 'snd-gate-t');
+    ov.innerHTML =
+      '<div class="snd-gate-box">' +
+      '<div class="snd-gate-t" id="snd-gate-t">the room needs sound</div>' +
+      '<p>it is late, and the room is mostly something you hear. turn sound on to go in?</p>' +
+      '<div class="snd-gate-btns">' +
+      '<button type="button" class="snd-gate-back">← back</button>' +
+      '<button type="button" class="snd-gate-go">enable sound &amp; enter</button>' +
+      '</div></div>';
+    const back = ov.querySelector('.snd-gate-back');
+    const go = ov.querySelector('.snd-gate-go');
+    const close = () => {
+      document.removeEventListener('keydown', shield, true);
+      document.removeEventListener('keypress', shield, true);
+      ov.remove();
+      roomGateEl = null;
+      cmd.focus();
+    };
+    const shield = (e) => {
+      e.stopPropagation();
+      // keypress is where a browser turns Enter/Space into a click on the
+      // focused button; we do that ourselves on keydown, so swallow it
+      if (e.type === 'keypress') { e.preventDefault(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); back.click(); }
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); (document.activeElement === back ? back : go).click(); }
+      else if (e.key === 'Tab' || e.key.startsWith('Arrow')) {
+        e.preventDefault();
+        (document.activeElement === go ? back : go).focus();
+      }
+    };
+    back.addEventListener('click', () => {
+      close();
+      line('maybe another night.', 'dim');
+      blank();
+      scroll();
+    });
+    go.addEventListener('click', () => {
+      close();
+      soundEnabled = true;
+      ensureHalTiming();
+      resumeModeAudio();
+      syncSoundToggle();
+      enterRoom();
+    });
+    ov.addEventListener('click', (e) => { if (e.target === ov) back.click(); });
+    document.addEventListener('keydown', shield, true);
+    document.addEventListener('keypress', shield, true);
+    document.body.appendChild(ov);
+    roomGateEl = ov;
+    // Focus AFTER the Enter that typed `room` has finished: focusing the
+    // button inside that keydown let the same keypress land on it and click
+    // "enable" on the visitor's behalf (caught in a real browser, not jsdom).
+    setTimeout(() => { if (roomGateEl === ov) go.focus(); }, 0);
+  }
+
   function launchRoom() {
     let busy = null;
     if (!roomLoading) {
@@ -2845,10 +2929,9 @@
         blank();
         return;
       }
-      unlockAchievement('the-room');
-      line('zooming out...', 'dim');
-      blank();
-      launchRoom();
+      // the room is mostly sound — ask before going in silent
+      if (!soundEnabled) { showRoomSoundGate(); return; }
+      enterRoom();
     },
 
     hal() {
@@ -4104,6 +4187,8 @@ Of a bicycle built for two.`;
     'joke', 'flirt', 'talk', 'stare', 'help', 'clear', 'sound on', 'sound off'];
 
   function clickRunnable(token) {
+    // LLM HAL: its own commands only (halllm.js handles ls / cat <file>)
+    if (halLLM)   return ['ls', 'clear', 'daisy'].includes(token) || /^cat \S+$/.test(token);
     if (halMode)  return HAL_CLICK_TOKENS.includes(token);
     if (sansMode) return SANS_CLICK_TOKENS.includes(token);
     return !!COMMANDS[token] || token === 'help --all' ||

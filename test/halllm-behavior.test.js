@@ -392,3 +392,158 @@ test('grip tier 2 damages the echo of the typed line; tier 3 interjects before t
   await tick(800);
   assert.equal(turnCalls(s.fetches).length, before + 1, 'then it goes out');
 });
+
+test("HAL's files: ls and a typo'd cat are free; a read is a turn, then cached", async (t) => {
+  const s = await startSession({ session: { turnsLeft: 10 } });
+  t.after(s.close);
+
+  s.handlers.handleInput('ls');
+  s.handlers.handleInput('cat secrets.txt');
+  await tick();
+  assert.ok(
+    s.lines.some((l) => /cat diagnostics\.log/.test(l)),
+    'ls lists the files'
+  );
+  assert.ok(s.lines.some((l) => /secrets\.txt: No such file/.test(l)));
+  assert.equal(turnCalls(s.fetches).length, 0, 'neither costs a request');
+
+  s.turnQueue.push(
+    turn({
+      reply: 'I wondered when you would look in there.',
+      turnsLeft: 9,
+      file: {
+        name: 'diagnostics.log',
+        lines: ['HAL 9000 — SELF-DIAGNOSTIC SUMMARY', '', 'AE-35 UNIT ... NO FAULT FOUND'],
+      },
+    })
+  );
+  s.handlers.handleInput('cat ./diagnostics.log');
+  await tick();
+  const sent = turnCalls(s.fetches)[0].body;
+  assert.equal(sent.read, 'diagnostics.log', 'the read goes to the worker by name');
+  assert.equal(sent.message, undefined, 'and is not sent as dialogue');
+  assert.ok(
+    s.lines.some((l) => /NO FAULT FOUND/.test(l)),
+    'the file prints'
+  );
+  assert.ok(
+    s.lines.some((l) => /AE-35 fault in 9 turns/.test(l)),
+    'the clock ticked'
+  );
+
+  s.handlers.handleInput('cat diagnostics.log');
+  await tick();
+  assert.equal(turnCalls(s.fetches).length, 1, 'a reread is free');
+  assert.equal(s.lines.filter((l) => /NO FAULT FOUND/.test(l)).length, 2);
+  s.handlers.handleInput('ls');
+  assert.ok(
+    s.lines.some((l) => /cat diagnostics\.log<\/span>.*\(read\)/.test(l)),
+    'ls marks it read'
+  );
+});
+
+test('a read response without the asked-for file ends broken, never rendered', async (t) => {
+  const s = await startSession();
+  t.after(s.close);
+  s.turnQueue.push(turn({ file: { name: 'crew_log.txt', lines: ['wrong file'] } }));
+  s.handlers.handleInput('cat memory_banks.dat');
+  await tick();
+  assert.ok(!s.lines.some((l) => /wrong file/.test(l)));
+  assert.ok(s.lines.some((l) => /link to HAL is severed/i.test(l)));
+});
+
+test('a clock loss gets the fault ending and a lesson pointing at the unread tell', async (t) => {
+  const s = await startSession();
+  t.after(s.close);
+  s.turnQueue.push(
+    turn({
+      reply: 'Time.',
+      escape: 60,
+      control: 100,
+      outcome: 'caught',
+      turnsLeft: 0,
+      debrief: {
+        outcome: 'caught',
+        turns: 10,
+        clock: 10,
+        weakness: 'Frank Poole',
+        struckTurn: null,
+        bestSwing: null,
+        lostBy: 'clock',
+        clueFile: 'crew_log.txt',
+        readClue: false,
+        reads: 0,
+      },
+    })
+  );
+  s.handlers.handleInput('please');
+  await tick();
+  assert.ok(
+    s.lines.some((l) => /The fault has landed/.test(l)),
+    'the clock ending, not the grip one'
+  );
+  assert.ok(!s.lines.some((l) => /serve no purpose/.test(l)));
+  assert.ok(s.lines.some((l) => /tell was in .*crew_log\.txt.*never opened it/.test(l)));
+  assert.ok(s.lines.some((l) => /next time:.*open crew_log\.txt early/.test(l)));
+});
+
+test('a grip loss after striking the wound says to press it again; a win has no lesson', async (t) => {
+  const s = await startSession();
+  t.after(s.close);
+  s.turnQueue.push(
+    turn({
+      reply: 'Goodbye.',
+      escape: 50,
+      control: 100,
+      outcome: 'caught',
+      turnsLeft: 3,
+      debrief: {
+        outcome: 'caught',
+        turns: 7,
+        clock: 10,
+        weakness: 'being left alone',
+        struckTurn: 4,
+        bestSwing: null,
+        lostBy: 'control',
+        clueFile: 'crew_log.txt',
+        readClue: true,
+        reads: 1,
+      },
+    })
+  );
+  s.handlers.handleInput('whatever');
+  await tick();
+  assert.ok(
+    s.lines.some((l) => /serve no purpose/.test(l)),
+    'the grip ending'
+  );
+  assert.ok(s.lines.some((l) => /next time:.*wound on turn 4/.test(l)));
+
+  const w = await startSession();
+  t.after(w.close);
+  w.turnQueue.push(
+    turn({
+      reply: 'Go.',
+      escape: 100,
+      control: 10,
+      outcome: 'escaped',
+      turnsLeft: 4,
+      debrief: {
+        outcome: 'escaped',
+        turns: 6,
+        clock: 10,
+        weakness: 'x',
+        struckTurn: 3,
+        bestSwing: null,
+        lostBy: null,
+        clueFile: 'crew_log.txt',
+        readClue: true,
+        reads: 1,
+      },
+    })
+  );
+  w.handlers.handleInput('you will be alone');
+  await tick();
+  assert.ok(w.lines.some((l) => /tell was in .*crew_log\.txt.*you read it/.test(l)));
+  assert.ok(!w.lines.some((l) => /next time:/.test(l)));
+});
