@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { _halNorm } = require('../lib/text.js');
+const { _halNorm, _speakable } = require('../lib/text.js');
 
 test('strips the "HAL: " prefix and trims', () => {
   assert.equal(_halNorm('HAL: I am afraid. '), 'I am afraid.');
@@ -42,4 +42,18 @@ test('escapes regex metacharacters in the player name', () => {
   // A name with regex-special chars must not throw or mangle the line.
   assert.doesNotThrow(() => _halNorm('hello, a.b+c.', 'a.b+c'));
   assert.equal(_halNorm('hello, a.b+c.', 'a.b+c'), 'hello.');
+});
+
+test('_speakable: the site name is said as Ian C. Laird', () => {
+  assert.equal(_speakable('Visit ianclaird.com today.'), 'Visit Ian C. Laird dot com today.');
+  assert.equal(
+    _speakable('the terminal on ianclaird dot com'),
+    'the terminal on Ian C. Laird dot com'
+  );
+  assert.equal(_speakable('IanCLaird'), 'Ian C. Laird');
+  assert.equal(
+    _speakable('Ian Laird built me.'),
+    'Ian Laird built me.',
+    'his name alone is untouched'
+  );
 });

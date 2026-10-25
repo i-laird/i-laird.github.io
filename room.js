@@ -75,6 +75,14 @@ function initRoom(api) {
   let hallSconces = [], hallDoors = [], slamDoor = null, slammed = false;
   let figFarEl = null, figBackEl = null, figFar = true, figBack = 0;
   let stepAcc = 0, wasMoving = false;
+  // the room changing behind your back (see "while you aren't looking")
+  let chairGrpEl = null, chairAng = 0, lastChairT = 0, lastShiftT = 0, lastShiftCheck = 0;
+  let mugEl = null, mug2El = null, padBedEl = null, padChairEl = null, trophyEl = null;
+  let tallyEl = null, cityLights = [], watchEl = null, fogEl = null, flickEl = null;
+  let reflEl = null, reflOn = false, reflN = 0, shadowEl = null, shadow2El = null;
+  let visits = 0, lastActive = 0, stared = false, stillFlicked = false, lastPose = '';
+  let termStep = 0, hiddenTitle = null, visHandler = null;
+  const shifts = [];
   let tvEl = null, tvCh = 0, ballEl = null, lastAnswer = -1, fishEl = null, calEl = null;
   let creepTipEls = [];
   let creepStage = 0, ringing = false, answered = false, callTyper = null;
@@ -239,9 +247,13 @@ function initRoom(api) {
       else if (!blocked(nx, cam.z)) { cam.x = nx; }
       else if (!blocked(cam.x, nz)) { cam.z = nz; }
     }
+    const moved = Math.hypot(cam.x - px, cam.z - pz);
     const t = camTransform();
-    if (t !== lastT) { lastT = t; world.style.transform = t; }
+    if (t !== lastT) { lastT = t; world.style.transform = t; shadowTick(); }
     updateBills();
+    shiftTick(now);
+    reflTick();
+    stillTick(now, moved);
     if (signState) {
       // fz = how much the camera faces the front wall (+z, where the sign is)
       const fz = -Math.cos((cam.yaw * Math.PI) / 180);
@@ -251,7 +263,7 @@ function initRoom(api) {
         doorSignEl.innerHTML = 'HE IS<br>WAITING';
       }
     }
-    if (hallOpen && cam.z > 2200) hallTick(Math.hypot(cam.x - px, cam.z - pz));
+    if (hallOpen && cam.z > 2200) hallTick(moved);
     if (hallOpen && !hallWhispered && cam.z > 4600) {
       hallWhispered = true; // once per visit, deep in the corridor
       api.halSpeak('I see you.');
@@ -364,6 +376,206 @@ function initRoom(api) {
     }
   }
 
+  /* ── while you aren't looking ──
+     The room changes behind your back, never in front of you: every entry in
+     `shifts` waits for its creep stage AND for its prop to be off-screen
+     (offscreen() — more than ~62° off where the camera faces, comfortably
+     outside the view frustum at any window shape), then happens at most one
+     every few seconds. You never see anything move; you only notice it moved.
+     The desk chair is the slow one: from stage 2 it turns, a step at a time
+     and only while you look away, until it faces wherever you are standing —
+     and it is still facing that way next visit (ilaird_room_chair). */
+  const DEG = Math.PI / 180;
+  function offAxis(x, z) {   // degrees between the view direction and (x, z)
+    const fx = Math.sin(cam.yaw * DEG), fz = -Math.cos(cam.yaw * DEG);
+    const dx = x - cam.x, dz = z - cam.z, d = Math.hypot(dx, dz);
+    if (d < 1) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, (fx * dx + fz * dz) / d))) / DEG;
+  }
+  const offscreen = (x, z) => offAxis(x, z) > 62;
+
+  function setBill(el, x, y, z) {
+    el.dataset.bx = x; el.dataset.by = y; el.dataset.bz = z;
+    billYaw = null;   // re-pose on the next frame
+  }
+  function buildShifts() {
+    shifts.length = 0;
+    const add = (stage, x, z, run) => shifts.push({ stage, x, z, run, done: false });
+    add(2, -610, 200, () => setBill(mugEl, -610, 394, 290));                 // toward the edge
+    add(2, -280, -80, () => { setBill(duckEl, -470, 409, 250); duckEl.dataset.tip = 'it was on the monitor a minute ago.'; });
+    add(2, 1694, 250, () => renderTally(visits));                             // tonight's mark
+    add(3, 1350, 510, () => { padBedEl.classList.add('rm-hide'); padChairEl.classList.remove('rm-hide'); });
+    add(3, -1080, -455, () => trophyEl.classList.add('rm-hide'));
+    add(3, 130, 260, () => mug2El.classList.remove('rm-hide'));
+    add(3, -610, 290, () => setBill(mugEl, -610, 394, 336));                 // right on the edge now
+    add(3, -470, 250, () => { setBill(duckEl, 560, 874, 1960); duckEl.dataset.tip = 'it wants to show you something.'; });
+  }
+  function resetShifts() {
+    for (const sh of shifts) sh.done = false;
+    setBill(mugEl, -610, 394, 200);
+    setBill(duckEl, -280, -450, -80);
+    padBedEl.classList.remove('rm-hide');
+    padChairEl.classList.add('rm-hide');
+    trophyEl.classList.remove('rm-hide');
+    mug2El.classList.add('rm-hide');
+  }
+  function setChair(a) {
+    chairAng = a;
+    chairGrpEl.style.transform = 'translate3d(240px, 0, 640px) rotateY(' + a.toFixed(1) + 'deg) translate3d(-240px, 0, -640px)';
+  }
+  function shiftTick(now) {
+    if (now - lastShiftCheck < 400) return;
+    lastShiftCheck = now;
+    if (creepStage >= 2 && now - lastChairT > 7000 && offscreen(240, 640)) {
+      // the seat faces -z; rotateY(a) points it along (-sin a, -cos a)
+      const want = Math.atan2(-(cam.x - 240), -(cam.z - 640)) / DEG;
+      let diff = ((want - chairAng) % 360 + 540) % 360 - 180;
+      if (Math.abs(diff) > 12) {
+        diff = Math.max(-70, Math.min(70, diff));
+        setChair(chairAng + diff);
+        lastChairT = now;
+        store('ilaird_room_chair', chairAng.toFixed(1));
+      }
+    }
+    if (now - lastShiftT < 4500) return;
+    // first one that is due AND out of view — a visible prop never holds up the rest
+    const sh = shifts.find((c) => !c.done && c.stage <= creepStage && offscreen(c.x, c.z));
+    if (sh) {
+      sh.done = true;
+      lastShiftT = now;
+      sh.run();
+    }
+  }
+
+  /* ── the room remembers you ──
+     A visit counter in localStorage (ilaird_ prefix, so `forget` erases it):
+     tally marks scratched above the bed, one per visit (tonight's appears at
+     stage 2, behind your back); a return visit starts further along the
+     creep; the corkboard has a note for you; the chair is where it was left.
+     Visiting between 2 and 4 AM local time starts at stage 2 regardless. */
+  function store(k, v) { try { window.localStorage.setItem(k, v); } catch (e) {} }
+  function recall(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+  function renderTally(n) {
+    n = Math.min(n, 60);
+    let h = '';
+    for (let g = 0; g < n; g += 5) {
+      const c = Math.min(5, n - g);
+      h += '<b>' + '<i></i>'.repeat(Math.min(c, 4)) + (c === 5 ? '<s></s>' : '') + '</b>';
+    }
+    tallyEl.innerHTML = h;
+    tallyEl.dataset.tip = n ? 'scratched into the paint. someone is counting.' : '';
+    if (!n) delete tallyEl.dataset.tip;
+  }
+  function startStage() {
+    const hour = window.ROOM_CLOCK_HOUR !== undefined ? window.ROOM_CLOCK_HOUR : new Date().getHours();
+    const fromVisits = visits >= 4 ? 2 : visits >= 2 ? 1 : 0;
+    return Math.max(fromVisits, hour >= 2 && hour < 4 ? 2 : 0);
+  }
+
+  /* ── the window ──
+     From stage 1 the city goes dark one lit window at a time, until only one
+     is left; at stage 2 someone is standing in it; at stage 3 the glass fogs
+     and LET ME IN is written in it — backwards, from the outside. */
+  const CITY_LIGHTS = [[12, 52], [30, 66], [47, 47], [84, 50], [55, 76], [20, 70], [38, 58], [74, 72], [90, 64], [8, 80], [62, 46], [44, 84]];
+  const CITY_WATCH = [66, 58];
+  function cityTick() {
+    if (!active || exiting) return;
+    const lit = cityLights.filter((el) => !el.classList.contains('rm-off'));
+    if (!lit.length) return;
+    lit[Math.floor(Math.random() * lit.length)].classList.add('rm-off');
+    later(cityTick, 3500);
+  }
+
+  /* ── the monitor glass ──
+     From stage 3, walk up to the screen and the glass shows someone standing
+     over your shoulder. Look away and back: closer. Turn around: nobody. */
+  function reflTick() {
+    const looking = creepStage >= 3 && cam.z < 1900 && Math.abs(cam.x) < 900 && offAxis(0, 0) < 20;
+    if (looking && !reflOn) {
+      reflOn = true;
+      reflEl.style.setProperty('--rx', (240 - reflN * 60) + 'px');
+      reflEl.style.setProperty('--rs', (0.55 + reflN * 0.2).toFixed(2));
+      reflEl.classList.add('show');
+      if (reflN === 4) api._chirp(38, 'sine', 0.8, 0.06);
+    } else if (!looking && reflOn) {
+      reflOn = false;
+      reflEl.classList.remove('show');
+      reflN = Math.min(reflN + 1, 4);
+    }
+  }
+
+  /* ── your shadow ──
+     The monitor (world origin) is the room's key light, so you throw a shadow
+     on the front wall behind you — projected by similar triangles onto
+     z = 2200. From stage 3 there are two, and the other one does not move
+     when you do. Gone at stage 4 (the door is open where they'd fall). */
+  function shadowTick() {
+    if (cam.z < 260) { shadowEl.style.opacity = '0'; return; }
+    const k = Math.min(3.2, 2200 / cam.z);
+    const sx = Math.max(-1500, Math.min(1500, cam.x * k));
+    shadowEl.style.opacity = (0.55 / Math.sqrt(k)).toFixed(2);
+    shadowEl.style.transform = 'translate(-50%, -50%) translate3d(' + sx.toFixed(0) + 'px, ' + (385 * k).toFixed(0) +
+      'px, 2186px) rotateY(180deg) scale(' + k.toFixed(3) + ')';
+  }
+
+  /* ── stand still ──
+     Hold still in front of the HAL poster and it blinks. Hold still anywhere
+     long enough and the light stutters (skipped under reduced motion). */
+  function stillTick(now, moved) {
+    const pose = cam.yaw.toFixed(1) + ',' + cam.pitch.toFixed(1);
+    if (moved || pose !== lastPose) { lastPose = pose; lastActive = now; stared = false; stillFlicked = false; return; }
+    const still = now - lastActive;
+    if (!stared && still > 3500 && offAxis(740, -474) < 14) {
+      stared = true;
+      eyeEl.classList.add('rm-eyeblink');
+      later(() => eyeEl.classList.remove('rm-eyeblink'), 320);
+    }
+    if (!stillFlicked && creepStage >= 1 && still > 9000) {
+      stillFlicked = true;
+      if (api.reduceMotion) return;
+      flickEl.classList.remove('go');
+      void flickEl.offsetWidth;
+      flickEl.classList.add('go');
+      api._chirp(120, 'sawtooth', 0.25, 0.015);   // the ballast
+    }
+  }
+
+  /* ── the terminal behind you ──
+     From stage 2 the LIVE terminal on the monitor starts running commands
+     nobody typed. They are still in the scrollback when you go back in. */
+  const PROMPT = '<span class="prompt"><span class="p-user">ian</span><span class="p-sep">@</span>' +
+    '<span class="p-host">portfolio</span><span class="p-path">:~</span><span class="p-sym">$ </span></span>';
+  function termTick() {
+    if (!active || exiting || termStep >= 4) return;
+    if (call || callTyper) { later(termTick, 4000); return; }
+    const d = new Date();
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const runs = [
+      ['whoami', ['you']],
+      ['who', ['you      tty1         ' + hm, 'hal      pts/0        (behind you)']],
+      ['ps', ['  PID TTY          TIME CMD', '    1 ?        00:00:01 init', ' 2001 pts/0    09:00:00 hal', ' 4417 tty1     00:00:00 you']],
+      ['last -n 2', ['hal      room         Sun Jan 12 1997    still logged in', 'you      room         ' + hm + '              still logged in']],
+    ];
+    const [cmd, outLines] = runs[termStep++];
+    api.line(PROMPT + cmd);
+    later(() => {
+      if (!active) return;
+      for (const l of outLines) api.line(l);
+      api.scroll();
+    }, 700);
+    later(termTick, 11000);
+  }
+
+  function onVisibility() {
+    if (document.hidden && active && creepStage >= 1) {
+      hiddenTitle = document.title;
+      document.title = 'I’m still here';
+    } else if (!document.hidden && hiddenTitle !== null) {
+      document.title = hiddenTitle;
+      hiddenTitle = null;
+    }
+  }
+
   function build() {
     viewport = document.createElement('div');
     viewport.id = 'room-viewport';
@@ -381,7 +593,10 @@ function initRoom(api) {
       '<div class="rp rm-warm rm-warm-floor"></div>' +
       // window + moonlight
       '<div class="rp rm-win" data-tip="3:07 AM. the city never logs off.">' +
-      '<div class="rm-moon" data-tip="still up there. good."></div><div class="rm-stars"></div><div class="rm-city"></div>' +
+      '<div class="rm-moon" data-tip="still up there. good."></div><div class="rm-stars"></div>' +
+      '<div class="rm-city">' + CITY_LIGHTS.map(([x, y]) => '<i style="left:' + x + '%;top:' + y + '%"></i>').join('') +
+      '<b class="rm-watch" style="left:' + CITY_WATCH[0] + '%;top:' + CITY_WATCH[1] + '%"></b></div>' +
+      '<div class="rm-fog"><span>LET ME IN</span><i></i><i></i></div>' +
       '<div class="rm-win-bars"></div></div>' +
       '<div class="rp rm-curtain rm-curtain-l"></div>' +
       '<div class="rp rm-curtain rm-curtain-r"></div>' +
@@ -431,7 +646,7 @@ function initRoom(api) {
       '<div class="rp rm-bezel rm-bz-l"></div>' +
       '<div class="rp rm-bezel rm-bz-r"></div>' +
       '<div class="rp rm-sticky" data-tip="TODO: touch grass"></div>' +
-      '<div class="rp" id="room-screen" data-act="back" data-tip="go back in"><div class="rm-glass"></div></div>' +
+      '<div class="rp" id="room-screen" data-act="back" data-tip="go back in"><div class="rm-glass"><i class="rm-reflect"></i></div></div>' +
       '<div class="rp rm-neck"></div>' +
       '<div class="rp rm-base"></div>' +
       // desk clutter
@@ -441,6 +656,8 @@ function initRoom(api) {
       '<div class="rp rm-duck" data-tip="the finest debugger money can buy" data-bx="-280" data-by="-450" data-bz="-80">🦆</div>' +
       '<div class="rp rm-mug" data-tip="i ♥ claude. still warm." data-bx="-610" data-by="394" data-bz="200">' +
       '<span class="rm-mug-txt">I <b>♥</b><br>CLAUDE</span></div>' +
+      '<div class="rp rm-mug rm-mug2 rm-hide" data-tip="that is not your mug. it is still warm." data-bx="130" data-by="394" data-bz="260">' +
+      '<span class="rm-mug-txt">I <b>♥</b><br>HAL</span></div>' +
       '<div class="rp rm-chess" data-tip="care for a game?"></div>' +
       // floor
       '<div class="rp rm-rug"></div>' +
@@ -450,17 +667,23 @@ function initRoom(api) {
       '<div class="rp rm-tower" data-tip="the machine itself">' +
       '<i class="rm-tw-led"></i><b class="rm-tw-btn" data-tip="do NOT press this"></b></div>' +
       '<div class="rp rm-gamepad" data-tip="the arcade"></div>' +
-      // desk chair
+      // desk chair — grouped so it can turn (around its own post) while you aren't looking
+      '<div class="rm-grp rm-chair-grp">' +
       '<div class="rp rm-chair-shadow"></div>' +
       '<div class="rp rm-chair-base"></div>' +
       '<div class="rp rm-chair-post"></div>' +
       '<div class="rp rm-chair-back2"></div>' +
       '<div class="rp rm-chair-back" data-tip="ergonomic, allegedly"></div>' +
       '<div class="rp rm-chair-seat" data-tip="ergonomic, allegedly"></div>' +
+      '<div class="rp rm-gamepad rm-gamepad-chair rm-hide" data-tip="you left it on the bed."></div>' +
+      '<div class="rp rm-towel" data-tip="a frood always knows where it is"></div>' +
+      '</div>' +
+      '<div class="rp rm-tally"></div>' +
+      '<div class="rp rm-shadow rm-shadow-you"></div>' +
+      '<div class="rp rm-shadow rm-shadow-other"></div>' +
       '<div class="rp rm-stitch" data-tip="no place like it.">there&#39;s no place<br>like 127.0.0.1</div>' +
       '<div class="rp rm-door-sign" data-tip="respect the process">GONE<br>COMPILING</div>' +
       '<div class="rp rm-pizza" data-tip="breakfast, probably"></div>' +
-      '<div class="rp rm-towel" data-tip="a frood always knows where it is"></div>' +
       // aquarium against the left wall
       '<div class="rp rm-tank-stand"></div>' +
       '<div class="rp rm-tank-stand-end rm-tank-stand-e1"></div>' +
@@ -528,7 +751,8 @@ function initRoom(api) {
       '<div class="rp rm-hall-stand" data-tip="it was always here."></div>' +
       '<div class="rp rm-hall-stand-top"></div>' +
       '<div class="rp rm-phone rm-hall-phone" data-act="phone" data-tip="it is ringing." data-bx="560" data-by="-160" data-bz="5585"></div>' +
-      '</div></div>';
+      '</div></div>' +
+      '<div class="rm-flick"></div>';
 
     world = viewport.querySelector('#room-world');
     par = viewport.querySelector('#room-par');
@@ -551,6 +775,21 @@ function initRoom(api) {
     hallDoors = Array.from(viewport.querySelectorAll('.rm-hdoor'))
       .map((el, i) => ({ el, z: HALL_DOORS[i].z, seen: false }));
     slamDoor = hallDoors[HALL_DOORS.findIndex((d) => d.ajar)];
+    chairGrpEl = viewport.querySelector('.rm-chair-grp');
+    mugEl = viewport.querySelector('.rm-mug:not(.rm-mug2)');
+    mug2El = viewport.querySelector('.rm-mug2');
+    padBedEl = viewport.querySelector('.rm-gamepad:not(.rm-gamepad-chair)');
+    padChairEl = viewport.querySelector('.rm-gamepad-chair');
+    trophyEl = viewport.querySelector('.rm-trophy');
+    tallyEl = viewport.querySelector('.rm-tally');
+    cityLights = Array.from(viewport.querySelectorAll('.rm-city i'));
+    watchEl = viewport.querySelector('.rm-watch');
+    fogEl = viewport.querySelector('.rm-fog');
+    flickEl = viewport.querySelector('.rm-flick');
+    reflEl = viewport.querySelector('.rm-reflect');
+    shadowEl = viewport.querySelector('.rm-shadow-you');
+    shadow2El = viewport.querySelector('.rm-shadow-other');
+    buildShifts();
     figFarEl = viewport.querySelector('.rm-figure-far');
     figBackEl = viewport.querySelector('.rm-figure-back');
     tvEl = viewport.querySelector('.rm-tv-screen');
@@ -618,6 +857,19 @@ function initRoom(api) {
     if (!active || exiting || n <= creepStage) return;
     creepStage = n;
     viewport.classList.add('creep-' + n);
+    if (n === 1) later(cityTick, 2000);
+    if (n === 2) {
+      watchEl.classList.add('rm-occupied');
+      if (viewport.classList.contains('room-lit')) {   // the lamp dies, and stays dead
+        viewport.classList.remove('room-lit');
+        api._chirp(90, 'sawtooth', 0.2, 0.02);
+      }
+      later(termTick, 6000);
+    }
+    if (n === 3) {
+      fogEl.classList.add('show');
+      shadow2El.classList.add('show');
+    }
     if (n === 2) {
       clockEl.textContent = '9000';
       radioCut = 16;   // the station drops out for as long as the clock stutters
@@ -1443,7 +1695,11 @@ function initRoom(api) {
     if (!t) return;
     const act = t.getAttribute('data-act');
     api._chirp(340, 'square', 0.05, 0.04);
-    if (act === 'lamp') { viewport.classList.toggle('room-lit'); return; }
+    if (act === 'lamp') {
+      if (creepStage >= 2) { retip(t, 'it won\u2019t turn back on.'); return; }
+      viewport.classList.toggle('room-lit');
+      return;
+    }
     if (act === 'tv') { changeChannel(); return; }
     if (act === 'ball') { shakeBall(); return; }
     if (act === 'fish') { feedFish(); return; }
@@ -1512,6 +1768,23 @@ function initRoom(api) {
     fishEl.classList.remove('rm-fed');
     ballEl.firstChild.classList.remove('rm-shake', 'rm-answered');
     ballEl.dataset.tip = 'the magic 8-ball. ask it something.';
+    visits = (parseInt(recall('ilaird_room_visits'), 10) || 0) + 1;
+    store('ilaird_room_visits', String(visits));
+    renderTally(visits - 1);
+    if (visits >= 2) corkNotes[2].textContent = visits >= 5 ? 'every night now.' : 'you came back.';
+    resetShifts();
+    const savedChair = parseFloat(recall('ilaird_room_chair'));
+    setChair(Number.isFinite(savedChair) ? savedChair : 0);
+    lastChairT = lastShiftT = -1e9; lastShiftCheck = 0;
+    for (const el of cityLights) el.classList.remove('rm-off');
+    watchEl.classList.remove('rm-occupied');
+    fogEl.classList.remove('show');
+    shadow2El.classList.remove('show');
+    reflOn = false; reflN = 0;
+    reflEl.classList.remove('show');
+    lastActive = 0; lastPose = ''; stared = false; stillFlicked = false;
+    termStep = 0;
+    hiddenTitle = null;
     updateBills(); // face the start camera before first paint
 
     // black over everything BEFORE the swap; it fades out on the pull-back
@@ -1539,6 +1812,8 @@ function initRoom(api) {
       world.classList.add('no-anim'); // per-frame camera writes from here on
       walking = true;
       armCreep();
+      // a return visit (or the small hours) starts further along
+      for (let n = 1, s0 = startStage(); n <= s0; n++) setCreep(n);
     };
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -1557,6 +1832,8 @@ function initRoom(api) {
     downHandler = onPointerDown;
     upHandler = onPointerUp;
     clickHandler = onClick;
+    visHandler = onVisibility;
+    document.addEventListener('visibilitychange', visHandler);
     document.addEventListener('keydown', keyHandler, true);
     document.addEventListener('keyup', keyUpHandler, true);
     window.addEventListener('blur', blurHandler);
@@ -1611,6 +1888,8 @@ function initRoom(api) {
         viewport.removeEventListener('pointerdown', downHandler);
         window.removeEventListener('pointerup', upHandler);
         viewport.removeEventListener('click', clickHandler);
+        document.removeEventListener('visibilitychange', visHandler);
+        if (hiddenTitle !== null) { document.title = hiddenTitle; hiddenTitle = null; }
         cancelAnimationFrame(rafId);
         clearInterval(clockTimer);
         radioStop();

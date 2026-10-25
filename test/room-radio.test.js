@@ -47,6 +47,7 @@ function setup(soundEnabled) {
     made.push(this);
   };
   window.ROOM_CREEP_SCHEDULE = [100, 200, 300, 400]; // armed once the fly-out lands
+  window.ROOM_CLOCK_HOUR = 12; // not the small hours, which would start the creep at stage 2
   runScripts(dom, ['room.js']);
 
   const api = {

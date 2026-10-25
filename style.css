@@ -961,20 +961,14 @@ pre.ascii {
 .rm-city {
   position: absolute; left: 0; right: 0; bottom: 0; height: 46%;
   background:
-    radial-gradient(2.2px 2.2px at 12% 52%, #ffd76a 50%, transparent 51%),
-    radial-gradient(2.2px 2.2px at 30% 66%, #ffd76a 50%, transparent 51%),
-    radial-gradient(2.2px 2.2px at 47% 47%, #9fe8ff 50%, transparent 51%),
-    radial-gradient(2.2px 2.2px at 66% 60%, #ffd76a 50%, transparent 51%),
-    radial-gradient(2.2px 2.2px at 84% 50%, #ffb46a 50%, transparent 51%),
-    radial-gradient(2.2px 2.2px at 55% 76%, #ffd76a 50%, transparent 51%),
     linear-gradient(0deg, #05070f 0%, #070b18 55%, transparent 100%),
     repeating-linear-gradient(90deg,
       #0a0e1e 0 60px, #070a16 60px 65px,
       #0b1022 65px 130px, #060912 130px 138px,
       #090d1c 138px 210px, #05080f 210px 216px);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 60%;
-  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, repeat-x;
-  background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 100%;
+  background-size: 100% 100%, 100% 60%;
+  background-repeat: no-repeat, repeat-x;
+  background-position: 0 0, 0 100%;
 }
 .rm-win-bars { position: absolute; inset: 0; pointer-events: none; }
 .rm-win-bars::before {
@@ -2658,6 +2652,180 @@ body.room-view { overflow: hidden; }
 }
 #room-viewport.creep-3 .rm-laundry { border-radius: 30% 70% 14% 14% / 90% 60% 12% 12%; }
 
+/* ── the room changing behind your back (room.js "while you aren't looking") ── */
+.rm-grp {                                       /* a movable group of props, sharing the world origin */
+  position: absolute; inset: 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+#room-viewport .rm-hide { display: none; }
+.rm-gamepad-chair {
+  transform: translate(-50%, -50%) translate3d(250px, 610px, 630px) rotateX(90deg) rotate(38deg);
+}
+.rm-tally {                                     /* one mark per visit, above the bed */
+  width: 560px; height: 240px;
+  transform: translate(-50%, -50%) translate3d(1694px, 180px, 260px) rotateY(-90deg) rotate(-1deg);
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 12px 22px;
+}
+.rm-tally b { position: relative; display: inline-flex; gap: 8px; }
+.rm-tally i {
+  width: 4px; height: 52px;
+  background: rgba(18, 12, 8, .8);
+  box-shadow: 1px 0 0 rgba(210, 200, 180, .18);
+}
+.rm-tally i:nth-child(2n) { transform: rotate(3deg); }
+.rm-tally i:nth-child(3n) { transform: rotate(-2deg); height: 56px; }
+.rm-tally s {
+  position: absolute; left: -8px; right: -8px; top: 50%; height: 4px;
+  background: rgba(18, 12, 8, .8);
+  transform: rotate(-30deg);
+}
+.rm-shadow {                                    /* yours: posed every frame by shadowTick() */
+  pointer-events: none;
+  width: 260px; height: 1070px;
+  filter: blur(6px);
+  opacity: 0;
+}
+.rm-shadow::before {
+  content: '';
+  position: absolute; left: 50%; top: 0;
+  width: 104px; height: 128px; margin-left: -52px;
+  border-radius: 50% 50% 46% 46%;
+  background: #000;
+}
+.rm-shadow::after {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 118px; bottom: 0;
+  border-radius: 110px 110px 20px 20px / 140px 140px 10px 10px;
+  background: #000;
+}
+.rm-shadow-other {                              /* the one that doesn't move */
+  transform: translate(-50%, -50%) translate3d(-90px, 520px, 2186px) rotateY(180deg) scale(1.55);
+  transition: opacity 5s;
+}
+.rm-shadow-other.show { opacity: .4; }
+#room-viewport.creep-4 .rm-shadow { visibility: hidden; }
+.rm-reflect {                                   /* in the CRT glass, over your shoulder */
+  position: absolute; left: 50%; bottom: -30px;
+  width: 300px; height: 440px; margin-left: -150px;
+  transform: translateX(var(--rx, 240px)) scale(var(--rs, .55));
+  transform-origin: 50% 100%;
+  filter: blur(3px);
+  opacity: 0;
+  transition: opacity 1.6s;
+}
+.rm-reflect.show { opacity: 1; }
+.rm-reflect::before {
+  content: '';
+  position: absolute; left: 50%; top: 0;
+  width: 112px; height: 140px; margin-left: -56px;
+  border-radius: 50% 50% 46% 46%;
+  background: rgba(205, 220, 245, .12);
+}
+.rm-reflect::after {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 128px; bottom: 0;
+  border-radius: 130px 130px 0 0 / 150px 150px 0 0;
+  background: rgba(205, 220, 245, .1);
+}
+.rm-hal-eye::after {                            /* the lid, for when you stare */
+  content: '';
+  position: absolute; inset: -2px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, #2a0606 0%, #0a0000 80%);
+  transform: scaleY(0);
+  transform-origin: 50% 0;
+  transition: transform .11s ease-in;
+}
+.rm-hal-eye.rm-eyeblink::after { transform: scaleY(1); }
+.rm-flick {                                     /* the light stutters when you stand still too long */
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: #000;
+  opacity: 0;
+  z-index: 2;
+}
+.rm-flick.go { animation: rm-flick .8s steps(1) 1; }
+@keyframes rm-flick {
+  0%   { opacity: .6; }
+  12%  { opacity: 0; }
+  30%  { opacity: .45; }
+  42%  { opacity: .1; }
+  55%  { opacity: .7; }
+  70%, 100% { opacity: 0; }
+}
+/* the window: the city goes out; someone is in the last lit window; the glass fogs */
+.rm-city i, .rm-watch {
+  position: absolute;
+  width: 10px; height: 13px;
+  background: #ffd76a;
+  box-shadow: 0 0 6px 1px rgba(255, 210, 110, .55);
+  transition: opacity .25s;
+}
+.rm-city i:nth-child(3n) { background: #9fe8ff; box-shadow: 0 0 6px 1px rgba(150, 230, 255, .5); }
+.rm-city i.rm-off { opacity: 0; }
+.rm-watch { width: 22px; height: 30px; background: #ffcf80; }
+.rm-watch::after {                              /* someone standing in it, facing this way */
+  content: '';
+  position: absolute; left: 5px; right: 5px; top: 7px; bottom: 0;
+  background:
+    radial-gradient(circle at 50% 22%, #120a04 0 4px, transparent 4.5px),
+    radial-gradient(ellipse 60% 50% at 50% 100%, #120a04 0 98%, transparent 100%);
+  opacity: 0;
+  transition: opacity 3s;
+}
+.rm-watch.rm-occupied::after { opacity: 1; }
+.rm-fog {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 50% 40% at 26% 30%, rgba(205, 218, 238, .2), transparent 70%);
+  opacity: 0;
+  transition: opacity 9s;
+}
+.rm-fog.show { opacity: 1; }
+.rm-fog span {                                  /* written from the outside — so backwards */
+  position: absolute; left: 4%; top: 22%;
+  transform: scaleX(-1) rotate(5deg);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 44px; letter-spacing: .06em;
+  color: rgba(230, 238, 255, .42);
+  filter: blur(.7px);
+  white-space: nowrap;
+}
+.rm-fog i {                                     /* palms on the glass */
+  position: absolute;
+  width: 62px; height: 84px;
+  border-radius: 44% 44% 40% 40%;
+  background:
+    linear-gradient(rgba(225, 235, 255, .28), rgba(225, 235, 255, .28)) 8px 0 / 8px 42px no-repeat,
+    linear-gradient(rgba(225, 235, 255, .28), rgba(225, 235, 255, .28)) 20px -6px / 8px 46px no-repeat,
+    linear-gradient(rgba(225, 235, 255, .28), rgba(225, 235, 255, .28)) 32px -4px / 8px 44px no-repeat,
+    linear-gradient(rgba(225, 235, 255, .28), rgba(225, 235, 255, .28)) 44px 6px / 8px 36px no-repeat,
+    radial-gradient(ellipse 50% 40% at 50% 74%, rgba(225, 235, 255, .28) 96%, transparent 100%);
+  filter: blur(1.2px);
+}
+.rm-fog i:nth-of-type(1) { left: 58%; top: 60%; transform: rotate(-12deg); }
+.rm-fog i:nth-of-type(2) { left: 74%; top: 66%; transform: scaleX(-1) rotate(-8deg); }
+/* the lights die: the ceiling light stutters, then quits; the lava lamp
+   goes red and sinks; the moonbeam fades — the monitor is what's left */
+.rm-beam, .rm-motes { transition: opacity 5s; }
+#room-viewport.creep-3 .rm-beam, #room-viewport.creep-3 .rm-motes { opacity: 0; }
+#room-viewport.creep-2 .rm-ceil-light { animation: rm-ceilflick 6s steps(1) infinite; }
+@keyframes rm-ceilflick {
+  0%, 70%, 74%, 100% { opacity: .85; }
+  71%, 73% { opacity: .2; }
+}
+#room-viewport.creep-3 .rm-ceil-light { animation: none; opacity: .1; }
+#room-viewport.creep-3 .rm-lava { box-shadow: 0 0 30px rgba(200, 0, 0, .3); }
+#room-viewport.creep-3 .rm-lava i {
+  background: radial-gradient(circle at 40% 35%, #ff5a4a 0%, #c00000 55%, #500000 100%);
+  animation: rm-sink 8s ease-in forwards;
+}
+@keyframes rm-sink {
+  from { transform: translateY(-110px) scale(.9, 1.1); }
+  to   { transform: translateY(0) scale(1.2, .8); }
+}
+
 body.room-view .window {
   position: absolute; inset: 0;
   height: 100%; max-width: none;
@@ -2676,6 +2844,7 @@ body.room-view #egg-nudge { display: none; }
   .rm-motes i, .rm-lava i, .rm-hal-eye, .rm-moon, .rm-wallglow,
   .rm-led, .rm-tw-led, .rm-mug::after, .rm-door-light, .rm-bed-top::after,
   .rm-sconce, .rm-hdoor.rm-slam, .rm-hall-poem,
+  .rm-flick.go, .rm-ceil-light,
   .rm-cctv i, .rm-phone.rm-ringing, #room-call i,
   .rm-stars-glow i, .rm-fish, .rm-weed, .rm-tank s, .rm-tank.rm-fed u,
   .rm-ch-static::before, .rm-ch-game small, .rm-ch-hal i, .rm-8ball .rm-shake,

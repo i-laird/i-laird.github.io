@@ -893,7 +893,7 @@
     // TTS fallback for any line not in the clip table
     if (!window.speechSynthesis) return;
     speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(norm);
+    const utt = new SpeechSynthesisUtterance(_speakable(norm));
     utt.rate = 0.85; utt.pitch = 1.0; utt.volume = 1;
     if (halVoice) utt.voice = halVoice;
     speechSynthesis.speak(utt);
@@ -3233,10 +3233,12 @@
       line('    phone. verified status and call limits are stored only as salted', 'dim');
       line('    hashes for at most 48h; the number itself is never stored. US', 'dim');
       line('    numbers only, strict daily caps, and the call starts with a', 'dim');
-      line('    neutral prompt: nothing plays unless you press 1. Twilio', 'dim');
+      line('    neutral prompt saying the voice is AI, not a person: nothing', 'dim');
+      line('    plays unless you press 1, and 9 means never call again. Twilio', 'dim');
       line('    processes call and SMS metadata under its own policy.', 'dim');
-      line('  · if you call HAL’s number, Twilio transcribes your speech so Claude', 'dim');
-      line('    can answer; the call’s memory lives ~30 minutes, then it’s gone.', 'dim');
+      line('  · if you call HAL’s number, the call opens by saying it is an AI', 'dim');
+      line('    and that your speech is transcribed. Twilio transcribes it so', 'dim');
+      line('    Claude can answer; the call’s memory lives ~30 minutes.', 'dim');
       line('  · reply STOP to any text from HAL and he will never text or call', 'dim');
       line('    that number again (START lifts it). the block is permanent and', 'dim');
       line('    stored only as a salted hash.', 'dim');

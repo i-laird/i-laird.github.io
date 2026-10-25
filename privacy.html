@@ -195,12 +195,16 @@
         <li><strong>Message and data rates may apply.</strong></li>
         <li>
           <strong>The call itself:</strong> US numbers only, strict daily caps, and it starts
-          with a neutral automated prompt — nothing plays unless you press 1. Twilio processes
+          with a neutral automated prompt that says the voice that follows is AI-generated, not a
+          person — nothing plays unless you press 1, and pressing 9 puts your number on the
+          permanent do-not-contact list. Twilio processes
           call and SMS metadata under its own privacy policy.
         </li>
         <li>
-          <strong>If you call HAL:</strong> Twilio transcribes your speech so Claude can
-          answer; the call's memory lives ~30 minutes, then it's gone.
+          <strong>If you call HAL:</strong> the call opens by telling you that you are talking
+          with an AI voice and that your speech is transcribed by automated services. Twilio
+          transcribes your speech so Claude can answer, and ElevenLabs voices HAL's replies;
+          the call's memory lives ~30 minutes, then it's gone.
         </li>
         <li>
           <strong>Opting out:</strong> reply <strong>STOP</strong> to any text from HAL and
