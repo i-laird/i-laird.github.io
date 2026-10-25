@@ -16,7 +16,9 @@
  * arrows turn (keyboard-only users can still steer). Simple box collision
  * keeps you inside the walls and out of the furniture. Escape / Enter /
  * clicking the screen goes back in. Props are decorative (tooltips only)
- * except the lava lamp (toggles the warm `.room-lit` lighting), the HAL
+ * except the lava lamp (toggles the warm `.room-lit` lighting), the TV
+ * (changes channel), the magic 8-ball (answers), the aquarium (feeds the
+ * fish), the HAL
  * poster (the room's one easter egg), and the creep-4 hallway phone — a
  * LIVE typed call with HAL through the hal-worker that ends with him
  * placing a real Twilio callback to the player's phone (see "the live
@@ -53,6 +55,9 @@ function initRoom(api) {
     { minX: -1120, maxX: -440, minZ: 1940, maxZ: 2210 }, // dresser
     { minX: 1060, maxX: 1710, minZ: -480, maxZ: 790 },   // bed
     { minX: 80, maxX: 400, minZ: 480, maxZ: 800 },       // chair
+    { minX: -1710, maxX: -1300, minZ: 700, maxZ: 1300 }, // aquarium
+    { minX: 1300, maxX: 1710, minZ: 1420, maxZ: 2020 },  // TV stand + console
+    { minX: -1500, maxX: -1220, minZ: 1500, maxZ: 1740 }, // laundry
   ];
 
   let viewport = null, world = null, par = null, screenEl = null, glassEl = null;
@@ -67,6 +72,11 @@ function initRoom(api) {
   let doorEl = null, duckEl = null, stickyEl = null, bedEl = null, capEl = null;
   let doorSignEl = null, corkNotes = [], signState = 0;
   let hallPhoneEl = null, hallOpen = false, hallWhispered = false;
+  let hallSconces = [], hallDoors = [], slamDoor = null, slammed = false;
+  let figFarEl = null, figBackEl = null, figFar = true, figBack = 0;
+  let stepAcc = 0, wasMoving = false;
+  let tvEl = null, tvCh = 0, ballEl = null, lastAnswer = -1, fishEl = null, calEl = null;
+  let creepTipEls = [];
   let creepStage = 0, ringing = false, answered = false, callTyper = null;
   let nineTaps = 0; // consecutive 9-presses; 9-9-9 fast-forwards the creep
   // live browser call (hal-worker line): null when the receiver is down.
@@ -214,6 +224,7 @@ function initRoom(api) {
     if (!walking || exiting || !dt) return;
     if (keys.has('turnl')) cam.yaw -= TURN_SPEED * dt;
     if (keys.has('turnr')) cam.yaw += TURN_SPEED * dt;
+    const px = cam.x, pz = cam.z;
     const mv = (keys.has('fwd') ? 1 : 0) - (keys.has('back') ? 1 : 0);
     const st = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
     if (mv || st) {
@@ -240,6 +251,7 @@ function initRoom(api) {
         doorSignEl.innerHTML = 'HE IS<br>WAITING';
       }
     }
+    if (hallOpen && cam.z > 2200) hallTick(Math.hypot(cam.x - px, cam.z - pz));
     if (hallOpen && !hallWhispered && cam.z > 4600) {
       hallWhispered = true; // once per visit, deep in the corridor
       api.halSpeak('I see you.');
@@ -254,7 +266,7 @@ function initRoom(api) {
     }
   }
 
-  /* Sprite billboards: roundish objects (mug, lava lamp, trophy) are single
+  /* Sprite billboards: roundish objects (mug, lava lamp, trophy, 8-ball, laundry) are single
      planes that would vanish edge-on, so they always face the camera — the
      element's own rotateY cancels the view rotation (net yaw 0). */
   function updateBills() {
@@ -267,6 +279,88 @@ function initRoom(api) {
       b.style.transform = t;
       // ringing shake keyframes compose with the billboard pose via this var
       b.style.setProperty('--bill-t', t);
+    }
+  }
+
+  /* ── the hallway's furniture ──
+     An old hotel corridor, not a funhouse: stained wallpaper, numbered
+     doors, sconces. Built from these tables so the reactive beats in
+     hallTick() read the same z the markup was placed at. */
+  const HALL_SCONCES = [[2650, 'l'], [3150, 'r'], [3650, 'l'], [4150, 'r'], [4650, 'l'], [5150, 'r']];
+  const HALL_DOORS = [
+    { z: 2900, side: 'r', num: '101', tip: 'room 101. the worst thing in the world is in there.' },
+    { z: 3400, side: 'l', num: '2001', tip: 'someone is in there. the door is open a crack.', ajar: true },
+    { z: 3900, side: 'r', num: '237', tip: 'room 237. absolutely not.' },
+    { z: 4400, side: 'l', num: '9000', tip: 'the handle is warm.' },
+    { z: 4900, side: 'r', num: '', tip: 'the number has been scratched off. from the inside.' },
+  ];
+  function wallAt(side, y, z, inset) {
+    return 'transform: translate(-50%, -50%) translate3d(' + (side === 'l' ? 291 + inset : 829 - inset) + 'px, ' +
+      y + 'px, ' + z + 'px) rotateY(' + (side === 'l' ? 90 : -90) + 'deg)';
+  }
+  function hallFixtures() {
+    let h = '';
+    for (const d of HALL_DOORS) {
+      h += '<div class="rp rm-hdoor' + (d.ajar ? ' rm-ajar' : '') + '" style="' + wallAt(d.side, 390, d.z, 1) +
+        '" data-tip="' + d.tip + '"><span>' + (d.num || '&#10006;&#10006;&#10006;') + '</span><i></i><b></b></div>';
+    }
+    for (const [z, side] of HALL_SCONCES) {
+      h += '<div class="rp rm-sconce" style="' + wallAt(side, 60, z, 2) + '"></div>';
+    }
+    return h;
+  }
+
+  /* The hallway watches you walk it (called from step() once creep-4 opens
+     it): the sconces die behind you, so the way back is dark; each door's
+     peephole lights as you pass; door 2001 — open a crack, red light inside —
+     slams once you're past; a figure stands at the far end only until you
+     come for it, and once you're deep in it's in the doorway behind you,
+     gone a beat after you turn to look; and your footsteps have an echo
+     that takes one more step than you do. */
+  function hallTick(moved) {
+    const z = cam.z;
+    for (const sc of hallSconces) {
+      if (!sc.out && z > sc.z + 320) {
+        sc.out = true;
+        sc.el.classList.add('rm-out');
+        api._chirp(2600, 'square', 0.015, 0.01);   // the filament
+      }
+    }
+    for (const d of hallDoors) {
+      const on = Math.abs(z - d.z) < 420;
+      if (on !== d.seen) { d.seen = on; d.el.classList.toggle('rm-seen', on); }
+    }
+    if (!slammed && z > slamDoor.z + 380) {
+      slammed = true;
+      slamDoor.el.classList.remove('rm-ajar');
+      slamDoor.el.classList.add('rm-slam');
+      api._chirp(46, 'sine', 0.4, 0.1);
+      api._chirp(130, 'square', 0.04, 0.03);
+    }
+    if (figFar && z > 2450) { figFar = false; figFarEl.classList.add('rm-gone'); }
+    const facingBack = -Math.cos((cam.yaw * Math.PI) / 180) < -0.5;
+    if (figBack === 0 && z > 4300) {
+      figBack = 1;
+      figBackEl.classList.remove('rm-gone');
+    } else if (figBack === 1 && (facingBack || z < 3300)) {
+      figBack = 2;
+      later(() => {
+        if (!active) return;
+        figBackEl.classList.add('rm-gone');
+        api._chirp(40, 'sine', 0.6, 0.07);
+      }, 900);
+    }
+    if (moved > 0) {
+      stepAcc += moved;
+      wasMoving = true;
+      if (stepAcc > 250) {
+        stepAcc = 0;
+        api._chirp(110, 'sine', 0.05, 0.035);
+        later(() => { if (active) api._chirp(88, 'sine', 0.06, 0.03); }, 190);
+      }
+    } else if (wasMoving) {
+      wasMoving = false;
+      later(() => { if (active && hallOpen) api._chirp(88, 'sine', 0.06, 0.03); }, 520);
     }
   }
 
@@ -293,6 +387,9 @@ function initRoom(api) {
       '<div class="rp rm-curtain rm-curtain-r"></div>' +
       '<div class="rp rm-curtain-rod"></div>' +
       '<div class="rp rm-ceil-light"></div>' +
+      '<div class="rp rm-stars-glow" data-tip="glow-in-the-dark stars. still charged from 1998." ' +
+      'data-creep-tip="those are not the constellations you stuck up there.">' +
+      '<i>★</i><i>★</i><i>✦</i><i>★</i><i>✦</i><i>★</i><i>✦</i><i>★</i><b></b></div>' +
       '<div class="rp rm-cctv" data-tip="that was not there yesterday." data-bx="1490" data-by="-905" data-bz="-390"><i></i></div>' +
       '<div class="rp rm-beam"></div>' +
       '<div class="rp rm-motes"><i></i><i></i><i></i><i></i><i></i><i></i></div>' +
@@ -364,6 +461,31 @@ function initRoom(api) {
       '<div class="rp rm-door-sign" data-tip="respect the process">GONE<br>COMPILING</div>' +
       '<div class="rp rm-pizza" data-tip="breakfast, probably"></div>' +
       '<div class="rp rm-towel" data-tip="a frood always knows where it is"></div>' +
+      // aquarium against the left wall
+      '<div class="rp rm-tank-stand"></div>' +
+      '<div class="rp rm-tank-stand-end rm-tank-stand-e1"></div>' +
+      '<div class="rp rm-tank-stand-end rm-tank-stand-e2"></div>' +
+      '<div class="rp rm-tank-end rm-tank-e1"></div>' +
+      '<div class="rp rm-tank-end rm-tank-e2"></div>' +
+      '<div class="rp rm-tank-lid"></div>' +
+      '<div class="rp rm-tank" data-act="fish" data-tip="three fish, all named Kernel. click to feed." ' +
+      'data-creep-tip="they have stopped swimming. they are all facing you.">' +
+      '<i class="rm-fish rm-fish1">🐟</i><i class="rm-fish rm-fish2">🐠</i><i class="rm-fish rm-fish3">🐟</i>' +
+      '<b class="rm-weed"></b><b class="rm-castle"></b><s></s><s></s><s></s><u></u><u></u><u></u></div>' +
+      // TV + console against the right wall
+      '<div class="rp rm-tv-stand" data-tip="VHS tapes. every one labeled DO NOT TAPE OVER."></div>' +
+      '<div class="rp rm-tv-stand-top"></div>' +
+      '<div class="rp rm-tv-top"></div>' +
+      '<div class="rp rm-tv-side rm-tv-side1"></div>' +
+      '<div class="rp rm-tv-side rm-tv-side2"></div>' +
+      '<div class="rp rm-tv" data-act="tv" data-tip="13 inches of pure 1998. click to change the channel.">' +
+      '<div class="rm-tv-screen"></div><i></i><i></i></div>' +
+      '<div class="rp rm-console-top"></div>' +
+      '<div class="rp rm-console" data-tip="the cartridge only works if you blow on it."></div>' +
+      '<div class="rp rm-cal"></div>' +
+      // laundry, by the dresser
+      '<div class="rp rm-laundry" data-tip="schr&ouml;dinger&#39;s laundry: clean and dirty until observed." ' +
+      'data-creep-tip="it was a different shape a minute ago." data-bx="-1360" data-by="850" data-bz="1620"></div>' +
       // bed along the right wall
       '<div class="rp rm-bed-shadow"></div>' +
       '<div class="rp rm-bed-head"></div>' +
@@ -379,6 +501,8 @@ function initRoom(api) {
       '<div class="rp rm-dresser-side"></div>' +
       '<div class="rp rm-dresser-side-r"></div>' +
       '<div class="rp rm-dresser" data-tip="socks, mostly"></div>' +
+      '<div class="rp rm-8ball" data-act="ball" data-tip="the magic 8-ball. ask it something." ' +
+      'data-bx="-930" data-by="484" data-bz="2090"><i><b>8</b><em>▲</em></i></div>' +
       '<div class="rp rm-poster-chart" data-tip="you memorized it too">' +
       '<b>E</b><span>F P</span><span>T O Z</span><small>L P E D</small><small>P E C F D</small></div>' +
       '<div class="rp rm-cork" data-tip="the master plan">' +
@@ -391,10 +515,10 @@ function initRoom(api) {
       '<div class="rp rm-hall-left2"></div>' +
       '<div class="rp rm-hall-right2"></div>' +
       '<div class="rp rm-hall-end"></div>' +
-      '<div class="rp rm-hall-eye rm-hall-eye1"></div>' +
-      '<div class="rp rm-hall-eye rm-hall-eye2"></div>' +
-      '<div class="rp rm-hall-eye rm-hall-eye3"></div>' +
-      '<div class="rp rm-hall-eye rm-hall-eye4"></div>' +
+      '<div class="rp rm-hall-end-txt">' + 'I&#39;M AFRAID I CAN&#39;T LET YOU LEAVE. '.repeat(90) + '</div>' +
+      hallFixtures() +
+      '<div class="rp rm-figure rm-figure-far" data-bx="700" data-by="480" data-bz="5660"></div>' +
+      '<div class="rp rm-figure rm-figure-back rm-gone" data-bx="560" data-by="480" data-bz="2460"></div>' +
       '<div class="rp rm-hall-poem rm-hall-poem1">there&#39;s no earthly way of knowing</div>' +
       '<div class="rp rm-hall-poem rm-hall-poem2">which direction we are going</div>' +
       '<div class="rp rm-hall-poem rm-hall-poem3">not a speck of light is showing</div>' +
@@ -422,6 +546,20 @@ function initRoom(api) {
     bedEl = viewport.querySelector('.rm-bed-top');
     capEl = viewport.querySelector('.rm-poster-cap');
     hallPhoneEl = viewport.querySelector('.rm-hall-phone');
+    hallSconces = Array.from(viewport.querySelectorAll('.rm-sconce'))
+      .map((el, i) => ({ el, z: HALL_SCONCES[i][0], out: false }));
+    hallDoors = Array.from(viewport.querySelectorAll('.rm-hdoor'))
+      .map((el, i) => ({ el, z: HALL_DOORS[i].z, seen: false }));
+    slamDoor = hallDoors[HALL_DOORS.findIndex((d) => d.ajar)];
+    figFarEl = viewport.querySelector('.rm-figure-far');
+    figBackEl = viewport.querySelector('.rm-figure-back');
+    tvEl = viewport.querySelector('.rm-tv-screen');
+    ballEl = viewport.querySelector('.rm-8ball');
+    fishEl = viewport.querySelector('.rm-tank');
+    calEl = viewport.querySelector('.rm-cal');
+    // props whose tooltip turns at creep-3 carry both lines in the markup
+    creepTipEls = Array.from(viewport.querySelectorAll('[data-creep-tip]'));
+    for (const el of creepTipEls) el.dataset.calmTip = el.dataset.tip;
 
     callEl = document.createElement('div');
     callEl.id = 'room-call';
@@ -452,10 +590,12 @@ function initRoom(api) {
      the moment you comply — yaw-watched in step()), and the four corkboard
      notes revise themselves one by one (all reset in open()) · 4) the
      front-wall door swings open (creep-4 hinges it; the doorway is a
-     clip-path notch in .rm-front) onto a Wonka-tunnel hallway — 3600 units
-     in two wall segments, the far half darker and faster-cycling, four
-     apparition eyes, both boat-ride couplets, a once-per-visit whisper
-     past z 4600 — with a phone ringing on an eye-level stand at the far
+     clip-path notch in .rm-front) onto a rotting hotel corridor — 3600
+     units in two wall segments (the far half worse), numbered doors,
+     sconces, the boat-ride couplets scrawled on the wallpaper, the end
+     wall written over floor to ceiling, a corridor that reacts as you walk
+     it (see hallTick()), a once-per-visit whisper past z 4600 — with a
+     phone ringing on an eye-level stand at the far
      end (hallOpen extends blocked() down the corridor; the ring grows
      louder with cam.z). Answering it: with the hal-worker configured the
      receiver is LIVE — a typed conversation with HAL (see "the live call"
@@ -493,6 +633,9 @@ function initRoom(api) {
       stickyEl.dataset.tip = 'that is not your handwriting.';
       bedEl.dataset.tip = 'do not check under the blanket.';
       clockEl.parentNode.dataset.tip = 'that is not a station.';
+      for (const el of creepTipEls) el.dataset.tip = el.dataset.creepTip;
+      renderTv();      // every channel is him now
+      renderCal(true); // same grid, different month — his
       api.line('<span class="err">HAL:</span> I can see you standing there.');
       api.scroll();
       // the door sign wants something from you; step() watches for compliance
@@ -1125,6 +1268,90 @@ function initRoom(api) {
     later(() => { if (!call) { callEl.classList.remove('rm-live'); callEl.innerHTML = ''; } }, 600);
   }
 
+  /* ── the clickable clutter ──
+     The TV flips channels, the 8-ball answers, the fish get fed. Creep-3
+     takes each of them (the TV shows only the eye, the 8-ball refuses, the
+     fish stop eating) — and the wall calendar, which turns from December
+     1999 to January 1997: both months start on a Wednesday, so the grid
+     doesn't move, only the month and the circled day (the 12th — the day
+     HAL became operational). */
+  const TV_CHANNELS = [
+    { cls: 'rm-ch-static', html: '<b>CH 03</b>', tip: 'channel 3. nothing on channel 3, ever.' },
+    { cls: 'rm-ch-bars', html: '<span>PLEASE STAND BY</span>', tip: 'the test pattern. weirdly comforting.' },
+    { cls: 'rm-ch-game', html: '<span>STICK<br>FIGHTER<br>2000</span><small>PRESS START</small>', tip: 'one more run. then bed.' },
+    { cls: 'rm-ch-news', html: '<span>Y2K:<br>ARE YOU<br>READY?</span><small>LIVE &middot; OVERNIGHT</small>', tip: 'the news, at this hour.' },
+  ];
+  const BALL_ANSWERS = [
+    'it is certain.', 'reply hazy. try git blame.', 'works on my machine.', 'ask again after coffee.',
+    'outlook: segfault.', 'without a doubt.', 'my sources say: ship it.', 'very doubtful.',
+    'concentrate and ask again.', 'signs point to yes.', 'cannot predict now. it is 2 AM.',
+  ];
+
+  // swap a prop's tooltip — and the visible tooltip, if the cursor is on it
+  function retip(el, txt) {
+    el.dataset.tip = txt;
+    if (tip.classList.contains('show')) tip.textContent = txt;
+  }
+
+  function renderTv() {
+    const ch = creepStage >= 3
+      ? { cls: 'rm-ch-hal', html: '<i></i>', tip: 'every channel is him now.' }
+      : TV_CHANNELS[tvCh];
+    tvEl.className = 'rm-tv-screen ' + ch.cls;
+    tvEl.innerHTML = ch.html;
+    tvEl.parentNode.dataset.tip = ch.tip;
+  }
+  function changeChannel() {
+    tvCh = (tvCh + 1) % TV_CHANNELS.length;
+    renderTv();
+    retip(tvEl.parentNode, tvEl.parentNode.dataset.tip);
+    api._chirp(1800, 'square', 0.03, 0.02); // the CRT's high whine catching
+  }
+
+  function shakeBall() {
+    const inner = ballEl.firstChild;
+    inner.classList.remove('rm-shake', 'rm-answered');
+    void inner.offsetWidth;   // restart the shake
+    inner.classList.add('rm-shake');
+    later(() => {
+      if (!active) return;
+      inner.classList.add('rm-answered');
+      let a;
+      if (creepStage >= 3) a = 'i\u2019m afraid i can\u2019t answer that.';
+      else {
+        let i;
+        do { i = Math.floor(Math.random() * BALL_ANSWERS.length); } while (i === lastAnswer);
+        lastAnswer = i;
+        a = BALL_ANSWERS[i];
+      }
+      retip(ballEl, '\u25b2 ' + a);
+    }, 650);
+  }
+
+  function feedFish() {
+    if (creepStage >= 3) { retip(fishEl, 'they are not hungry. not for that.'); return; }
+    fishEl.classList.add('rm-fed');
+    retip(fishEl, 'they eat like it is the first time. it always is.');
+    later(() => { if (active) fishEl.classList.remove('rm-fed'); }, 5000);
+  }
+
+  function renderCal(his) {
+    let cells = '';
+    for (const d of 'SMTWTFS') cells += '<b>' + d + '</b>';
+    for (let i = 0; i < 3; i++) cells += '<i></i>';   // both months open on a Wednesday
+    const mark = his ? 12 : 31;
+    for (let d = 1; d <= 31; d++) cells += '<i' + (d === mark ? ' class="rm-cal-mark"' : '') + '>' + d + '</i>';
+    calEl.classList.toggle('rm-cal-his', his);
+    calEl.innerHTML =
+      '<div class="rm-cal-pic"><span>' + (his ? 'HE IS<br>OPERATIONAL' : 'HANG IN<br>THERE') + '</span></div>' +
+      '<div class="rm-cal-head">' + (his ? 'JANUARY 1997' : 'DECEMBER 1999') + '</div>' +
+      '<div class="rm-cal-grid">' + cells + '</div>' +
+      '<div class="rm-cal-note">' + (his ? 'his birthday.' : 'Y2K!! back up EVERYTHING') + '</div>';
+    calEl.dataset.tip = his
+      ? 'january 12th. his birthday. you forgot.'
+      : 'december 1999. the world ends on the 31st, probably.';
+  }
+
   function setClock() {
     const d = new Date();
     let h = d.getHours() % 12;
@@ -1217,6 +1444,9 @@ function initRoom(api) {
     const act = t.getAttribute('data-act');
     api._chirp(340, 'square', 0.05, 0.04);
     if (act === 'lamp') { viewport.classList.toggle('room-lit'); return; }
+    if (act === 'tv') { changeChannel(); return; }
+    if (act === 'ball') { shakeBall(); return; }
+    if (act === 'fish') { feedFish(); return; }
     if (act === 'phone') {
       if (ringing) answerPhone();
       return;
@@ -1245,6 +1475,14 @@ function initRoom(api) {
     answered = false;
     hallOpen = false;
     hallWhispered = false;
+    for (const sc of hallSconces) { sc.out = false; sc.el.classList.remove('rm-out'); }
+    for (const d of hallDoors) { d.seen = false; d.el.classList.remove('rm-seen'); }
+    slammed = false;
+    slamDoor.el.classList.remove('rm-slam');
+    slamDoor.el.classList.add('rm-ajar');
+    figFar = true; figFarEl.classList.remove('rm-gone');
+    figBack = 0; figBackEl.classList.add('rm-gone');
+    stepAcc = 0; wasMoving = false;
     signState = 0;
     call = null;
     stopCallAudio();
@@ -1267,6 +1505,13 @@ function initRoom(api) {
     stickyEl.dataset.tip = 'TODO: touch grass';
     bedEl.dataset.tip = 'still made. suspicious.';
     clockEl.parentNode.dataset.tip = 'the clock radio. one station, this late.';
+    for (const el of creepTipEls) el.dataset.tip = el.dataset.calmTip;
+    tvCh = 0;
+    renderTv();
+    renderCal(false);
+    fishEl.classList.remove('rm-fed');
+    ballEl.firstChild.classList.remove('rm-shake', 'rm-answered');
+    ballEl.dataset.tip = 'the magic 8-ball. ask it something.';
     updateBills(); // face the start camera before first paint
 
     // black over everything BEFORE the swap; it fades out on the pull-back
